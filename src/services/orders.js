@@ -215,7 +215,7 @@ class OrdersService {
 
       return {
         success: true,
-        message: 'Order created successfully for ' + (client.full_name || client.email),
+        message: 'Order created successfully for ' + (client ? (client.full_name || client.email) : 'Guest Client'),
         order: this._mapOrder(data),
       };
 

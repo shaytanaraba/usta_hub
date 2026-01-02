@@ -123,14 +123,23 @@ export default function AdminDashboard({ navigation }) {
             });
             setPlumberStats(pStats);
 
-            // Calculate client stats
+            // Calculate client stats locally (Fixed N+1 query issue)
             const cStats = {};
-            for (const client of allClients) {
-                // Optimization: calculate locally if possible to avoid N queries?
-                // For now keep as is, but maybe optimize later
-                const clientOrderStats = await auth.getClientStats(client.id);
-                cStats[client.id] = clientOrderStats;
-            }
+            allClients.forEach(c => {
+                const cOrders = allOrders.filter(o => o.clientId === c.id);
+                const completed = cOrders.filter(o => o.status === 'verified').length;
+                const active = cOrders.filter(o => ['pending', 'claimed', 'in_progress', 'completed'].includes(o.status)).length;
+                const totalSpent = cOrders
+                    .filter(o => o.status === 'verified')
+                    .reduce((sum, o) => sum + (Number(o.completion?.amountCharged) || 0), 0);
+
+                cStats[c.id] = {
+                    totalOrders: cOrders.length,
+                    activeOrders: active,
+                    completedOrders: completed,
+                    totalSpent
+                };
+            });
             setClientStats(cStats);
         } catch (error) {
             console.error('Load data error:', error);

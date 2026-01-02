@@ -359,7 +359,12 @@ class AuthService {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data;
+
+      // Map full_name to name for UI consistency
+      return data.map(plumber => ({
+        ...plumber,
+        name: plumber.full_name, // Map for UI components
+      }));
     } catch (error) {
       console.error('Error fetching plumbers:', error);
       return [];

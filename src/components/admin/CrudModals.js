@@ -56,6 +56,7 @@ export function EditClientModal({ visible, client, onClose, onSave }) {
                     email,
                     phone,
                     password,
+                    confirmPassword: password, // Auto-confirm for admin creation
                     userType: 'client',
                 });
             }
@@ -448,6 +449,7 @@ export function EditPlumberModal({ visible, plumber, onClose, onSave }) {
                     email,
                     phone,
                     password,
+                    confirmPassword: password, // Auto-confirm for admin creation
                     userType: 'plumber'
                 });
             }
