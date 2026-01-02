@@ -71,9 +71,7 @@ export default function LoginScreen({ navigation }) {
   };
 
   const handleLogin = async () => {
-    console.log('=== LOGIN ATTEMPT ===');
-    console.log('Email:', formData.email);
-    console.log('Password length:', formData.password?.length);
+
 
     if (!formData.email || !formData.password) {
       const errorMsg = 'Please fill in all required fields';
@@ -83,14 +81,14 @@ export default function LoginScreen({ navigation }) {
     }
 
     setLoading(true);
-    console.log('Calling auth.loginUser...');
+
     const result = await auth.loginUser(formData.email, formData.password);
     setLoading(false);
 
-    console.log('Login result:', result);
+
 
     if (result.success) {
-      console.log('Login successful! Redirecting to:', result.redirectScreen);
+
       showToast('Login successful!', 'success');
       navigation.reset({
         index: 0,
@@ -103,16 +101,7 @@ export default function LoginScreen({ navigation }) {
   };
 
   const handleRegister = async () => {
-    console.log('=== REGISTRATION ATTEMPT ===');
-    console.log('User Type:', userType);
-    console.log('Form Data:', {
-      name: formData.name,
-      email: formData.email,
-      phone: formData.phone,
-      hasPassword: !!formData.password,
-      hasConfirmPassword: !!formData.confirmPassword,
-    });
-    console.log('Specializations:', specializations);
+
 
     const userData = {
       ...formData,
@@ -121,14 +110,13 @@ export default function LoginScreen({ navigation }) {
     };
 
     setLoading(true);
-    console.log('Calling auth.registerUser...');
+
     const result = await auth.registerUser(userData);
     setLoading(false);
 
-    console.log('Registration result:', result);
+
 
     if (result.success) {
-      console.log('Registration successful!');
       console.log('Registration successful!');
       // Switch to login tab and clear form
       setIsLogin(true);
