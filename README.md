@@ -5,10 +5,11 @@ A React Native (Expo) version of the PlumberHub marketplace platform for connect
 ## Features
 
 ### Client Features
-- Create plumbing service orders
+- Create plumbing service orders with photo uploads
 - Track order status in real-time
 - View assigned plumber details
-- Confirm job completion
+- Confirm job completion and payment
+- **Dispute completed jobs** if unsatisfied with work quality
 - Rate plumber services
 
 ### Plumber Features
@@ -19,17 +20,20 @@ A React Native (Expo) version of the PlumberHub marketplace platform for connect
 - Track earnings and ratings
 
 ### Admin Features
-- View platform statistics
-- Manage all orders
-- View registered plumbers
-- Track revenue and commissions
+- View platform statistics and revenue
+- Manage all orders and users
+- Verify/unverify plumbers
+- **Compliance tab** for dispute resolution
+- View client and plumber contact information for offline resolution
+- Track and close dispute cases
 
 ## Tech Stack
 
-- **React Native** with Expo
+- **React Native** with Expo SDK 54
+- **Supabase** for backend (PostgreSQL + Auth + RLS)
 - **React Navigation** for navigation
-- **AsyncStorage** for data persistence
-- **React Native Safe Area Context** for safe area handling
+- **AsyncStorage** for local caching
+- **Expo Image Picker** for photo uploads
 
 ## Getting Started
 
@@ -50,6 +54,20 @@ cd plumber-hub-expo
 ```bash
 npm install
 ```
+
+3. **Set up environment variables**:
+```bash
+# Create .env file (already exists, update values if needed)
+# Add your Supabase credentials:
+EXPO_PUBLIC_SUPABASE_URL=your_supabase_url
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+4. **Run database migrations**:
+   - Open your Supabase SQL Editor
+   - Run `supabase_setup.sql` (if not already done)
+   - Run `disputes_migration.sql` for dispute system
+   - Run `admin_seed.sql` to create admin account
 
 ### Running the App
 

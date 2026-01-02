@@ -12,7 +12,7 @@
 
 DO $$
 DECLARE
-  admin_uuid uuid := 'YOUR_ADMIN_UUID_HERE'; -- REPLACE THIS!
+  admin_uuid uuid := '0b6b50b4-3da4-44fd-992d-d95763134638'; -- REPLACE THIS!
 BEGIN
   -- Update the profile to be admin type
   UPDATE profiles

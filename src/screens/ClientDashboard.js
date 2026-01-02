@@ -45,6 +45,11 @@ export default function ClientDashboard({ navigation }) {
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [profileForm, setProfileForm] = useState({ name: '', phone: '' });
 
+  // Dispute modal state
+  const [showDisputeModal, setShowDisputeModal] = useState(false);
+  const [disputeOrder, setDisputeOrder] = useState(null);
+  const [disputeReason, setDisputeReason] = useState('');
+
   const { isDesktop } = useResponsive();
   const { showToast } = useToast();
 
@@ -210,6 +215,38 @@ export default function ClientDashboard({ navigation }) {
     }
   };
 
+  const handleDispute = (order) => {
+    setDisputeOrder(order);
+    setDisputeReason('');
+    setShowDisputeModal(true);
+  };
+
+  const handleSubmitDispute = async () => {
+    if (!disputeReason.trim()) {
+      showToast('Please provide a reason for the dispute', 'error');
+      return;
+    }
+
+    if (!disputeOrder) return;
+
+    const result = await orderService.createDispute(
+      disputeOrder.id,
+      user.id,
+      disputeOrder.assignedPlumber.plumberId,
+      disputeReason
+    );
+
+    if (result.success) {
+      showToast(result.message, 'success');
+      setShowDisputeModal(false);
+      setDisputeOrder(null);
+      setDisputeReason('');
+      await loadOrders();
+    } else {
+      showToast(result.message, 'error');
+    }
+  };
+
   const renderOrderCard = (order) => (
     <Card key={order.id} style={styles.orderCard}>
       <View style={styles.orderHeader}>
@@ -238,13 +275,32 @@ export default function ClientDashboard({ navigation }) {
       {order.completion && !order.completion.clientConfirmed && (
         <View style={styles.completionSection}>
           <Text style={styles.completionAmount}>Charge: {formatCurrency(order.completion.amountCharged)}</Text>
-          <TouchableOpacity
-            style={[styles.payBtn, { zIndex: 9999 }]}
-            onPress={() => handleConfirmPayment(order)}
-            activeOpacity={0.6}
-          >
-            <Text style={styles.payBtnText}>Confirm & Pay Now</Text>
-          </TouchableOpacity>
+          <Text style={styles.completionDetails}>{order.completion.workDescription}</Text>
+          <Text style={styles.completionHours}>{order.completion.hoursWorked} hours worked</Text>
+
+          <View style={styles.actionButtonsRow}>
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.payBtn]}
+              onPress={() => handleConfirmPayment(order)}
+              activeOpacity={0.6}
+            >
+              <Text style={styles.actionBtnText}>✓ Confirm & Pay</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.disputeBtn]}
+              onPress={() => handleDispute(order)}
+              activeOpacity={0.6}
+            >
+              <Text style={styles.actionBtnText}>⚠ Dispute</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {order.isDisputed && (
+        <View style={styles.disputedBadge}>
+          <Text style={styles.disputedText}>⚠️ DISPUTED - Under Admin Review</Text>
         </View>
       )}
     </Card>
@@ -397,6 +453,56 @@ export default function ClientDashboard({ navigation }) {
     </ScrollView>
   );
 
+  const renderDisputeModal = () => (
+    showDisputeModal && (
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>Dispute Payment</Text>
+          <Text style={styles.modalSubtitle}>
+            Please explain why you're disputing this charge. An admin will review your case.
+          </Text>
+
+          {disputeOrder && (
+            <View style={styles.disputeOrderInfo}>
+              <Text style={styles.disputeOrderText}>Order #{disputeOrder.id.slice(0, 8)}</Text>
+              <Text style={styles.disputeOrderText}>Amount: {formatCurrency(disputeOrder.completion?.amountCharged)}</Text>
+            </View>
+          )}
+
+          <TextInput
+            style={styles.disputeTextArea}
+            placeholder="Describe the issue with the work or charge..."
+            multiline
+            numberOfLines={6}
+            value={disputeReason}
+            onChangeText={setDisputeReason}
+            autoFocus
+          />
+
+          <View style={styles.modalButtons}>
+            <TouchableOpacity
+              style={[styles.modalBtn, styles.modalBtnCancel]}
+              onPress={() => {
+                setShowDisputeModal(false);
+                setDisputeOrder(null);
+                setDisputeReason('');
+              }}
+            >
+              <Text style={styles.modalBtnTextCancel}>Cancel</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.modalBtn, styles.modalBtnSubmit]}
+              onPress={handleSubmitDispute}
+            >
+              <Text style={styles.modalBtnTextSubmit}>Submit Dispute</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    )
+  );
+
   return (
     <View style={styles.container}>
       <LinearGradient colors={['#667eea', '#764ba2']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.header}>
@@ -437,6 +543,7 @@ export default function ClientDashboard({ navigation }) {
         {activeTab === 'new' && renderNewOrderForm()}
         {activeTab === 'profile' && renderProfileTab()}
       </View>
+      {renderDisputeModal()}
     </View>
   );
 }
@@ -508,5 +615,96 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 16,
     letterSpacing: 0.5,
-  }
+  },
+  completionDetails: { color: '#166534', fontSize: 14, marginTop: 5 },
+  completionHours: { color: '#166534', fontSize: 13, marginTop: 3, fontWeight: '600' },
+  actionButtonsRow: { flexDirection: 'row', gap: 10, marginTop: 15 },
+  actionBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 3,
+    ...Platform.select({ web: { cursor: 'pointer' } })
+  },
+  disputeBtn: {
+    backgroundColor: '#f59e0b',
+    shadowColor: '#f59e0b',
+  },
+  actionBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  disputedBadge: {
+    marginTop: 15,
+    padding: 12,
+    backgroundColor: '#fef3c7',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#fbbf24',
+  },
+  disputedText: { color: '#92400e', fontWeight: '700', fontSize: 13, textAlign: 'center' },
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 25,
+    width: '90%',
+    maxWidth: 500,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  modalTitle: { fontSize: 22, fontWeight: '800', color: '#1e293b', marginBottom: 8 },
+  modalSubtitle: { fontSize: 14, color: '#64748b', marginBottom: 20, lineHeight: 20 },
+  disputeOrderInfo: {
+    backgroundColor: '#f8fafc',
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 15,
+  },
+  disputeOrderText: { fontSize: 13, color: '#475569', fontWeight: '600', marginBottom: 4 },
+  disputeTextArea: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 15,
+    height: 120,
+    textAlignVertical: 'top',
+    color: '#1e293b',
+  },
+  modalButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
+  modalBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  modalBtnCancel: {
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  modalBtnSubmit: {
+    backgroundColor: '#f59e0b',
+    shadowColor: '#f59e0b',
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  modalBtnTextCancel: { color: '#475569', fontWeight: '700', fontSize: 15 },
+  modalBtnTextSubmit: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  webInputContainer: { flex: 1 },
 });

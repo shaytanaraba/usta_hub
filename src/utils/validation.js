@@ -4,9 +4,8 @@
  */
 
 export const VALIDATION_RULES = {
-    // Email validation
+    // Email validation - removed domain restriction for better user experience
     email: {
-        allowedDomains: ['gmail.com'],
         regex: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
     },
 
@@ -36,6 +35,14 @@ export const VALIDATION_RULES = {
         minExperience: 0,
         maxExperience: 50,
     },
+
+    // Photo upload validation
+    photo: {
+        maxSizeBytes: 5 * 1024 * 1024, // 5MB
+        maxPhotos: 5,
+        allowedFormats: ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'],
+        allowedExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+    },
 };
 
 /**
@@ -50,14 +57,6 @@ export const validateEmail = (email) => {
 
     if (!VALIDATION_RULES.email.regex.test(trimmedEmail)) {
         return { isValid: false, message: 'Invalid email format' };
-    }
-
-    const domain = trimmedEmail.split('@')[1];
-    if (!VALIDATION_RULES.email.allowedDomains.includes(domain)) {
-        return {
-            isValid: false,
-            message: `Only ${VALIDATION_RULES.email.allowedDomains.join(', ')} emails are allowed`,
-        };
     }
 
     return { isValid: true, email: trimmedEmail };
@@ -168,4 +167,53 @@ export const validateExperience = (experience) => {
     }
 
     return { isValid: true, experience: years.toString() };
+};
+
+/**
+ * Validate photo file size
+ */
+export const validatePhotoSize = (sizeBytes) => {
+    if (sizeBytes > VALIDATION_RULES.photo.maxSizeBytes) {
+        const maxSizeMB = VALIDATION_RULES.photo.maxSizeBytes / (1024 * 1024);
+        return {
+            isValid: false,
+            message: `Photo size must be less than ${maxSizeMB}MB`,
+        };
+    }
+    return { isValid: true };
+};
+
+/**
+ * Validate photo format by MIME type
+ */
+export const validatePhotoFormat = (mimeType) => {
+    if (!VALIDATION_RULES.photo.allowedFormats.includes(mimeType?.toLowerCase())) {
+        return {
+            isValid: false,
+            message: 'Only JPEG, PNG, and WebP images are allowed',
+        };
+    }
+    return { isValid: true };
+};
+
+/**
+ * Validate photo array count
+ */
+export const validatePhotoCount = (currentCount) => {
+    if (currentCount >= VALIDATION_RULES.photo.maxPhotos) {
+        return {
+            isValid: false,
+            message: `Maximum ${VALIDATION_RULES.photo.maxPhotos} photos allowed`,
+        };
+    }
+    return { isValid: true };
+};
+
+/**
+ * Get file extension from URI
+ */
+export const getFileExtension = (uri) => {
+    if (!uri) return '';
+    const parts = uri.split('.');
+    return parts.length > 1 ? `.${parts[parts.length - 1].toLowerCase()}` : '';
 };

@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '../lib/supabase';
+import logger from '../utils/logger';
 import {
   validateEmail,
   validateAndNormalizePhone,
@@ -261,19 +262,26 @@ class AuthService {
         if (!isValid) throw new Error(message);
       }
 
-      // 2. Update Auth User (email/password/metadata) if needed
-      // Note: Changing email sends a confirmation link by default in Supabase
-      const authUpdates = {};
-      if (updates.email) authUpdates.email = updates.email;
-      if (updates.password) authUpdates.password = updates.password;
+      const currentUser = await this.getCurrentUser();
+      const isSelf = currentUser && currentUser.id === userId;
 
-      if (Object.keys(authUpdates).length > 0) {
-        const { error: authError } = await supabase.auth.updateUser(authUpdates);
-        if (authError) throw authError;
+      // 2. Update Auth User (email/password) - ONLY IF SELF
+      // Admin cannot update another user's auth data via client SDK directly
+      // To update other users' auth data, one would need Edge Functions or Service Role
+      if (isSelf) {
+        const authUpdates = {};
+        if (updates.email) authUpdates.email = updates.email;
+        if (updates.password) authUpdates.password = updates.password;
+
+        if (Object.keys(authUpdates).length > 0) {
+          const { error: authError } = await supabase.auth.updateUser(authUpdates);
+          if (authError) throw authError;
+        }
       }
 
       // 3. Update Profiles Table (for other fields)
       const profileUpdates = {};
+      if (updates.email) profileUpdates.email = updates.email;
       if (updates.name) profileUpdates.full_name = updates.name;
       if (updates.phone) {
         const { isValid, phone } = validateAndNormalizePhone(updates.phone);
@@ -415,9 +423,122 @@ class AuthService {
   getDashboardScreen(userType) {
     return this.redirects[userType] || 'Login';
   }
+
+  /**
+   * Get all clients (admin only)
+   */
+  async getAllClients() {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('user_type', 'client')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      return data.map(client => ({
+        id: client.id,
+        email: client.email,
+        name: client.full_name,
+        phone: client.phone,
+        createdAt: client.created_at,
+      }));
+    } catch (error) {
+      logger.error('Error fetching clients', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get client statistics (order count, total spent)
+   */
+  async getClientStats(clientId) {
+    try {
+      // Get all verified orders for this client
+      const { data: orders, error } = await supabase
+        .from('orders')
+        .select('final_price, status')
+        .eq('client_id', clientId);
+
+      if (error) throw error;
+
+      const totalOrders = orders.length;
+      const completedOrders = orders.filter(o => o.status === 'verified').length;
+      const totalSpent = orders
+        .filter(o => o.status === 'verified')
+        .reduce((sum, o) => sum + (parseFloat(o.final_price) || 0), 0);
+
+      // Get last order date
+      const { data: lastOrder } = await supabase
+        .from('orders')
+        .select('created_at')
+        .eq('client_id', clientId)
+        .order('created_at', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      const lastOrderDate = lastOrder?.[0]?.created_at || null;
+
+      return {
+        totalOrders,
+        completedOrders,
+        totalSpent,
+        lastOrderDate: lastOrderDate,
+      };
+    } catch (error) {
+      logger.error('Error fetching client stats', error, { clientId });
+      return {
+        totalOrders: 0,
+        completedOrders: 0,
+        totalSpent: 0,
+        lastOrderDate: null,
+      };
+    }
+  }
+
+  /**
+   * Delete user (admin only)
+   * WARNING: This will cascade delete all related data
+   */
+  async deleteUser(userId) {
+    try {
+      // Delete from profiles (auth.users will be handled by cascade)
+      const { error } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', userId);
+
+      if (error) throw error;
+
+      logger.info('User deleted', { userId });
+
+      return {
+        success: true,
+        message: 'User deleted successfully',
+      };
+    } catch (error) {
+      logger.error('Delete user failed', error, { userId });
+      return {
+        success: false,
+        message: error.message || 'Failed to delete user',
+      };
+    }
+  }
+
+  /**
+   * Change user password (admin can change any user's password)
+   */
+  async adminChangePassword(userId, newPassword) {
+    console.warn('adminChangePassword is deprecated. Client-side admin updates are not allowed by Supabase security policies.');
+    return {
+      success: false,
+      message: 'Password change not supported for existing users via App. Please contact database admin.'
+    };
+  }
 }
 
 // Create and export singleton instance
-const auth = new AuthService();
+const authService = new AuthService();
 
-export default auth;
+export default authService;

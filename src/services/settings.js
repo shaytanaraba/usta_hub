@@ -28,7 +28,7 @@ class SettingsService {
 
             if (error) {
                 // If table doesn't exist or empty, return default (handling dev environments)
-                console.warn('Could not fetch settings (using defaults):', error.message);
+                // Use default settings silently if table missing (dev mode)
                 return this.defaultSettings;
             }
 
