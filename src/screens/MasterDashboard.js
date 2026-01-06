@@ -25,11 +25,12 @@ import {
     Dimensions,
     Pressable,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import {
     LogOut, ShieldCheck, Moon, Sun, LayoutGrid, Briefcase, Wallet,
     MapPin, Check, X, Filter, ChevronDown, ChevronUp, Inbox,
     SearchX, ClipboardList, TrendingUp, AlertCircle, CheckCircle2,
-    Phone, User, Clock, DollarSign
+    Phone, User, Clock, DollarSign, RotateCw
 } from 'lucide-react-native';
 
 // Services
@@ -58,6 +59,10 @@ const CANCEL_REASONS_MAP = {
     client_request: 'reasonClientRequest',
     other: 'reasonOther',
 };
+
+const STANDARD_SERVICES = [
+    'Plumbing', 'Cleaning', 'Construction', 'Carpenter', 'Electrician', 'Painting', 'Other'
+];
 
 // ============================================
 // DROPDOWN COMPONENT (Custom)
@@ -149,7 +154,7 @@ const Dropdown = ({ label, value, options, optionLabels = {}, onChange, zIndex =
 // ============================================
 // HEADER COMPONENT
 // ============================================
-const Header = ({ user, onLogout, onLanguageToggle, onThemeToggle }) => {
+const Header = ({ user, onLogout, onLanguageToggle, onThemeToggle, onRefresh }) => {
     const { t, language } = useLocalization();
     const { theme, isDark } = useTheme();
 
@@ -192,12 +197,18 @@ const Header = ({ user, onLogout, onLanguageToggle, onThemeToggle }) => {
             </View>
 
             <View style={styles.headerRight}>
+                <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onRefresh}>
+                    <RotateCw size={18} color={theme.accentIndigo} />
+                </TouchableOpacity>
+
                 <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onLanguageToggle}>
                     <Text style={{ fontSize: 16 }}>{getFlagEmoji()}</Text>
                 </TouchableOpacity>
+
                 <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onThemeToggle}>
-                    {isDark ? <Sun size={18} color={theme.textPrimary} /> : <Moon size={18} color={theme.textPrimary} />}
+                    {isDark ? <Sun size={18} color="#FFD700" /> : <Moon size={18} color={theme.accentIndigo} />}
                 </TouchableOpacity>
+
                 <TouchableOpacity style={[styles.headerButton, { backgroundColor: `${theme.accentDanger}15` }]} onPress={onLogout}>
                     <LogOut size={18} color={theme.accentDanger} />
                 </TouchableOpacity>
@@ -209,7 +220,7 @@ const Header = ({ user, onLogout, onLanguageToggle, onThemeToggle }) => {
 // ============================================
 // FILTER BAR COMPONENT (Refined)
 // ============================================
-const FilterBar = ({ filters, setFilters, availableServices, availableAreas }) => {
+const FilterBar = ({ filters, setFilters, availableServices, availableAreas, serviceLabels }) => {
     const { t } = useLocalization();
     const { theme } = useTheme();
     const [expanded, setExpanded] = useState(false);
@@ -222,6 +233,8 @@ const FilterBar = ({ filters, setFilters, availableServices, availableAreas }) =
     const clearFilters = () => {
         setFilters({ urgency: 'all', service: 'all', area: 'all', pricing: 'all' });
     };
+
+    // (Internal serviceLabels logic removed, utilizing passed prop)
 
     return (
         <View style={[styles.filterContainer, { backgroundColor: theme.bgSecondary, borderBottomColor: theme.borderPrimary }]}>
@@ -267,7 +280,7 @@ const FilterBar = ({ filters, setFilters, availableServices, availableAreas }) =
                             label={t('filterService')}
                             value={filters.service}
                             options={['all', ...availableServices]}
-                            optionLabels={{ all: t('filterAll') }}
+                            optionLabels={serviceLabels}
                             onChange={(v) => setFilters({ ...filters, service: v })}
                         />
                         <Dropdown
@@ -306,9 +319,40 @@ const FilterBar = ({ filters, setFilters, availableServices, availableAreas }) =
 };
 
 // ============================================
+// PAGINATION COMPONENT
+// ============================================
+const Pagination = ({ current, total, onPageChange }) => {
+    const { theme } = useTheme();
+    if (total <= 1) return null;
+
+    return (
+        <View style={styles.pagination}>
+            {Array.from({ length: total }, (_, i) => i + 1).map(p => (
+                <TouchableOpacity
+                    key={p}
+                    style={[
+                        styles.pageBtn,
+                        {
+                            borderColor: current === p ? theme.accentIndigo : theme.borderPrimary,
+                            backgroundColor: current === p ? `${theme.accentIndigo}15` : theme.bgCard
+                        }
+                    ]}
+                    onPress={() => onPageChange(p)}
+                >
+                    <Text style={{
+                        color: current === p ? theme.accentIndigo : theme.textPrimary,
+                        fontWeight: current === p ? '700' : '500'
+                    }}>{p}</Text>
+                </TouchableOpacity>
+            ))}
+        </View>
+    );
+};
+
+// ============================================
 // ORDER CARD COMPONENT
 // ============================================
-const OrderCard = ({ order, isPool, userVerified, actionLoading, onClaim, onStart, onComplete, onRefuse }) => {
+const OrderCard = ({ order, isPool, userVerified, actionLoading, isHighlighted, onClaim, onStart, onComplete, onRefuse }) => {
     const { t } = useLocalization();
     const { theme } = useTheme();
     const { width } = Dimensions.get('window');
@@ -370,19 +414,21 @@ const OrderCard = ({ order, isPool, userVerified, actionLoading, onClaim, onStar
             styles.orderCard,
             {
                 backgroundColor: theme.bgCard,
-                borderColor: theme.borderPrimary,
+                borderColor: isHighlighted ? theme.accentIndigo : theme.borderPrimary,
+                borderWidth: isHighlighted ? 2 : 1,
                 width: cardWidth,
                 opacity: isConfirmed ? 0.6 : 1,
+                transform: [{ scale: isHighlighted ? 1.02 : 1 }],
             }
         ]}>
             <View style={[styles.statusStripe, { backgroundColor: statusColor }]} />
 
             <View style={styles.cardContent}>
                 <View style={styles.cardHeader}>
-                    <Text style={[styles.serviceType, { color: theme.textPrimary }]} numberOfLines={1}>
+                    <Text style={[styles.serviceType, { color: theme.textPrimary, fontSize: isHighlighted ? 16 : 15 }]} numberOfLines={1}>
                         {order.service_type}
                     </Text>
-                    <Text style={[styles.cardPrice, { color: theme.accentSuccess }]}>
+                    <Text style={[styles.cardPrice, { color: theme.accentSuccess, fontSize: isHighlighted ? 16 : 15 }]}>
                         {order.final_price
                             ? `${order.final_price}${t('currencySom')}`
                             : order.initial_price
@@ -512,13 +558,28 @@ const OrderCard = ({ order, isPool, userVerified, actionLoading, onClaim, onStar
 const FinancesTab = ({ financials, earnings, refreshing, onRefresh }) => {
     const { t } = useLocalization();
     const { theme } = useTheme();
-    const [period, setPeriod] = useState('all'); // yesterday, today, week, month, all
+    const [period, setPeriod] = useState('all'); // yesterday, today, week, month, all, custom
+    const [showDatePicker, setShowDatePicker] = useState(false);
+    const [dateType, setDateType] = useState('start'); // 'start' or 'end'
+    const [customRange, setCustomRange] = useState({ start: new Date(), end: new Date() });
 
     // Filter earnings by period
     const filteredEarnings = useMemo(() => {
         if (period === 'all') return earnings;
         const now = new Date();
         const cutOff = new Date();
+
+        if (period === 'custom') {
+            const start = new Date(customRange.start);
+            start.setHours(0, 0, 0, 0);
+            const end = new Date(customRange.end);
+            end.setHours(23, 59, 59, 999);
+
+            return earnings.filter(e => {
+                const date = new Date(e.created_at || e.date);
+                return date >= start && date <= end;
+            });
+        }
 
         if (period === 'today') {
             cutOff.setHours(0, 0, 0, 0);
@@ -529,7 +590,7 @@ const FinancesTab = ({ financials, earnings, refreshing, onRefresh }) => {
         }
 
         return earnings.filter(e => new Date(e.created_at || e.date) >= cutOff);
-    }, [period, earnings]);
+    }, [period, earnings, customRange]);
 
     // Calculate stats from filtered earnings
     const stats = useMemo(() => {
@@ -547,23 +608,41 @@ const FinancesTab = ({ financials, earnings, refreshing, onRefresh }) => {
             }
         });
 
-        return { totalEarnings, commissionOwed, commissionPaid, jobsDone };
+        const netBalance = totalEarnings - commissionPaid - commissionOwed;
+
+        return { totalEarnings, commissionOwed, commissionPaid, jobsDone, netBalance };
     }, [filteredEarnings]);
 
-    const StatCard = ({ label, value, color, icon: Icon }) => (
-        <View style={[styles.statCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-            <View style={styles.statHeader}>
-                <Icon size={14} color={color} />
-                <Text style={[styles.statLabel, { color }]}>{label}</Text>
+    const handleDateChange = (event, selectedDate) => {
+        setShowDatePicker(false);
+        if (selectedDate) {
+            setCustomRange(prev => ({ ...prev, [dateType]: selectedDate }));
+            if (period !== 'custom') setPeriod('custom');
+        }
+    };
+
+    const openDatePicker = (type) => {
+        setDateType(type);
+        setShowDatePicker(true);
+    };
+
+    const StatCard = ({ label, value, color, icon: Icon, isMain }) => (
+        <View style={[
+            isMain ? styles.mainStatCard : styles.statCard,
+            { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }
+        ]}>
+            <View style={isMain ? styles.mainStatHeader : styles.statHeader}>
+                <Icon size={isMain ? 20 : 14} color={color} />
+                <Text style={[isMain ? styles.mainStatLabel : styles.statLabel, { color }]}>{label}</Text>
             </View>
-            <Text style={[styles.statValue, { color: theme.textPrimary }]}>{value}</Text>
+            <Text style={[isMain ? styles.mainStatValue : styles.statValue, { color: theme.textPrimary }]}>{value}</Text>
         </View>
     );
 
     return (
         <ScrollView style={styles.financesContainer} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentPrimary} />}>
             <View style={styles.periodFilterContainer}>
-                {['all', 'month', 'week', 'today'].map(p => (
+                {['all', 'month', 'week', 'today', 'custom'].map(p => (
                     <TouchableOpacity
                         key={p}
                         style={[
@@ -579,11 +658,40 @@ const FinancesTab = ({ financials, earnings, refreshing, onRefresh }) => {
                             {p === 'all' ? t('filterAll') :
                                 p === 'today' ? t('periodToday') :
                                     p === 'week' ? t('periodWeek') :
-                                        t('periodMonth')}
+                                        p === 'month' ? t('periodMonth') :
+                                            t('filterCustom')}
                         </Text>
                     </TouchableOpacity>
                 ))}
             </View>
+
+            {period === 'custom' && (
+                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+                    <TouchableOpacity onPress={() => openDatePicker('start')} style={[styles.outlineButton, { borderColor: theme.borderSecondary }]}>
+                        <Text style={[styles.outlineButtonText, { color: theme.textPrimary }]}>{t('labelStartDate')}: {customRange.start.toLocaleDateString()}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => openDatePicker('end')} style={[styles.outlineButton, { borderColor: theme.borderSecondary }]}>
+                        <Text style={[styles.outlineButtonText, { color: theme.textPrimary }]}>{t('labelEndDate')}: {customRange.end.toLocaleDateString()}</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+
+            {showDatePicker && (
+                <DateTimePicker
+                    value={customRange[dateType]}
+                    mode="date"
+                    display="default"
+                    onChange={handleDateChange}
+                />
+            )}
+
+            <StatCard
+                label={t('finNetBalance')}
+                value={stats.netBalance.toFixed(0)}
+                color={theme.accentIndigo}
+                icon={DollarSign}
+                isMain={true}
+            />
 
             <View style={styles.statsGrid}>
                 <StatCard label={t('finTotalEarned')} value={stats.totalEarnings.toFixed(0)} color={theme.accentSuccess} icon={Wallet} />
@@ -639,41 +747,107 @@ const DashboardContent = ({ navigation, route }) => {
     const [user, setUser] = useState(route?.params?.user || null);
     const [activeTab, setActiveTab] = useState('pool');
     const [availableOrders, setAvailableOrders] = useState([]);
+    const [orderPoolMeta, setOrderPoolMeta] = useState([]); // All pool orders (lightweight) for filters
     const [myOrders, setMyOrders] = useState([]);
     const [financials, setFinancials] = useState(null);
     const [earnings, setEarnings] = useState([]);
+
+    // Pagination State
+    const [pagePool, setPagePool] = useState(1);
+    const [pageJobs, setPageJobs] = useState(1);
+    const [totalPool, setTotalPool] = useState(0);
+    const [totalJobs, setTotalJobs] = useState(0);
+    const PAGE_LIMIT = 5; // Updated per user request
+
     const [refreshing, setRefreshing] = useState(false);
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState(false);
 
+    const [highlightedOrderId, setHighlightedOrderId] = useState(null);
+
     const [filters, setFilters] = useState({ urgency: 'all', service: 'all', area: 'all', pricing: 'all' });
     const [modalState, setModalState] = useState({ type: null, order: null }); // type: 'complete' | 'refuse' | null
 
-    // Ref for modals input
     const [completeData, setCompleteData] = useState({});
     const [refuseData, setRefuseData] = useState({});
 
+    // Track filtered count for client-side lists (jobs)
+    const [filteredJobsCount, setFilteredJobsCount] = useState(0);
+
+    // Initial load
     useEffect(() => { loadData(); }, []);
 
-    const loadData = async () => {
-        setLoading(true);
+    // Reload pool when filters change (Debounce could be added here loop)
+    useEffect(() => {
+        const reloadPool = async () => {
+            setLoading(true);
+            setPagePool(1); // Reset to page 1
+            try {
+                const res = await ordersService.getAvailableOrders(1, PAGE_LIMIT, filters);
+                setAvailableOrders(res.data);
+                setTotalPool(res.count);
+            } catch (e) {
+                console.error(e);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        // Only reload if we have a user (skip initial mount race)
+        if (user) {
+            reloadPool();
+        }
+    }, [filters]);
+
+    const loadData = async (reset = true) => {
+        if (reset) setLoading(true);
         try {
             const u = await authService.getCurrentUser();
             setUser(u);
             if (u) {
-                const [pool, jobs, fin, earn] = await Promise.all([
-                    ordersService.getAvailableOrders(),
-                    ordersService.getMasterOrders(u.id),
+                // Fetch pool (page 1), metadata (ALL), jobs, stats
+                const [poolRes, metaRes, jobsRes, fin, earn] = await Promise.all([
+                    ordersService.getAvailableOrders(pagePool, PAGE_LIMIT, filters),
+                    ordersService.getAvailableOrdersMeta(),
+                    ordersService.getMasterOrders(u.id, 1, 100),
                     earningsService.getMasterFinancialSummary(u.id),
                     earningsService.getMasterEarnings(u.id),
                 ]);
-                setAvailableOrders(pool);
-                setMyOrders(jobs);
+
+                setAvailableOrders(poolRes.data);
+                setTotalPool(poolRes.count);
+                setOrderPoolMeta(metaRes);
+
+                setMyOrders(jobsRes.data);
+                setTotalJobs(jobsRes.count);
+
                 setFinancials(fin);
                 setEarnings(earn);
             }
         } catch (e) {
             console.error(e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const changePage = async (tab, page) => {
+        if (tab === 'jobs') {
+            setPageJobs(page);
+            return;
+        }
+
+        setLoading(true);
+        try {
+            const u = user || await authService.getCurrentUser();
+            if (!u) return;
+
+            setPagePool(page);
+            const res = await ordersService.getAvailableOrders(page, PAGE_LIMIT, filters);
+            setAvailableOrders(res.data);
+            setTotalPool(res.count);
+        } catch (e) {
+            console.error('Page change failed', e);
         } finally {
             setLoading(false);
         }
@@ -691,32 +865,114 @@ const DashboardContent = ({ navigation, route }) => {
     const sortJobs = (jobs) => {
         const score = (status) => {
             switch (status) {
-                case 'started': return 4;
-                case 'claimed': return 3;
+                case 'claimed': return 4;
+                case 'started': return 3;
                 case 'completed': return 2;
                 case 'confirmed': return 1;
                 default: return 0;
             }
         };
-        return [...jobs].sort((a, b) => score(b.status) - score(a.status));
+        return [...jobs].sort((a, b) => {
+            const scoreDiff = score(b.status) - score(a.status);
+            if (scoreDiff !== 0) return scoreDiff;
+            return new Date(b.created_at) - new Date(a.created_at); // Newest first within status
+        });
     };
 
-    const currentList = activeTab === 'pool'
-        ? availableOrders
-        : sortJobs(myOrders);
+    const processedOrders = useMemo(() => {
+        // For POOL: active filters are applied SERVER-SIDE. data is already correct page and filtered.
+        if (activeTab === 'pool') return availableOrders;
 
-    const filteredOrders = useMemo(() => {
-        return currentList.filter((order) => {
+        // For JOBS: Local filter + slice
+        let list = sortJobs(myOrders);
+
+        const filtered = list.filter((order) => {
             if (filters.urgency !== 'all' && order.urgency !== filters.urgency) return false;
             if (filters.service !== 'all' && order.service_type !== filters.service) return false;
             if (filters.area !== 'all' && order.area !== filters.area) return false;
             if (filters.pricing !== 'all' && order.pricing_type !== filters.pricing) return false;
             return true;
         });
-    }, [currentList, filters]);
 
-    const availableServices = useMemo(() => [...new Set(currentList.map(o => o.service_type))].sort(), [currentList]);
-    const availableAreas = useMemo(() => [...new Set(currentList.map(o => o.area))].sort(), [currentList]);
+        // Use a ref or side-effect to update count? 
+        // Better: We can't update state during render. 
+        // We will calculate total for pagination in render based on this memo if possible, 
+        // or just accept we need 2 memos.
+
+        return {
+            data: filtered.slice((pageJobs - 1) * PAGE_LIMIT, pageJobs * PAGE_LIMIT),
+            total: filtered.length
+        };
+    }, [activeTab, availableOrders, myOrders, filters, pageJobs]);
+
+    // Update the filtered jobs count state when processedOrders changes (if tab is jobs)
+    useEffect(() => {
+        if (activeTab === 'jobs') {
+            setFilteredJobsCount(processedOrders.total);
+        }
+    }, [processedOrders, activeTab]);
+
+    const availableServices = useMemo(() => {
+        // Collect services from: STANDARD LIST + My Jobs + All Available Pool
+        const dynamicServices = [...myOrders, ...orderPoolMeta].map(o => o.service_type);
+        const unique = new Set([...STANDARD_SERVICES, ...dynamicServices]);
+        return [...unique].filter(Boolean).sort();
+    }, [myOrders, orderPoolMeta]);
+
+    const availableAreas = useMemo(() => {
+        const combined = [...myOrders, ...orderPoolMeta];
+        return [...new Set(combined.map(o => o.area))].filter(Boolean).sort();
+    }, [myOrders, orderPoolMeta]);
+
+    // Service Labels with Counts
+    const serviceLabels = useMemo(() => {
+        const labels = { all: t('filterAll') };
+
+        // Helper to check match against OTHER filters
+        const matchesOtherFilters = (order) => {
+            if (filters.urgency !== 'all' && order.urgency !== filters.urgency) return false;
+            if (filters.area !== 'all' && order.area !== filters.area) return false;
+            if (filters.pricing !== 'all' && order.pricing_type !== filters.pricing) return false;
+            // Don't check service obviously
+            return true;
+        };
+
+        const activePool = orderPoolMeta || [];
+        const activeJobs = myOrders || [];
+        const allCandidates = [...activeJobs, ...activePool];
+
+        availableServices.forEach(s => {
+            // Translation
+            // Tri-state lookup: 
+            // 1. service[Value] (e.g. servicePlumbing)
+            // 2. service[CapitalizedValue] (e.g. serviceInstallation)
+            // 3. raw value
+            const keyStandard = `service${s}`;
+            const keyCap = `service${s.charAt(0).toUpperCase() + s.slice(1)}`;
+
+            let translated = s;
+            if (t(keyStandard) !== keyStandard) translated = t(keyStandard);
+            else if (t(keyCap) !== keyCap) translated = t(keyCap);
+
+            // Count
+            // Count unique items (use ID to dedupe if needed, but lists are disjoint - pool vs my jobs)
+            const count = allCandidates.filter(o =>
+                (o.service_type === s || o.service_type?.toLowerCase() === s.toLowerCase()) &&
+                matchesOtherFilters(o)
+            ).length;
+
+            labels[s] = `${translated} (${count})`;
+        });
+        return labels;
+    }, [availableServices, orderPoolMeta, myOrders, filters, t]);
+
+    // Update FilterBar prop passing
+    // ... we need to pass serviceLabels to FilterBar or let it generate them?
+    // The previous implementation generated them inside FilterBar. We should generate them here 
+    // where we have access to the counts data, OR pass the counts data to FilterBar.
+    // Let's pass the pre-calculated labels. 
+    // FilterBar needs update to accept 'serviceLabels' prop instead of generating it.
+
 
     // Actions...
     const handleAction = async (fn, ...args) => {
@@ -726,7 +982,18 @@ const DashboardContent = ({ navigation, route }) => {
             if (res.success) {
                 showToast?.(res.message, 'success');
                 setModalState({ type: null, order: null });
-                await loadData();
+
+                // Specific logic for Claiming code: switch to jobs tab and highlight
+                if (fn === ordersService.claimOrder) {
+                    const orderId = args[0];
+                    setHighlightedOrderId(orderId);
+                    setActiveTab('jobs');
+                    // Reload data to reflect change, but keep highlight
+                    await loadData();
+                    // Scroll to top or find item? The list re-renders.
+                } else {
+                    await loadData();
+                }
             } else {
                 showToast?.(res.message, 'error');
             }
@@ -740,9 +1007,15 @@ const DashboardContent = ({ navigation, route }) => {
     // Render...
     return (
         <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
-            <Header user={user} onLogout={() => authService.logoutUser().then(() => navigation.reset({ index: 0, routes: [{ name: 'Login' }] }))} onLanguageToggle={cycleLanguage} onThemeToggle={toggleTheme} />
+            <Header
+                user={user}
+                onLogout={() => authService.logoutUser().then(() => navigation.reset({ index: 0, routes: [{ name: 'Login' }] }))}
+                onLanguageToggle={cycleLanguage}
+                onThemeToggle={toggleTheme}
+                onRefresh={() => loadData(true)}
+            />
 
-            {activeTab !== 'finances' && <FilterBar filters={filters} setFilters={setFilters} availableServices={availableServices} availableAreas={availableAreas} />}
+            {activeTab !== 'finances' && <FilterBar filters={filters} setFilters={setFilters} availableServices={availableServices} availableAreas={availableAreas} serviceLabels={serviceLabels} />}
 
             {loading && !refreshing ? (
                 <View style={styles.center}><ActivityIndicator color={theme.accentIndigo} size="large" /></View>
@@ -750,7 +1023,7 @@ const DashboardContent = ({ navigation, route }) => {
                 <FinancesTab financials={financials} earnings={earnings} refreshing={refreshing} onRefresh={onRefresh} />
             ) : (
                 <FlatList
-                    data={filteredOrders}
+                    data={activeTab === 'pool' ? processedOrders : processedOrders.data}
                     key={deviceUtils.getGridColumns()}
                     numColumns={deviceUtils.getGridColumns()}
                     keyExtractor={item => item.id}
@@ -763,6 +1036,7 @@ const DashboardContent = ({ navigation, route }) => {
                             isPool={activeTab === 'pool'}
                             userVerified={user?.is_verified}
                             actionLoading={actionLoading}
+                            isHighlighted={item.id === highlightedOrderId}
                             onClaim={() => handleAction(ordersService.claimOrder, item.id, user.id)}
                             onStart={() => handleAction(ordersService.startJob, item.id, user.id)}
                             onComplete={() => setModalState({ type: 'complete', order: item })}
@@ -774,6 +1048,13 @@ const DashboardContent = ({ navigation, route }) => {
                             <Inbox size={48} color={theme.textMuted} />
                             <Text style={[styles.emptyText, { color: theme.textMuted }]}>{t(activeTab === 'pool' ? 'emptyPoolTitle' : 'emptyJobsTitle')}</Text>
                         </View>
+                    }
+                    ListFooterComponent={
+                        <Pagination
+                            current={activeTab === 'pool' ? pagePool : pageJobs}
+                            total={Math.ceil((activeTab === 'pool' ? totalPool : filteredJobsCount) / PAGE_LIMIT)}
+                            onPageChange={(p) => changePage(activeTab, p)}
+                        />
                     }
                 />
             )}
@@ -1012,12 +1293,12 @@ const styles = StyleSheet.create({
     clientPhone: { fontSize: 12, fontWeight: '600' },
 
     cardActions: { flexDirection: 'row', marginTop: 12, gap: 8 },
-    actionRow: { flexDirection: 'row', gap: 8 },
-    actionButton: { flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+    actionRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
+    actionButton: { flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
     btnContent: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     actionButtonText: { color: '#fff', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-    outlineButton: { flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 2 },
-    outlineButtonText: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
+    outlineButton: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 2 },
+    outlineButtonText: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', textAlign: 'center' },
     pendingBadge: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8 },
     pendingText: { fontSize: 11, fontStyle: 'italic' },
 
@@ -1032,10 +1313,14 @@ const styles = StyleSheet.create({
     periodChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1 },
     periodText: { fontSize: 11, fontWeight: '600' },
     statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
+    mainStatCard: { width: '100%', padding: 24, borderRadius: 16, borderWidth: 1, marginBottom: 16, alignItems: 'center', justifyContent: 'center' },
+    mainStatHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+    mainStatLabel: { fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1 },
+    mainStatValue: { fontSize: 42, fontWeight: '200' },
     statCard: { width: '48%', padding: 16, borderRadius: 12, borderWidth: 1 },
     statHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
     statLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-    statValue: { fontSize: 24, fontWeight: '300' },
+    statValue: { fontSize: 20, fontWeight: '300' },
     sectionTitle: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', marginBottom: 10 },
     noEarnings: { padding: 20, borderRadius: 12, borderWidth: 1, alignItems: 'center' },
     noEarningsText: { fontSize: 13 },
@@ -1059,4 +1344,22 @@ const styles = StyleSheet.create({
     reasonsList: { maxHeight: 200, marginBottom: 10 },
     reasonItem: { padding: 12, borderRadius: 8, borderWidth: 1, marginBottom: 8 },
     reasonText: { fontSize: 13, fontWeight: '500' },
+    // Pagination
+    pagination: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 20,
+        paddingBottom: 40,
+        gap: 8,
+    },
+    pageBtn: {
+        minWidth: 36,
+        height: 36,
+        paddingHorizontal: 8,
+        borderRadius: 8,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
 });

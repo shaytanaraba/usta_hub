@@ -35,6 +35,10 @@ const translations = {
         filterPrice: 'Price',
         filterClear: 'Clear',
         filterAll: 'All',
+        filterCustom: 'Custom',
+        labelStartDate: 'Start Date',
+        labelEndDate: 'End Date',
+        actionLoadMore: 'Load More',
         periodToday: 'Today',
         periodWeek: 'Week',
         periodMonth: 'Month',
@@ -80,6 +84,7 @@ const translations = {
 
         // Finances
         finTotalEarned: 'Total Earned',
+        finNetBalance: 'Net Balance',
         finCommissionOwed: 'Commission Owed',
         finCommissionPaid: 'Commission Paid',
         finJobsDone: 'Jobs Completed',
@@ -115,6 +120,15 @@ const translations = {
         reasonClientRequest: 'Client Request',
         reasonOther: 'Other',
 
+        // Services
+        servicePlumbing: 'Plumbing',
+        serviceCleaning: 'Cleaning',
+        serviceConstruction: 'Construction',
+        serviceCarpenter: 'Carpenter',
+        serviceElectrician: 'Electrician',
+        servicePainting: 'Painting',
+        serviceOther: 'Other',
+
         // Loading
         loading: 'Loading...',
         refreshing: 'Refreshing...',
@@ -140,6 +154,10 @@ const translations = {
         filterPrice: 'Цена',
         filterClear: 'Сброс',
         filterAll: 'Все',
+        filterCustom: 'Период',
+        labelStartDate: 'Начало',
+        labelEndDate: 'Конец',
+        actionLoadMore: 'Загрузить еще',
         periodToday: 'Сегодня',
         periodWeek: 'Неделя',
         periodMonth: 'Месяц',
@@ -185,6 +203,7 @@ const translations = {
 
         // Finances
         finTotalEarned: 'Заработано',
+        finNetBalance: 'Чистый доход',
         finCommissionOwed: 'Комиссия к оплате',
         finCommissionPaid: 'Комиссия оплачена',
         finJobsDone: 'Выполнено заказов',
@@ -220,6 +239,15 @@ const translations = {
         reasonClientRequest: 'Просьба клиента',
         reasonOther: 'Другое',
 
+        // Services
+        servicePlumbing: 'Сантехника',
+        serviceCleaning: 'Клининг',
+        serviceConstruction: 'Строительство',
+        serviceCarpenter: 'Плотник',
+        serviceElectrician: 'Электрик',
+        servicePainting: 'Малярные работы',
+        serviceOther: 'Другое',
+
         // Loading
         loading: 'Загрузка...',
         refreshing: 'Обновление...',
@@ -245,6 +273,10 @@ const translations = {
         filterPrice: 'Баа',
         filterClear: 'Тазалоо',
         filterAll: 'Баары',
+        filterCustom: 'Мезгил',
+        labelStartDate: 'Башы',
+        labelEndDate: 'Аягы',
+        actionLoadMore: 'Дагы жүктөө',
         periodToday: 'Бүгүн',
         periodWeek: 'Апта',
         periodMonth: 'Ай',
@@ -290,6 +322,7 @@ const translations = {
 
         // Finances
         finTotalEarned: 'Жалпы киреше',
+        finNetBalance: 'Таза киреше',
         finCommissionOwed: 'Комиссия карызы',
         finCommissionPaid: 'Комиссия төлөндү',
         finJobsDone: 'Аткарылган иштер',
@@ -324,6 +357,15 @@ const translations = {
         reasonAddressUnreachable: 'Дарекке жетүү кыйын',
         reasonClientRequest: 'Кардардын суроосу',
         reasonOther: 'Башка',
+
+        // Services
+        servicePlumbing: 'Сантехника',
+        serviceCleaning: 'Тазалоо',
+        serviceConstruction: 'Курулуш',
+        serviceCarpenter: 'Жыгач уста',
+        serviceElectrician: 'Электрик',
+        servicePainting: 'Сырдоо',
+        serviceOther: 'Башка',
 
         // Loading
         loading: 'Жүктөлүүдө...',

@@ -40,11 +40,14 @@ class OrdersService {
    * Get available orders (pool view for masters)
    * Returns orders with STAGED visibility - no full_address before claim
    */
-  getAvailableOrders = async () => {
-    console.log(`${LOG_PREFIX} Fetching available orders...`);
+  getAvailableOrders = async (page = 1, limit = 10, filters = {}) => {
+    console.log(`${LOG_PREFIX} Fetching available orders (page ${page}, limit ${limit}, filters: ${JSON.stringify(filters)})...`);
 
     try {
-      const { data, error } = await supabase
+      const from = (page - 1) * limit;
+      const to = from + limit - 1;
+
+      let query = supabase
         .from('orders')
         .select(`
           id,
@@ -58,19 +61,60 @@ class OrdersService {
           preferred_date,
           preferred_time,
           created_at
-        `)
-        .eq('status', ORDER_STATUS.PLACED)
-        .order('created_at', { ascending: false });
+        `, { count: 'exact' })
+        .eq('status', ORDER_STATUS.PLACED);
+
+      // Apply Filters
+      if (filters.urgency && filters.urgency !== 'all') {
+        query = query.eq('urgency', filters.urgency);
+      }
+      if (filters.service && filters.service !== 'all') {
+        query = query.eq('service_type', filters.service);
+      }
+      if (filters.area && filters.area !== 'all') {
+        query = query.eq('area', filters.area);
+      }
+      if (filters.pricing && filters.pricing !== 'all') {
+        query = query.eq('pricing_type', filters.pricing);
+      }
+
+      const { data, error, count } = await query
+        .order('created_at', { ascending: false })
+        .range(from, to);
 
       if (error) {
         console.error(`${LOG_PREFIX} getAvailableOrders error:`, error);
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Found ${data.length} available orders`);
-      return data;
+      console.log(`${LOG_PREFIX} Found ${data.length} available orders (Total: ${count})`);
+      return { data, count };
     } catch (error) {
       console.error(`${LOG_PREFIX} getAvailableOrders failed:`, error);
+      return { data: [], count: 0 };
+    }
+  }
+
+  /**
+   * Get metadata for ALL available orders (for filters/counts)
+   */
+  getAvailableOrdersMeta = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+            id,
+            service_type,
+            urgency,
+            area,
+            pricing_type
+          `)
+        .eq('status', ORDER_STATUS.PLACED);
+
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getAvailableOrdersMeta failed:`, error);
       return [];
     }
   }
@@ -269,16 +313,19 @@ class OrdersService {
   /**
    * Get master's orders (claimed/started/completed)
    */
-  getMasterOrders = async (masterId) => {
-    console.log(`${LOG_PREFIX} Fetching master orders: ${masterId}`);
+  getMasterOrders = async (masterId, page = 1, limit = 10) => {
+    console.log(`${LOG_PREFIX} Fetching master orders: ${masterId} (page ${page})...`);
 
     try {
-      const { data, error } = await supabase
+      const from = (page - 1) * limit;
+      const to = from + limit - 1;
+
+      const { data, error, count } = await supabase
         .from('orders')
         .select(`
           *,
           client:client_id(full_name, phone, email)
-        `)
+        `, { count: 'exact' })
         .eq('master_id', masterId)
         .in('status', [
           ORDER_STATUS.CLAIMED,
@@ -286,7 +333,8 @@ class OrdersService {
           ORDER_STATUS.COMPLETED,
           ORDER_STATUS.CONFIRMED
         ])
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .range(from, to);
 
       if (error) throw error;
 
@@ -306,11 +354,11 @@ class OrdersService {
         return order;
       });
 
-      console.log(`${LOG_PREFIX} Found ${data.length} master orders`);
-      return sanitized;
+      console.log(`${LOG_PREFIX} Found ${data.length} master orders (Total: ${count})`);
+      return { data: sanitized, count };
     } catch (error) {
       console.error(`${LOG_PREFIX} getMasterOrders failed:`, error);
-      return [];
+      return { data: [], count: 0 };
     }
   }
 
