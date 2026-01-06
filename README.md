@@ -65,9 +65,7 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 
 4. **Run database migrations**:
    - Open your Supabase SQL Editor
-   - Run `supabase_setup.sql` (if not already done)
-   - Run `disputes_migration.sql` for dispute system
-   - Run `admin_seed.sql` to create admin account
+   - Refer to `PROJECT_DOCUMENTATION.md` for database setup instructions.
 
 ### Running the App
 
@@ -116,8 +114,8 @@ plumber-hub-expo/
 ├── src/
 │   ├── screens/
 │   │   ├── LoginScreen.js      # Login/Registration screen
-│   │   ├── ClientDashboard.js  # Client dashboard
-│   │   ├── PlumberDashboard.js # Plumber dashboard
+│   │   ├── MasterDashboard.js  # Master (Plumber) dashboard
+│   │   ├── DispatcherDashboard.js # Dispatcher dashboard
 │   │   └── AdminDashboard.js   # Admin dashboard
 │   ├── services/
 │   │   ├── auth.js            # Authentication service

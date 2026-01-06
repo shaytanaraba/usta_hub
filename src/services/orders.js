@@ -40,7 +40,7 @@ class OrdersService {
    * Get available orders (pool view for masters)
    * Returns orders with STAGED visibility - no full_address before claim
    */
-  async getAvailableOrders() {
+  getAvailableOrders = async () => {
     console.log(`${LOG_PREFIX} Fetching available orders...`);
 
     try {
@@ -78,7 +78,7 @@ class OrdersService {
   /**
    * Check if master can claim order (uses DB function)
    */
-  async canClaimOrder(orderId) {
+  canClaimOrder = async (orderId) => {
     console.log(`${LOG_PREFIX} Checking if can claim order: ${orderId}`);
 
     try {
@@ -102,7 +102,7 @@ class OrdersService {
   /**
    * Claim order (master) - Uses optimistic locking
    */
-  async claimOrder(orderId, masterId) {
+  claimOrder = async (orderId, masterId) => {
     console.log(`${LOG_PREFIX} Claiming order: ${orderId} for master: ${masterId}`);
 
     try {
@@ -151,7 +151,7 @@ class OrdersService {
   /**
    * Start job (master) - Transition: claimed → started
    */
-  async startJob(orderId, masterId) {
+  startJob = async (orderId, masterId) => {
     console.log(`${LOG_PREFIX} Starting job: ${orderId}`);
 
     try {
@@ -186,7 +186,7 @@ class OrdersService {
   /**
    * Complete job (master) - Submit final price and work details
    */
-  async completeJob(orderId, masterId, completionData) {
+  completeJob = async (orderId, masterId, completionData) => {
     console.log(`${LOG_PREFIX} Completing job: ${orderId}`);
 
     try {
@@ -234,7 +234,7 @@ class OrdersService {
   /**
    * Refuse job (master) - Cancel with mandatory reason
    */
-  async refuseJob(orderId, masterId, reason, notes = null) {
+  refuseJob = async (orderId, masterId, reason, notes = null) => {
     console.log(`${LOG_PREFIX} Refusing job: ${orderId}, reason: ${reason}`);
 
     try {
@@ -269,7 +269,7 @@ class OrdersService {
   /**
    * Get master's orders (claimed/started/completed)
    */
-  async getMasterOrders(masterId) {
+  getMasterOrders = async (masterId) => {
     console.log(`${LOG_PREFIX} Fetching master orders: ${masterId}`);
 
     try {
@@ -321,7 +321,7 @@ class OrdersService {
   /**
    * Create order (dispatcher)
    */
-  async createOrder(orderData, dispatcherId) {
+  createOrder = async (orderData, dispatcherId) => {
     console.log(`${LOG_PREFIX} Creating order by dispatcher: ${dispatcherId}`);
 
     try {
@@ -385,7 +385,7 @@ class OrdersService {
   /**
    * Get dispatcher's orders
    */
-  async getDispatcherOrders(dispatcherId, statusFilter = null) {
+  getDispatcherOrders = async (dispatcherId, statusFilter = null) => {
     console.log(`${LOG_PREFIX} Fetching dispatcher orders: ${dispatcherId}`);
 
     try {
@@ -417,7 +417,7 @@ class OrdersService {
   /**
    * Confirm payment (dispatcher) - Final closure
    */
-  async confirmPayment(orderId, dispatcherId, paymentData) {
+  confirmPayment = async (orderId, dispatcherId, paymentData) => {
     console.log(`${LOG_PREFIX} Confirming payment for order: ${orderId}`);
 
     try {
@@ -459,7 +459,7 @@ class OrdersService {
   /**
    * Cancel order by client (dispatcher on behalf)
    */
-  async cancelByClient(orderId, dispatcherId, reason) {
+  cancelByClient = async (orderId, dispatcherId, reason) => {
     console.log(`${LOG_PREFIX} Canceling order by client: ${orderId}`);
 
     try {
@@ -487,7 +487,7 @@ class OrdersService {
   /**
    * Reopen order (dispatcher) - Return canceled order to pool
    */
-  async reopenOrder(orderId, dispatcherId) {
+  reopenOrder = async (orderId, dispatcherId) => {
     console.log(`${LOG_PREFIX} Reopening order: ${orderId}`);
 
     try {
@@ -523,7 +523,7 @@ class OrdersService {
   /**
    * Get all orders (admin only)
    */
-  async getAllOrders() {
+  getAllOrders = async () => {
     console.log(`${LOG_PREFIX} Fetching all orders (admin)...`);
 
     try {
@@ -549,7 +549,7 @@ class OrdersService {
   /**
    * Check price deviation (uses DB function)
    */
-  async checkPriceDeviation(orderId) {
+  checkPriceDeviation = async (orderId) => {
     try {
       const { data, error } = await supabase.rpc('check_price_deviation', {
         order_uuid: orderId
@@ -565,7 +565,7 @@ class OrdersService {
   /**
    * Get platform statistics
    */
-  async getPlatformStats() {
+  getPlatformStats = async () => {
     console.log(`${LOG_PREFIX} Fetching platform stats...`);
 
     try {
@@ -593,6 +593,5 @@ class OrdersService {
     }
   }
 }
-
 const ordersService = new OrdersService();
 export default ordersService;
