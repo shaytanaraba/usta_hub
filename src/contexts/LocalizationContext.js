@@ -35,6 +35,9 @@ const translations = {
         filterPrice: 'Price',
         filterClear: 'Clear',
         filterAll: 'All',
+        periodToday: 'Today',
+        periodWeek: 'Week',
+        periodMonth: 'Month',
 
         // Pricing types
         pricingFixed: 'Fixed',
@@ -137,6 +140,9 @@ const translations = {
         filterPrice: 'Цена',
         filterClear: 'Сброс',
         filterAll: 'Все',
+        periodToday: 'Сегодня',
+        periodWeek: 'Неделя',
+        periodMonth: 'Месяц',
 
         // Pricing types
         pricingFixed: 'Фикс.',
@@ -239,6 +245,9 @@ const translations = {
         filterPrice: 'Баа',
         filterClear: 'Тазалоо',
         filterAll: 'Баары',
+        periodToday: 'Бүгүн',
+        periodWeek: 'Апта',
+        periodMonth: 'Ай',
 
         // Pricing types
         pricingFixed: 'Фикс.',

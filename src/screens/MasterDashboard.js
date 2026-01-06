@@ -512,24 +512,43 @@ const OrderCard = ({ order, isPool, userVerified, actionLoading, onClaim, onStar
 const FinancesTab = ({ financials, earnings, refreshing, onRefresh }) => {
     const { t } = useLocalization();
     const { theme } = useTheme();
-    const [period, setPeriod] = useState('all'); // today, week, month, all
+    const [period, setPeriod] = useState('all'); // yesterday, today, week, month, all
 
     // Filter earnings by period
     const filteredEarnings = useMemo(() => {
         if (period === 'all') return earnings;
         const now = new Date();
         const cutOff = new Date();
-        if (period === 'today') cutOff.setHours(0, 0, 0, 0);
-        else if (period === 'week') cutOff.setDate(now.getDate() - 7);
-        else if (period === 'month') cutOff.setMonth(now.getMonth() - 1);
+
+        if (period === 'today') {
+            cutOff.setHours(0, 0, 0, 0);
+        } else if (period === 'week') {
+            cutOff.setDate(now.getDate() - 7);
+        } else if (period === 'month') {
+            cutOff.setMonth(now.getMonth() - 1);
+        }
 
         return earnings.filter(e => new Date(e.created_at || e.date) >= cutOff);
     }, [period, earnings]);
 
-    // Recalculate stats based on filter logic if needed, 
-    // but for now keeping global stats and filtered list as requested.
-    // Ideally stats should also reflect filter, but backend usually gives total stats.
-    // We will filter the list visual only.
+    // Calculate stats from filtered earnings
+    const stats = useMemo(() => {
+        let totalEarnings = 0;
+        let commissionOwed = 0;
+        let commissionPaid = 0;
+        const jobsDone = filteredEarnings.length;
+
+        filteredEarnings.forEach(e => {
+            totalEarnings += Number(e.amount) || 0;
+            if (e.status === 'pending') {
+                commissionOwed += Number(e.commission_amount) || 0;
+            } else if (e.status === 'paid') {
+                commissionPaid += Number(e.commission_amount) || 0;
+            }
+        });
+
+        return { totalEarnings, commissionOwed, commissionPaid, jobsDone };
+    }, [filteredEarnings]);
 
     const StatCard = ({ label, value, color, icon: Icon }) => (
         <View style={[styles.statCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
@@ -557,17 +576,20 @@ const FinancesTab = ({ financials, earnings, refreshing, onRefresh }) => {
                         onPress={() => setPeriod(p)}
                     >
                         <Text style={[styles.periodText, { color: period === p ? theme.accentIndigo : theme.textSecondary }]}>
-                            {p === 'all' ? t('filterAll') : p === 'today' ? 'Today' : p === 'week' ? 'Week' : 'Month'}
+                            {p === 'all' ? t('filterAll') :
+                                p === 'today' ? t('periodToday') :
+                                    p === 'week' ? t('periodWeek') :
+                                        t('periodMonth')}
                         </Text>
                     </TouchableOpacity>
                 ))}
             </View>
 
             <View style={styles.statsGrid}>
-                <StatCard label={t('finTotalEarned')} value={financials?.totalEarnings?.toFixed(0) || '0'} color={theme.accentSuccess} icon={Wallet} />
-                <StatCard label={t('finCommissionPaid')} value={financials?.commissionPaid?.toFixed(0) || '0'} color={theme.accentIndigo} icon={TrendingUp} />
-                <StatCard label={t('finCommissionOwed')} value={financials?.commissionOwed?.toFixed(0) || '0'} color={theme.accentWarning} icon={AlertCircle} />
-                <StatCard label={t('finJobsDone')} value={financials?.completedJobs || 0} color={theme.accentInfo} icon={CheckCircle2} />
+                <StatCard label={t('finTotalEarned')} value={stats.totalEarnings.toFixed(0)} color={theme.accentSuccess} icon={Wallet} />
+                <StatCard label={t('finCommissionPaid')} value={stats.commissionPaid.toFixed(0)} color={theme.accentIndigo} icon={TrendingUp} />
+                <StatCard label={t('finCommissionOwed')} value={stats.commissionOwed.toFixed(0)} color={theme.accentWarning} icon={AlertCircle} />
+                <StatCard label={t('finJobsDone')} value={stats.jobsDone} color={theme.accentInfo} icon={CheckCircle2} />
             </View>
 
             <Text style={[styles.sectionTitle, { color: theme.textMuted }]}>{t('finRecentHistory')}</Text>
@@ -578,20 +600,26 @@ const FinancesTab = ({ financials, earnings, refreshing, onRefresh }) => {
                 </View>
             ) : (
                 <View style={[styles.earningsList, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                    {filteredEarnings.map((earning, index) => (
-                        <View key={earning.id || index} style={[styles.earningItem, index < filteredEarnings.length - 1 && { borderBottomColor: theme.borderLight, borderBottomWidth: 1 }]}>
-                            <View style={styles.earningLeft}>
-                                <Text style={[styles.earningService, { color: theme.textPrimary }]}>{earning.order?.service_type || 'Service'}</Text>
-                                <Text style={[styles.earningArea, { color: theme.textMuted }]}>{earning.order?.area}</Text>
+                    {filteredEarnings.map((earning, index) => {
+                        const date = new Date(earning.created_at || earning.date);
+                        const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+                        return (
+                            <View key={earning.id || index} style={[styles.earningItem, index < filteredEarnings.length - 1 && { borderBottomColor: theme.borderLight, borderBottomWidth: 1 }]}>
+                                <View style={styles.earningLeft}>
+                                    <Text style={[styles.earningService, { color: theme.textPrimary }]}>{earning.order?.service_type || 'Service'}</Text>
+                                    <Text style={[styles.earningArea, { color: theme.textMuted }]}>{earning.order?.area}</Text>
+                                    <Text style={[styles.earningDate, { color: theme.textMuted, fontSize: 11, marginTop: 2 }]}>{dateStr}</Text>
+                                </View>
+                                <View style={styles.earningRight}>
+                                    <Text style={[styles.earningAmount, { color: theme.accentSuccess }]}>+{Number(earning.amount).toFixed(0)}</Text>
+                                    <Text style={[styles.earningStatus, { color: earning.status === 'paid' ? theme.accentIndigo : theme.accentWarning }]}>
+                                        {earning.status === 'paid' ? t('finPaid') : t('finPending')} ({Number(earning.commission_amount).toFixed(0)})
+                                    </Text>
+                                </View>
                             </View>
-                            <View style={styles.earningRight}>
-                                <Text style={[styles.earningAmount, { color: theme.accentSuccess }]}>+{Number(earning.amount).toFixed(0)}</Text>
-                                <Text style={[styles.earningStatus, { color: earning.status === 'paid' ? theme.accentIndigo : theme.accentWarning }]}>
-                                    {earning.status === 'paid' ? t('finPaid') : t('finPending')}
-                                </Text>
-                            </View>
-                        </View>
-                    ))}
+                        );
+                    })}
                 </View>
             )}
             <View style={{ height: 100 }} />
