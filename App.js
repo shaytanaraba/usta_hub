@@ -1,88 +1,127 @@
-// Force rebuild
-import React, { useEffect, useState } from 'react';
+/**
+ * PlumberHub v5 - Main Application Entry
+ * Dispatcher-mediated architecture with role-based routing
+ */
+
+import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, View, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 
-// Import screens
-import LoginScreen from './src/screens/LoginScreen';
-import ClientDashboard from './src/screens/ClientDashboard';
-import PlumberDashboard from './src/screens/PlumberDashboard';
-import AdminDashboard from './src/screens/AdminDashboard';
-import PlumberProfileSettings from './src/screens/PlumberProfileSettings';
-
-// Import services
-import auth from './src/services/auth';
 import { supabase } from './src/lib/supabase';
-
-// Import context
+import authService from './src/services/auth';
 import { ToastProvider } from './src/contexts/ToastContext';
+
+// Screens
+import LoginScreen from './src/screens/LoginScreen';
+import MasterDashboard from './src/screens/MasterDashboard';
+import DispatcherDashboard from './src/screens/DispatcherDashboard';
+import AdminDashboard from './src/screens/AdminDashboard';
 
 const Stack = createNativeStackNavigator();
 
+const LOG_PREFIX = '[App]';
+
+// Loading screen component
+function LoadingScreen() {
+  return (
+    <LinearGradient colors={['#0f172a', '#1e293b']} style={styles.loadingContainer}>
+      <ActivityIndicator size="large" color="#3b82f6" />
+    </LinearGradient>
+  );
+}
+
 function AppNavigator() {
-  const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check for existing session
-    initializeApp();
+    console.log(`${LOG_PREFIX} Initializing app...`);
+    checkUser();
 
-    // Listen for auth state changes (fixes session persistence)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log('Auth state changed:', event);
-        if (session) {
-          const profile = await auth.getCurrentUser();
-          setUser(profile);
-        } else {
-          setUser(null);
-        }
-        setIsLoading(false);
+    // Listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log(`${LOG_PREFIX} Auth state changed: ${event}`);
+
+      if (event === 'SIGNED_OUT') {
+        setUser(null);
+      } else if (session?.user) {
+        const currentUser = await authService.getCurrentUser();
+        setUser(currentUser);
       }
-    );
+    });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription?.unsubscribe();
+    };
   }, []);
 
-  const initializeApp = async () => {
-    console.log('🚀 Initializing app...');
+  const checkUser = async () => {
     try {
-      const currentUser = await auth.getCurrentUser();
-      console.log('👤 Current user:', currentUser);
+      const currentUser = await authService.getCurrentUser();
+      console.log(`${LOG_PREFIX} Current user:`, currentUser?.full_name || 'None');
       setUser(currentUser);
     } catch (error) {
-      console.error('❌ Error initializing app:', error);
+      console.error(`${LOG_PREFIX} checkUser error:`, error);
     } finally {
-      console.log('✅ App initialization complete');
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
-  if (isLoading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007bff" />
-      </View>
-    );
+  const getInitialScreen = (role) => {
+    switch (role) {
+      case 'master': return 'MasterDashboard';
+      case 'dispatcher': return 'DispatcherDashboard';
+      case 'admin': return 'AdminDashboard';
+      case 'client': return 'Login'; // Clients hidden for now
+      default: return 'Login';
+    }
+  };
+
+  if (loading) {
+    return <LoadingScreen />;
   }
 
   return (
     <NavigationContainer>
       <Stack.Navigator
-        initialRouteName={user ? getInitialScreen(user.user_type) : 'Login'}
+        initialRouteName="Login"
         screenOptions={{
           headerShown: false,
+          animation: 'slide_from_right',
+          contentStyle: { backgroundColor: '#0f172a' }
         }}
       >
-        <Stack.Screen name="Login" component={LoginScreen} />
-        <Stack.Screen name="ClientDashboard" component={ClientDashboard} />
-        <Stack.Screen name="PlumberDashboard" component={PlumberDashboard} />
-        <Stack.Screen name="AdminDashboard" component={AdminDashboard} />
-        <Stack.Screen name="PlumberProfileSettings" component={PlumberProfileSettings} />
+        {/* Login - Always available */}
+        <Stack.Screen
+          name="Login"
+          component={LoginScreen}
+          options={{ animationTypeForReplace: 'pop' }}
+        />
+
+        {/* Master Dashboard */}
+        <Stack.Screen
+          name="MasterDashboard"
+          component={MasterDashboard}
+          initialParams={{ user }}
+        />
+
+        {/* Dispatcher Dashboard */}
+        <Stack.Screen
+          name="DispatcherDashboard"
+          component={DispatcherDashboard}
+          initialParams={{ user }}
+        />
+
+        {/* Admin Dashboard */}
+        <Stack.Screen
+          name="AdminDashboard"
+          component={AdminDashboard}
+          initialParams={{ user }}
+        />
       </Stack.Navigator>
-      <StatusBar style="auto" />
     </NavigationContainer>
   );
 }
@@ -90,22 +129,10 @@ function AppNavigator() {
 export default function App() {
   return (
     <ToastProvider>
+      <StatusBar style="light" />
       <AppNavigator />
     </ToastProvider>
   );
-}
-
-function getInitialScreen(userType) {
-  switch (userType) {
-    case 'client':
-      return 'ClientDashboard';
-    case 'plumber':
-      return 'PlumberDashboard';
-    case 'admin':
-      return 'AdminDashboard';
-    default:
-      return 'Login';
-  }
 }
 
 const styles = StyleSheet.create({
@@ -113,6 +140,5 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#fff',
   },
 });
