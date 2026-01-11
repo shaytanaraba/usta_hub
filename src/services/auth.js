@@ -280,6 +280,117 @@ class AuthService {
       return { success: false, message: error.message };
     }
   }
+
+  // ============================================
+  // STAFF MANAGEMENT FUNCTIONS
+  // ============================================
+
+  /**
+   * Get all dispatchers with workload data (admin only)
+   */
+  async getDispatchersWithWorkload() {
+    console.log(`${LOG_PREFIX} Fetching dispatchers with workload...`);
+
+    try {
+      const { data, error } = await supabase.rpc('get_dispatchers_with_workload');
+
+      if (error) {
+        console.error(`${LOG_PREFIX} RPC error, falling back to direct query:`, error);
+        // Fallback to direct query if RPC not available
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('role', 'dispatcher')
+          .order('is_active', { ascending: false })
+          .order('full_name', { ascending: true });
+
+        if (fallbackError) throw fallbackError;
+
+        // Manually add placeholder workload (will be 0 until RPC is deployed)
+        return fallbackData.map(d => ({
+          ...d,
+          active_order_count: 0,
+          total_order_count: 0
+        }));
+      }
+
+      console.log(`${LOG_PREFIX} Found ${data.length} dispatchers`);
+      return data;
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getDispatchersWithWorkload error:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Toggle dispatcher active status (admin only)
+   */
+  async toggleDispatcherActive(dispatcherId, newStatus, reason = null) {
+    console.log(`${LOG_PREFIX} Toggling dispatcher ${dispatcherId} to ${newStatus ? 'active' : 'inactive'}`);
+
+    try {
+      const { data, error } = await supabase.rpc('toggle_dispatcher_active', {
+        target_dispatcher_id: dispatcherId,
+        new_status: newStatus,
+        reason: reason
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} RPC error:`, error);
+        throw error;
+      }
+
+      if (data.success === false) {
+        // Handle validation errors from the function
+        return {
+          success: false,
+          message: data.message,
+          errorCode: data.error,
+          activeOrders: data.active_orders
+        };
+      }
+
+      console.log(`${LOG_PREFIX} Dispatcher status updated:`, data);
+      return {
+        success: true,
+        message: `${data.dispatcher_name} ${newStatus ? 'activated' : 'deactivated'}`,
+        data
+      };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} toggleDispatcherActive error:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Reassign all active orders from one dispatcher to another (admin only)
+   */
+  async reassignDispatcherOrders(oldDispatcherId, newDispatcherId, reason = 'Staff reassignment') {
+    console.log(`${LOG_PREFIX} Reassigning orders from ${oldDispatcherId} to ${newDispatcherId}`);
+
+    try {
+      const { data, error } = await supabase.rpc('reassign_dispatcher_orders', {
+        old_dispatcher_id: oldDispatcherId,
+        new_dispatcher_id: newDispatcherId,
+        reason: reason
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} RPC error:`, error);
+        throw error;
+      }
+
+      console.log(`${LOG_PREFIX} Orders reassigned:`, data);
+      return {
+        success: true,
+        message: `${data.orders_reassigned} orders reassigned successfully`,
+        ordersReassigned: data.orders_reassigned
+      };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} reassignDispatcherOrders error:`, error);
+      return { success: false, message: error.message };
+    }
+  }
 }
 
 const authService = new AuthService();

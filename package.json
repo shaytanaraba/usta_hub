@@ -17,6 +17,7 @@
     "@react-navigation/native-stack": "^7.9.0",
     "@supabase/supabase-js": "^2.89.0",
     "expo": "~54.0.30",
+    "expo-clipboard": "~8.0.8",
     "expo-image-picker": "~17.0.10",
     "expo-linear-gradient": "~15.0.8",
     "expo-status-bar": "~3.0.9",

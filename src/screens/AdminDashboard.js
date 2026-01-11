@@ -46,6 +46,7 @@ export default function AdminDashboard({ navigation, route }) {
     const [orders, setOrders] = useState([]);
     const [masters, setMasters] = useState([]);
     const [mastersWithDebt, setMastersWithDebt] = useState([]);
+    const [dispatchers, setDispatchers] = useState([]);
     const [settings, setSettings] = useState({});
     const [refreshing, setRefreshing] = useState(false);
     const [loading, setLoading] = useState(true);
@@ -54,6 +55,8 @@ export default function AdminDashboard({ navigation, route }) {
     const [selectedMaster, setSelectedMaster] = useState(null);
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [paymentData, setPaymentData] = useState({ amount: '', method: 'cash', reference: '' });
+    const [showReassignModal, setShowReassignModal] = useState(false);
+    const [reassignSource, setReassignSource] = useState(null);
     const [actionLoading, setActionLoading] = useState(false);
 
     const { showToast } = useToast();
@@ -74,6 +77,7 @@ export default function AdminDashboard({ navigation, route }) {
                 loadStats(),
                 loadOrders(),
                 loadMasters(),
+                loadDispatchers(),
                 loadCommissionData(),
                 loadSettings()
             ]);
@@ -97,6 +101,11 @@ export default function AdminDashboard({ navigation, route }) {
     const loadMasters = async () => {
         const allMasters = await authService.getAllMasters();
         setMasters(allMasters);
+    };
+
+    const loadDispatchers = async () => {
+        const allDispatchers = await authService.getDispatchersWithWorkload();
+        setDispatchers(allDispatchers);
     };
 
     const loadCommissionData = async () => {
@@ -223,6 +232,104 @@ export default function AdminDashboard({ navigation, route }) {
     };
 
     // ============================================
+    // STAFF MANAGEMENT ACTIONS
+    // ============================================
+
+    const handleToggleDispatcherActive = async (dispatcher, newStatus) => {
+        const action = newStatus ? 'activate' : 'deactivate';
+        const confirmMessage = newStatus
+            ? `Activate ${dispatcher.full_name}? They will be able to login again.`
+            : `Deactivate ${dispatcher.full_name}? They will not be able to login.`;
+
+        const doToggle = async () => {
+            setActionLoading(true);
+            try {
+                const result = await authService.toggleDispatcherActive(dispatcher.id, newStatus);
+
+                if (result.success) {
+                    showToast?.(result.message, 'success');
+                    await loadDispatchers();
+                } else {
+                    // Handle case where dispatcher has active orders
+                    if (result.errorCode === 'ACTIVE_ORDERS_EXIST') {
+                        if (Platform.OS === 'web') {
+                            if (window.confirm(`${result.message}\n\nWould you like to reassign their orders now?`)) {
+                                setReassignSource(dispatcher);
+                                setShowReassignModal(true);
+                            }
+                        } else {
+                            Alert.alert(
+                                'Active Orders Exist',
+                                `${result.message}\n\nReassign their orders first?`,
+                                [
+                                    { text: 'Cancel', style: 'cancel' },
+                                    {
+                                        text: 'Reassign Orders',
+                                        onPress: () => {
+                                            setReassignSource(dispatcher);
+                                            setShowReassignModal(true);
+                                        }
+                                    }
+                                ]
+                            );
+                        }
+                    } else {
+                        showToast?.(result.message, 'error');
+                    }
+                }
+            } catch (error) {
+                console.error(`${LOG_PREFIX} toggleDispatcher error:`, error);
+                showToast?.('Action failed', 'error');
+            } finally {
+                setActionLoading(false);
+            }
+        };
+
+        if (Platform.OS === 'web') {
+            if (window.confirm(confirmMessage)) {
+                await doToggle();
+            }
+        } else {
+            Alert.alert(
+                `${action.charAt(0).toUpperCase() + action.slice(1)} Dispatcher`,
+                confirmMessage,
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: action.charAt(0).toUpperCase() + action.slice(1), onPress: doToggle }
+                ]
+            );
+        }
+    };
+
+    const handleReassignOrders = async (targetDispatcher) => {
+        if (!reassignSource || !targetDispatcher) return;
+
+        setActionLoading(true);
+        try {
+            const result = await authService.reassignDispatcherOrders(
+                reassignSource.id,
+                targetDispatcher.id,
+                `Orders reassigned from ${reassignSource.full_name} to ${targetDispatcher.full_name}`
+            );
+
+            if (result.success) {
+                showToast?.(result.message, 'success');
+                setShowReassignModal(false);
+                setReassignSource(null);
+                await loadDispatchers();
+                await loadOrders();
+            } else {
+                showToast?.(result.message, 'error');
+            }
+        } catch (error) {
+            console.error(`${LOG_PREFIX} reassignOrders error:`, error);
+            showToast?.('Failed to reassign orders', 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // ============================================
     // RENDER COMPONENTS
     // ============================================
 
@@ -245,6 +352,7 @@ export default function AdminDashboard({ navigation, route }) {
                     { key: 'overview', label: '📊 Overview' },
                     { key: 'orders', label: '📋 Orders' },
                     { key: 'masters', label: '🔧 Masters' },
+                    { key: 'staff', label: '👥 Staff' },
                     { key: 'commission', label: '💰 Commission' },
                     { key: 'settings', label: '⚙️ Settings' }
                 ].map(tab => (
@@ -528,6 +636,153 @@ export default function AdminDashboard({ navigation, route }) {
         </ScrollView>
     );
 
+    const renderStaff = () => (
+        <FlatList
+            data={dispatchers}
+            renderItem={({ item }) => (
+                <View style={[styles.staffCard, !item.is_active && styles.staffCardInactive]}>
+                    <View style={styles.staffHeader}>
+                        <View style={styles.staffInfo}>
+                            <Text style={styles.staffName}>{item.full_name}</Text>
+                            <Text style={styles.staffContact}>{item.phone || item.email}</Text>
+                        </View>
+                        <View style={styles.staffBadges}>
+                            <View style={[
+                                styles.workloadBadge,
+                                item.active_order_count > 0 ? styles.workloadActive : styles.workloadEmpty
+                            ]}>
+                                <Text style={styles.workloadText}>
+                                    {item.active_order_count || 0} active
+                                </Text>
+                            </View>
+                        </View>
+                    </View>
+
+                    <View style={styles.staffStats}>
+                        <View style={styles.staffStat}>
+                            <Text style={styles.staffStatValue}>{item.active_order_count || 0}</Text>
+                            <Text style={styles.staffStatLabel}>Active Orders</Text>
+                        </View>
+                        <View style={styles.staffStat}>
+                            <Text style={styles.staffStatValue}>{item.total_order_count || 0}</Text>
+                            <Text style={styles.staffStatLabel}>Total Orders</Text>
+                        </View>
+                        <View style={styles.staffStat}>
+                            <Text style={styles.staffStatValue}>{item.max_active_cases || 10}</Text>
+                            <Text style={styles.staffStatLabel}>Max Cases</Text>
+                        </View>
+                    </View>
+
+                    <View style={styles.staffActions}>
+                        <TouchableOpacity
+                            style={[
+                                styles.statusToggle,
+                                item.is_active ? styles.statusActive : styles.statusInactive
+                            ]}
+                            onPress={() => handleToggleDispatcherActive(item, !item.is_active)}
+                            disabled={actionLoading}
+                        >
+                            <Text style={styles.statusToggleText}>
+                                {item.is_active ? '✓ Active' : '✗ Inactive'}
+                            </Text>
+                        </TouchableOpacity>
+
+                        {item.active_order_count > 0 && (
+                            <TouchableOpacity
+                                style={styles.reassignButton}
+                                onPress={() => {
+                                    setReassignSource(item);
+                                    setShowReassignModal(true);
+                                }}
+                            >
+                                <Text style={styles.reassignButtonText}>Reassign</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                </View>
+            )}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.listContent}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3b82f6" />}
+            ListEmptyComponent={
+                <View style={styles.emptyState}>
+                    <Text style={styles.emptyIcon}>👥</Text>
+                    <Text style={styles.emptyText}>No staff members</Text>
+                </View>
+            }
+            ListHeaderComponent={
+                <View style={styles.staffListHeader}>
+                    <Text style={styles.sectionTitle}>Staff Management</Text>
+                    <Text style={styles.staffSubtitle}>
+                        {dispatchers.filter(d => d.is_active).length} active of {dispatchers.length} total
+                    </Text>
+                </View>
+            }
+        />
+    );
+
+    const renderReassignModal = () => {
+        const activeDispatchers = dispatchers.filter(
+            d => d.is_active && d.id !== reassignSource?.id
+        );
+
+        return (
+            <Modal visible={showReassignModal} transparent animationType="slide">
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <Text style={styles.modalTitle}>Reassign Orders</Text>
+                        <Text style={styles.modalSubtitle}>
+                            Moving {reassignSource?.active_order_count || 0} orders from {reassignSource?.full_name}
+                        </Text>
+
+                        <Text style={styles.inputLabel}>Select Target Dispatcher</Text>
+
+                        <ScrollView style={styles.dispatcherList}>
+                            {activeDispatchers.length === 0 ? (
+                                <Text style={styles.noDispatchersText}>
+                                    No other active dispatchers available
+                                </Text>
+                            ) : (
+                                activeDispatchers.map(dispatcher => (
+                                    <TouchableOpacity
+                                        key={dispatcher.id}
+                                        style={styles.dispatcherOption}
+                                        onPress={() => handleReassignOrders(dispatcher)}
+                                        disabled={actionLoading}
+                                    >
+                                        <View>
+                                            <Text style={styles.dispatcherOptionName}>
+                                                {dispatcher.full_name}
+                                            </Text>
+                                            <Text style={styles.dispatcherOptionInfo}>
+                                                {dispatcher.active_order_count || 0} active orders
+                                            </Text>
+                                        </View>
+                                        {actionLoading ? (
+                                            <ActivityIndicator color="#3b82f6" size="small" />
+                                        ) : (
+                                            <Text style={styles.dispatcherOptionArrow}>→</Text>
+                                        )}
+                                    </TouchableOpacity>
+                                ))
+                            )}
+                        </ScrollView>
+
+                        <TouchableOpacity
+                            style={styles.cancelButton}
+                            onPress={() => {
+                                setShowReassignModal(false);
+                                setReassignSource(null);
+                            }}
+                        >
+                            <Text style={styles.cancelButtonText}>Cancel</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+        );
+    };
+
     const renderPaymentModal = () => (
         <Modal visible={showPaymentModal} transparent animationType="slide">
             <View style={styles.modalOverlay}>
@@ -616,10 +871,12 @@ export default function AdminDashboard({ navigation, route }) {
             {activeTab === 'overview' && renderOverview()}
             {activeTab === 'orders' && renderOrders()}
             {activeTab === 'masters' && renderMasters()}
+            {activeTab === 'staff' && renderStaff()}
             {activeTab === 'commission' && renderCommission()}
             {activeTab === 'settings' && renderSettings()}
 
             {renderPaymentModal()}
+            {renderReassignModal()}
         </LinearGradient>
     );
 }
@@ -1048,5 +1305,162 @@ const styles = StyleSheet.create({
         fontSize: 16,
         color: '#ffffff',
         fontWeight: '600',
+    },
+    // Staff Management Styles
+    staffListHeader: {
+        paddingHorizontal: 20,
+        paddingBottom: 12,
+    },
+    staffSubtitle: {
+        fontSize: 13,
+        color: '#94a3b8',
+        marginTop: 4,
+    },
+    staffCard: {
+        backgroundColor: 'rgba(30, 41, 59, 0.9)',
+        borderRadius: 16,
+        padding: 16,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(71, 85, 105, 0.5)',
+    },
+    staffCardInactive: {
+        opacity: 0.6,
+        borderColor: '#ef4444',
+    },
+    staffHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        marginBottom: 12,
+    },
+    staffInfo: {
+        flex: 1,
+    },
+    staffName: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#ffffff',
+    },
+    staffContact: {
+        fontSize: 13,
+        color: '#94a3b8',
+        marginTop: 2,
+    },
+    staffBadges: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    workloadBadge: {
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 8,
+    },
+    workloadActive: {
+        backgroundColor: 'rgba(59, 130, 246, 0.2)',
+        borderWidth: 1,
+        borderColor: '#3b82f6',
+    },
+    workloadEmpty: {
+        backgroundColor: 'rgba(71, 85, 105, 0.2)',
+        borderWidth: 1,
+        borderColor: '#475569',
+    },
+    workloadText: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: '#ffffff',
+    },
+    staffStats: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        backgroundColor: '#0f172a',
+        borderRadius: 10,
+        padding: 12,
+        marginBottom: 12,
+    },
+    staffStat: {
+        alignItems: 'center',
+    },
+    staffStatValue: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#ffffff',
+    },
+    staffStatLabel: {
+        fontSize: 11,
+        color: '#94a3b8',
+    },
+    staffActions: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    statusToggle: {
+        flex: 1,
+        paddingVertical: 10,
+        borderRadius: 8,
+        alignItems: 'center',
+        borderWidth: 1,
+    },
+    statusActive: {
+        backgroundColor: 'rgba(34, 197, 94, 0.2)',
+        borderColor: '#22c55e',
+    },
+    statusInactive: {
+        backgroundColor: 'rgba(239, 68, 68, 0.2)',
+        borderColor: '#ef4444',
+    },
+    statusToggleText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#ffffff',
+    },
+    reassignButton: {
+        flex: 1,
+        backgroundColor: '#f59e0b',
+        borderRadius: 8,
+        paddingVertical: 10,
+        alignItems: 'center',
+    },
+    reassignButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#ffffff',
+    },
+    // Reassignment Modal
+    dispatcherList: {
+        maxHeight: 300,
+        marginVertical: 12,
+    },
+    dispatcherOption: {
+        backgroundColor: '#0f172a',
+        borderRadius: 10,
+        padding: 14,
+        marginBottom: 8,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    dispatcherOptionName: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#ffffff',
+    },
+    dispatcherOptionInfo: {
+        fontSize: 13,
+        color: '#94a3b8',
+        marginTop: 2,
+    },
+    dispatcherOptionArrow: {
+        fontSize: 24,
+        color: '#3b82f6',
+    },
+    noDispatchersText: {
+        fontSize: 14,
+        color: '#94a3b8',
+        textAlign: 'center',
+        paddingVertical: 20,
     },
 });

@@ -640,6 +640,217 @@ class OrdersService {
       return {};
     }
   }
+
+  // ============================================
+  // DISPATCHER DASHBOARD ENHANCEMENTS
+  // ============================================
+
+  /**
+   * Get available masters for assignment (uses RPC function)
+   */
+  getAvailableMasters = async () => {
+    console.log(`${LOG_PREFIX} Fetching available masters for assignment...`);
+
+    try {
+      const { data, error } = await supabase.rpc('get_available_masters_for_assignment');
+
+      if (error) {
+        console.error(`${LOG_PREFIX} getAvailableMasters RPC error:`, error);
+        throw error;
+      }
+
+      console.log(`${LOG_PREFIX} Found ${data?.length || 0} available masters`);
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getAvailableMasters failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Force assign master to order (dispatcher/admin only)
+   */
+  forceAssignMaster = async (orderId, masterId, reason = 'Dispatcher assignment') => {
+    console.log(`${LOG_PREFIX} Force assigning master ${masterId} to order ${orderId}`);
+
+    try {
+      const { data, error } = await supabase.rpc('force_assign_master', {
+        p_order_id: orderId,
+        p_master_id: masterId,
+        p_reason: reason
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} forceAssignMaster RPC error:`, error);
+        throw error;
+      }
+
+      if (!data.success) {
+        console.warn(`${LOG_PREFIX} forceAssignMaster failed:`, data.message);
+        return { success: false, message: data.message, error: data.error };
+      }
+
+      console.log(`${LOG_PREFIX} Master assigned successfully:`, data);
+      return { success: true, message: 'Master assigned!', ...data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} forceAssignMaster failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Update order inline (dispatcher editable fields)
+   */
+  updateOrderInline = async (orderId, updates) => {
+    console.log(`${LOG_PREFIX} Updating order inline: ${orderId}`, updates);
+
+    try {
+      const { data, error } = await supabase.rpc('update_order_inline', {
+        p_order_id: orderId,
+        p_updates: updates
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} updateOrderInline RPC error:`, error);
+        throw error;
+      }
+
+      console.log(`${LOG_PREFIX} Order updated:`, data);
+      return { success: true, message: 'Order updated!', ...data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} updateOrderInline failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Get all dispatcher orders with advanced filtering
+   * Enhanced version for the new dashboard
+   */
+  getDispatcherOrdersAdvanced = async (dispatcherId, options = {}) => {
+    console.log(`${LOG_PREFIX} Fetching dispatcher orders with advanced filters:`, options);
+
+    try {
+      const { statusFilter, search, urgency, serviceType, sortOrder = 'desc' } = options;
+
+      let query = supabase
+        .from('orders')
+        .select(`
+          *,
+          client:client_id(id, full_name, phone, email),
+          master:master_id(id, full_name, phone, rating, total_commission_owed)
+        `)
+        .eq('dispatcher_id', dispatcherId);
+
+      // Status filter (multiple allowed)
+      if (statusFilter && statusFilter.length > 0) {
+        query = query.in('status', statusFilter);
+      }
+
+      // Urgency filter
+      if (urgency && urgency !== 'all') {
+        query = query.eq('urgency', urgency);
+      }
+
+      // Service type filter
+      if (serviceType && serviceType !== 'all') {
+        query = query.eq('service_type', serviceType);
+      }
+
+      // Sort order
+      query = query.order('created_at', { ascending: sortOrder === 'asc' });
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      // Client-side search (for flexibility)
+      let results = data || [];
+      if (search) {
+        const q = search.toLowerCase();
+        results = results.filter(o =>
+          o.id.toLowerCase().includes(q) ||
+          o.client?.full_name?.toLowerCase().includes(q) ||
+          o.client?.phone?.includes(q) ||
+          o.full_address?.toLowerCase().includes(q) ||
+          o.master?.full_name?.toLowerCase().includes(q) ||
+          o.problem_description?.toLowerCase().includes(q)
+        );
+      }
+
+      console.log(`${LOG_PREFIX} Found ${results.length} orders with filters`);
+      return results;
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getDispatcherOrdersAdvanced failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Create order with extended fields for new dashboard
+   */
+  createOrderExtended = async (orderData, dispatcherId) => {
+    console.log(`${LOG_PREFIX} Creating order (extended) by dispatcher: ${dispatcherId}`);
+
+    try {
+      const {
+        clientId,
+        pricingType,
+        initialPrice,
+        calloutFee,
+        serviceType,
+        urgency,
+        problemDescription,
+        area,
+        fullAddress,
+        preferredDate,
+        preferredTime,
+        guaranteedPayout,
+        dispatcherNote
+      } = orderData;
+
+      // Get default guaranteed payout if not specified
+      let payout = guaranteedPayout;
+      if (!payout) {
+        const { data: settings } = await supabase
+          .from('platform_settings')
+          .select('default_guaranteed_payout')
+          .single();
+        payout = settings?.default_guaranteed_payout || 500;
+      }
+
+      const { data, error } = await supabase
+        .from('orders')
+        .insert({
+          client_id: clientId,
+          dispatcher_id: dispatcherId,
+          pricing_type: pricingType || 'unknown',
+          initial_price: initialPrice || null,
+          guaranteed_payout: calloutFee || payout,
+          service_type: serviceType || 'repair',
+          urgency: urgency || 'planned',
+          problem_description: problemDescription,
+          area: area,
+          full_address: fullAddress,
+          preferred_date: preferredDate || null,
+          preferred_time: preferredTime || null,
+          dispatcher_note: dispatcherNote || null,
+          status: ORDER_STATUS.PLACED
+        })
+        .select(`
+          *,
+          client:client_id(full_name, phone)
+        `)
+        .single();
+
+      if (error) throw error;
+
+      console.log(`${LOG_PREFIX} Order created: ${data.id}`);
+      return { success: true, message: 'Order created!', order: data, orderId: data.id };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} createOrderExtended failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
 }
 const ordersService = new OrdersService();
 export default ordersService;
