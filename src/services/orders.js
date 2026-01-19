@@ -62,7 +62,7 @@ class OrdersService {
           preferred_time,
           created_at
         `, { count: 'exact' })
-        .eq('status', ORDER_STATUS.PLACED);
+        .in('status', [ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED]);
 
       // Apply Filters
       if (filters.urgency && filters.urgency !== 'all') {
@@ -120,72 +120,89 @@ class OrdersService {
   }
 
   /**
-   * Check if master can claim order (uses DB function)
+   * Check if master can claim order (uses unified DB function)
+   * Returns detailed blockers/warnings
    */
   canClaimOrder = async (orderId) => {
     console.log(`${LOG_PREFIX} Checking if can claim order: ${orderId}`);
 
     try {
-      const { data, error } = await supabase.rpc('can_claim_order', {
+      const { data, error } = await supabase.rpc('check_master_can_claim', {
         order_uuid: orderId
       });
 
       if (error) {
         console.error(`${LOG_PREFIX} canClaimOrder RPC error:`, error);
-        return false;
+        return { can_claim: false, blockers: ['RPC_ERROR'] };
       }
 
-      console.log(`${LOG_PREFIX} Can claim: ${data}`);
-      return data;
+      console.log(`${LOG_PREFIX} Claim check result:`, data);
+      return data; // { can_claim, blockers, warnings, balance, threshold, immediate_count, pending_count }
     } catch (error) {
       console.error(`${LOG_PREFIX} canClaimOrder failed:`, error);
-      return false;
+      return { can_claim: false, blockers: ['ERROR'] };
     }
   }
 
   /**
-   * Claim order (master) - Uses optimistic locking
+   * Translate blocker codes to user-friendly messages
    */
-  claimOrder = async (orderId, masterId) => {
-    console.log(`${LOG_PREFIX} Claiming order: ${orderId} for master: ${masterId}`);
+  translateBlockers = (blockers) => {
+    const translations = {
+      NOT_A_MASTER: 'You must be a master to claim orders',
+      ORDER_NOT_AVAILABLE: 'Order is no longer available',
+      NOT_VERIFIED: 'Your account is not verified',
+      INACTIVE: 'Your account is inactive',
+      BALANCE_BLOCKED: 'Your balance is blocked by admin',
+      INSUFFICIENT_BALANCE: 'Insufficient prepaid balance',
+      IMMEDIATE_LIMIT_REACHED: 'You have reached your immediate orders limit',
+      TOO_MANY_PENDING: 'Too many orders pending confirmation',
+      MAX_JOBS_REACHED: 'You have reached your maximum active jobs limit',
+      ORDER_NO_LONGER_AVAILABLE: 'Order is no longer available'
+    };
+
+    if (!blockers || blockers.length === 0) return 'Cannot claim order';
+    return blockers.map(b => translations[b] || b).join('. ');
+  }
+
+  /**
+   * Claim order (master) - Uses unified RPC function with 8 validation checks
+   */
+  claimOrder = async (orderId) => {
+    console.log(`${LOG_PREFIX} Claiming order: ${orderId}`);
 
     try {
-      // First check eligibility
-      const canClaim = await this.canClaimOrder(orderId);
-      if (!canClaim) {
-        return {
-          success: false,
-          message: 'Cannot claim: either not verified, at job limit, or order unavailable'
-        };
-      }
-
-      // Atomic claim with optimistic locking
-      const { data, error } = await supabase
-        .from('orders')
-        .update({
-          master_id: masterId,
-          status: ORDER_STATUS.CLAIMED,
-          claimed_at: new Date().toISOString()
-        })
-        .eq('id', orderId)
-        .eq('status', ORDER_STATUS.PLACED)
-        .is('master_id', null)
-        .select(`
-          *,
-          client:client_id(full_name, phone)
-        `)
-        .single();
+      const { data, error } = await supabase.rpc('claim_order', {
+        order_uuid: orderId
+      });
 
       if (error) {
-        if (error.code === 'PGRST116') {
-          console.warn(`${LOG_PREFIX} Order already claimed by another master`);
-          return { success: false, message: 'Order no longer available' };
-        }
+        console.error(`${LOG_PREFIX} claimOrder RPC error:`, error);
         throw error;
       }
 
+      // Handle validation failure (can_claim = false)
+      if (data.can_claim === false) {
+        const blockers = data.blockers || [];
+        const message = this.translateBlockers(blockers);
+        console.warn(`${LOG_PREFIX} Cannot claim:`, blockers);
+        return { success: false, message, blockers };
+      }
+
+      // Handle claim failure (success = false after validation passed)
+      if (data.success === false) {
+        const message = data.error || 'Order no longer available';
+        console.warn(`${LOG_PREFIX} Claim failed:`, message);
+        return { success: false, message };
+      }
+
       console.log(`${LOG_PREFIX} Order claimed successfully`);
-      return { success: true, message: 'Order claimed!', order: data };
+      return {
+        success: true,
+        message: 'Order claimed!',
+        orderId: data.order_id,
+        warnings: data.warnings || []
+      };
     } catch (error) {
       console.error(`${LOG_PREFIX} claimOrder failed:`, error);
       return { success: false, message: error.message };
@@ -277,6 +294,7 @@ class OrdersService {
 
   /**
    * Refuse job (master) - Cancel with mandatory reason
+   * Uses RPC function with SECURITY DEFINER to bypass RLS
    */
   refuseJob = async (orderId, masterId, reason, notes = null) => {
     console.log(`${LOG_PREFIX} Refusing job: ${orderId}, reason: ${reason}`);
@@ -286,24 +304,25 @@ class OrdersService {
         throw new Error('Cancellation reason is required');
       }
 
-      const { data, error } = await supabase
-        .from('orders')
-        .update({
-          status: ORDER_STATUS.CANCELED_BY_MASTER,
-          canceled_at: new Date().toISOString(),
-          cancellation_reason: reason,
-          cancellation_notes: notes
-        })
-        .eq('id', orderId)
-        .eq('master_id', masterId)
-        .eq('status', ORDER_STATUS.STARTED)
-        .select()
-        .single();
+      const { data, error } = await supabase.rpc('refuse_job', {
+        p_order_id: orderId,
+        p_master_id: masterId,
+        p_reason: reason,
+        p_notes: notes
+      });
 
-      if (error) throw error;
+      if (error) {
+        console.error(`${LOG_PREFIX} refuseJob RPC error:`, error);
+        throw error;
+      }
+
+      if (!data.success) {
+        console.warn(`${LOG_PREFIX} refuseJob failed:`, data.message);
+        return { success: false, message: data.message };
+      }
 
       console.log(`${LOG_PREFIX} Job refused successfully`);
-      return { success: true, message: 'Job canceled. Dispatcher notified.', order: data };
+      return { success: true, message: 'Job canceled. Dispatcher notified.' };
     } catch (error) {
       console.error(`${LOG_PREFIX} refuseJob failed:`, error);
       return { success: false, message: error.message };
@@ -542,7 +561,7 @@ class OrdersService {
       const { data, error } = await supabase
         .from('orders')
         .update({
-          status: ORDER_STATUS.PLACED,
+          status: ORDER_STATUS.REOPENED,
           master_id: null,
           claimed_at: null,
           started_at: null,
@@ -552,7 +571,7 @@ class OrdersService {
         })
         .eq('id', orderId)
         .eq('dispatcher_id', dispatcherId)
-        .in('status', [ORDER_STATUS.CANCELED_BY_MASTER, ORDER_STATUS.CANCELED_BY_CLIENT])
+        .in('status', [ORDER_STATUS.CANCELED_BY_MASTER, ORDER_STATUS.CANCELED_BY_CLIENT, ORDER_STATUS.EXPIRED])
         .select()
         .single();
 
@@ -591,6 +610,78 @@ class OrdersService {
     } catch (error) {
       console.error(`${LOG_PREFIX} getAllOrders failed:`, error);
       return [];
+    }
+  }
+
+  // ============================================
+  // SERVICE TYPES MANAGEMENT
+  // ============================================
+
+  /**
+   * Get all service types (admin)
+   */
+  getServiceTypes = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('service_types')
+        .select('*')
+        .order('sort_order', { ascending: true });
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getServiceTypes failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Add service type
+   */
+  addServiceType = async (typeData) => {
+    try {
+      const { data, error } = await supabase
+        .from('service_types')
+        .insert(typeData)
+        .select()
+        .single();
+      if (error) throw error;
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Update service type
+   */
+  updateServiceType = async (id, updates) => {
+    try {
+      const { data, error } = await supabase
+        .from('service_types')
+        .update(updates)
+        .eq('id', id)
+        .select()
+        .single();
+      if (error) throw error;
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Delete service type
+   */
+  deleteServiceType = async (id) => {
+    try {
+      const { error } = await supabase
+        .from('service_types')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+      return { success: true };
+    } catch (error) {
+      return { success: false, message: error.message };
     }
   }
 
@@ -641,9 +732,97 @@ class OrdersService {
     }
   }
 
+  /**
+   * Get platform settings (base price, commission)
+   */
+  getPlatformSettings = async () => {
+    console.log(`${LOG_PREFIX} Fetching platform settings...`);
+    try {
+      const { data, error } = await supabase
+        .from('platform_settings')
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getPlatformSettings failed:`, error);
+      return { base_price: 500, commission_rate: 0.20 }; // Fallback defaults from SQL
+    }
+  }
+
+  /**
+   * Update platform settings
+   */
+  updatePlatformSettings = async (settings) => {
+    console.log(`${LOG_PREFIX} Updating platform settings:`, settings);
+    try {
+      // Ensure we are updating the single row, assuming ID 1 or single row enforcement
+      // better to use update without where if it's a single row table, but Supabase requires a WHERE clause usually.
+      // Let's assume there is only one row or we grab the ID first.
+
+      // efficient way: update all rows (since logic implies global singleton) or just id=1
+      const { data, error } = await supabase
+        .from('platform_settings')
+        .update(settings)
+        .eq('id', 1) // Assuming singleton row has ID 1
+        .select()
+        .single();
+
+      if (error) throw error;
+      return { success: true, settings: data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} updatePlatformSettings failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
   // ============================================
   // DISPATCHER DASHBOARD ENHANCEMENTS
   // ============================================
+
+  /**
+   * Create order extended (dispatcher) - Creates a new order with all fields
+   */
+  createOrderExtended = async (orderData, dispatcherId) => {
+    console.log(`${LOG_PREFIX} Creating order (extended):`, orderData);
+
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .insert({
+          client_id: orderData.clientId,
+          dispatcher_id: dispatcherId,
+          service_type: orderData.serviceType || 'other',
+          urgency: orderData.urgency || 'planned',
+          status: ORDER_STATUS.PLACED,
+          pricing_type: orderData.pricingType || 'unknown',
+          initial_price: orderData.initialPrice || null,
+          callout_fee: orderData.calloutFee || null,
+          problem_description: orderData.problemDescription,
+          area: orderData.area,
+          full_address: orderData.fullAddress,
+          preferred_date: orderData.preferredDate || null,
+          preferred_time: orderData.preferredTime || null,
+          dispatcher_note: orderData.dispatcherNote || null,
+          client_name: orderData.clientName || null,
+          client_phone: orderData.clientPhone || null,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error(`${LOG_PREFIX} createOrderExtended error:`, error);
+        throw error;
+      }
+
+      console.log(`${LOG_PREFIX} Order created successfully:`, data.id);
+      return { success: true, orderId: data.id, order: data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} createOrderExtended failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
 
   /**
    * Get available masters for assignment (uses RPC function)
@@ -652,7 +831,7 @@ class OrdersService {
     console.log(`${LOG_PREFIX} Fetching available masters for assignment...`);
 
     try {
-      const { data, error } = await supabase.rpc('get_available_masters_for_assignment');
+      const { data, error } = await supabase.rpc('get_available_masters');
 
       if (error) {
         console.error(`${LOG_PREFIX} getAvailableMasters RPC error:`, error);
@@ -719,6 +898,42 @@ class OrdersService {
       return { success: true, message: 'Order updated!', ...data };
     } catch (error) {
       console.error(`${LOG_PREFIX} updateOrderInline failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Confirm payment (dispatcher) - Transition: completed → confirmed
+   * Called after client pays the master for completed work
+   */
+  confirmPayment = async (orderId, dispatcherId, paymentDetails) => {
+    console.log(`${LOG_PREFIX} Confirming payment for order: ${orderId}`);
+
+    try {
+      const { paymentMethod, paymentProofUrl } = paymentDetails;
+
+      const { data, error } = await supabase
+        .from('orders')
+        .update({
+          status: ORDER_STATUS.CONFIRMED,
+          confirmed_at: new Date().toISOString(),
+          payment_method: paymentMethod || 'cash',
+          payment_proof_url: paymentProofUrl || null,
+        })
+        .eq('id', orderId)
+        .eq('status', ORDER_STATUS.COMPLETED)
+        .select()
+        .single();
+
+      if (error) {
+        console.error(`${LOG_PREFIX} confirmPayment error:`, error);
+        throw error;
+      }
+
+      console.log(`${LOG_PREFIX} Payment confirmed for order:`, data.id);
+      return { success: true, message: 'Payment confirmed!', order: data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} confirmPayment failed:`, error);
       return { success: false, message: error.message };
     }
   }
@@ -849,6 +1064,414 @@ class OrdersService {
     } catch (error) {
       console.error(`${LOG_PREFIX} createOrderExtended failed:`, error);
       return { success: false, message: error.message };
+    }
+  }
+
+  // ============================================
+  // ENHANCED STATS FOR V5 DASHBOARD
+  // ============================================
+
+  /**
+   * Get enhanced platform stats with date filtering and chart data
+   * @param {Object} dateFilter - { type: 'all'|'today'|'week'|'month'|'custom', start?, end? }
+   */
+  getEnhancedPlatformStats = async (dateFilter = { type: 'all' }) => {
+    console.log(`${LOG_PREFIX} Fetching enhanced platform stats with filter:`, dateFilter);
+
+    try {
+      // Build date range query
+      let query = supabase
+        .from('orders')
+        .select('id, status, final_price, service_type, created_at, confirmed_at');
+
+      // Apply date filters based on confirmed_at for revenue, created_at for counts
+      if (dateFilter.type !== 'all') {
+        const now = new Date();
+        let startDate;
+
+        switch (dateFilter.type) {
+          case 'today':
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            break;
+          case 'week':
+            startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            break;
+          case 'month':
+            startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            break;
+          case 'custom':
+            if (dateFilter.start) {
+              startDate = new Date(dateFilter.start);
+            }
+            if (dateFilter.end) {
+              query = query.lte('created_at', new Date(dateFilter.end).toISOString());
+            }
+            break;
+        }
+
+        if (startDate) {
+          query = query.gte('created_at', startDate.toISOString());
+        }
+      }
+
+      const { data: orders, error } = await query;
+      if (error) throw error;
+
+      // Basic counts
+      const stats = {
+        totalOrders: orders.length,
+        placedOrders: orders.filter(o => o.status === ORDER_STATUS.PLACED).length,
+        activeJobs: orders.filter(o => [ORDER_STATUS.CLAIMED, ORDER_STATUS.STARTED].includes(o.status)).length,
+        completedOrders: orders.filter(o => o.status === ORDER_STATUS.COMPLETED).length,
+        confirmedOrders: orders.filter(o => o.status === ORDER_STATUS.CONFIRMED).length,
+        totalRevenue: orders
+          .filter(o => o.status === ORDER_STATUS.CONFIRMED)
+          .reduce((sum, o) => sum + (Number(o.final_price) || 0), 0)
+      };
+
+      // Revenue data for last 7 days bar chart
+      const revenueData = Array(7).fill(0);
+      const now = new Date();
+      const confirmedOrders = orders.filter(o => o.status === ORDER_STATUS.CONFIRMED && o.confirmed_at);
+
+      confirmedOrders.forEach(order => {
+        const orderDate = new Date(order.confirmed_at);
+        const daysDiff = Math.floor((now - orderDate) / (1000 * 60 * 60 * 24));
+        if (daysDiff >= 0 && daysDiff < 7) {
+          revenueData[6 - daysDiff] += Number(order.final_price) || 0;
+        }
+      });
+
+      stats.revenueData = revenueData;
+
+      // Service breakdown
+      const serviceCount = {};
+      orders.forEach(o => {
+        const service = o.service_type || 'other';
+        serviceCount[service] = (serviceCount[service] || 0) + 1;
+      });
+
+      stats.serviceBreakdown = Object.entries(serviceCount)
+        .map(([name, count]) => ({
+          name,
+          count,
+          percentage: orders.length > 0 ? Math.round((count / orders.length) * 100) : 0
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5); // Top 5 services
+
+      // Status breakdown
+      const statusCount = {};
+      orders.forEach(o => {
+        const status = o.status;
+        statusCount[status] = (statusCount[status] || 0) + 1;
+      });
+
+      stats.statusBreakdown = Object.entries(statusCount)
+        .map(([status, count]) => ({ status, count }))
+        .filter(item => item.count > 0); // Only non-zero statuses
+
+      console.log(`${LOG_PREFIX} Enhanced stats calculated:`, stats);
+      return stats;
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getEnhancedPlatformStats failed:`, error);
+      return {
+        totalOrders: 0,
+        activeJobs: 0,
+        completedOrders: 0,
+        confirmedOrders: 0,
+        totalRevenue: 0,
+        revenueData: [0, 0, 0, 0, 0, 0, 0],
+        serviceBreakdown: [],
+        statusBreakdown: []
+      };
+    }
+  }
+
+  /**
+   * Get orders by specific statuses (for detail modals)
+   * @param {Array} statuses - Array of status strings
+   * @param {Object} dateFilter - Optional date filter
+   */
+  getOrdersByStatus = async (statuses = [], dateFilter = { type: 'all' }) => {
+    console.log(`${LOG_PREFIX} Fetching orders by statuses:`, statuses);
+
+    try {
+      let query = supabase
+        .from('orders')
+        .select(`
+          *,
+          client:client_id(full_name, phone),
+          master:master_id(full_name, phone),
+          dispatcher:dispatcher_id(full_name)
+        `);
+
+      if (statuses.length > 0) {
+        query = query.in('status', statuses);
+      }
+
+      // Apply date filters
+      if (dateFilter.type !== 'all') {
+        const now = new Date();
+        let startDate;
+
+        switch (dateFilter.type) {
+          case 'today':
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            break;
+          case 'week':
+            startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            break;
+          case 'month':
+            startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            break;
+          case 'custom':
+            if (dateFilter.start) {
+              startDate = new Date(dateFilter.start);
+            }
+            if (dateFilter.end) {
+              query = query.lte('created_at', new Date(dateFilter.end).toISOString());
+            }
+            break;
+        }
+
+        if (startDate) {
+          query = query.gte('created_at', startDate.toISOString());
+        }
+      }
+
+      const { data, error } = await query.order('created_at', { ascending: false });
+      if (error) throw error;
+
+      console.log(`${LOG_PREFIX} Found ${data.length} orders matching statuses`);
+      return data;
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getOrdersByStatus failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * CRUD operations for admin
+
+   */
+  updateOrder = async (orderId, updates) => {
+    console.log(`${LOG_PREFIX} Updating order (admin): ${orderId}`, updates);
+
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .update(updates)
+        .eq('id', orderId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      console.log(`${LOG_PREFIX} Order updated successfully`);
+      return { success: true, message: 'Order updated!', order: data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} updateOrder failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  deleteOrder = async (orderId) => {
+    console.log(`${LOG_PREFIX} Deleting order (admin): ${orderId}`);
+
+    try {
+      const { error } = await supabase
+        .from('orders')
+        .delete()
+        .eq('id', orderId);
+
+      if (error) throw error;
+
+      console.log(`${LOG_PREFIX} Order deleted successfully`);
+      return { success: true, message: 'Order deleted!' };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} deleteOrder failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Get all orders for Admin
+   */
+  getAllOrders = async () => {
+    console.log(`${LOG_PREFIX} Fetching ALL orders for Admin`);
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+                *,
+                client:client_id(full_name, phone),
+                master:master_id(full_name, phone),
+                dispatcher:dispatcher_id(full_name)
+              `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      return data;
+    } catch (e) {
+      console.error('getAllOrders failed', e);
+      return [];
+    }
+  }
+
+  /**
+   * Confirm payment for a completed order (Dispatcher action)
+   * Transitions order from 'completed' to 'confirmed'
+   */
+  confirmPayment = async (orderId, dispatcherId, paymentDetails) => {
+    console.log(`${LOG_PREFIX} Confirming payment for order: ${orderId}`);
+
+    try {
+      const { paymentMethod, paymentProofUrl } = paymentDetails;
+
+      // Update order status to confirmed and record payment details
+      const { data, error } = await supabase
+        .from('orders')
+        .update({
+          status: ORDER_STATUS.CONFIRMED,
+          payment_method: paymentMethod,
+          payment_proof_url: paymentProofUrl,
+          payment_confirmed_at: new Date().toISOString(),
+          payment_confirmed_by: dispatcherId,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', orderId)
+        .eq('status', ORDER_STATUS.COMPLETED) // Only confirm if status is completed
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      if (!data) {
+        return { success: false, message: 'Order not in completed status or not found' };
+      }
+
+      console.log(`${LOG_PREFIX} Payment confirmed successfully for order ${orderId}`);
+      return { success: true, message: 'Payment confirmed!', data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} confirmPayment failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  // ============================================
+  // V2 SCHEMA: LOOKUP TABLES & HISTORY
+  // ============================================
+
+  /**
+   * Get active service types from database
+   * Returns admin-configurable service types for dropdowns
+   */
+  getServiceTypes = async () => {
+    console.log(`${LOG_PREFIX} Fetching active service types...`);
+    try {
+      const { data, error } = await supabase
+        .from('service_types')
+        .select('code, name_en, name_ru, name_kg, icon')
+        .eq('is_active', true)
+        .order('sort_order');
+
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getServiceTypes failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Get cancellation reasons from database
+   * @param {string} applicableTo - 'master', 'client', or 'both'
+   */
+  getCancellationReasons = async (applicableTo = 'master') => {
+    console.log(`${LOG_PREFIX} Fetching cancellation reasons for: ${applicableTo}`);
+    try {
+      const { data, error } = await supabase
+        .from('cancellation_reasons')
+        .select('code, name_en, name_ru')
+        .or(`applicable_to.eq.${applicableTo},applicable_to.eq.both`)
+        .eq('is_active', true)
+        .order('sort_order');
+
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getCancellationReasons failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Get complete order history for master (for My Account tab)
+   * Includes all statuses, not just active ones
+   */
+  getMasterOrderHistory = async (masterId, limit = 100) => {
+    console.log(`${LOG_PREFIX} Fetching complete order history for master: ${masterId}`);
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+          id, service_type, status, urgency, area,
+          initial_price, final_price, commission_amount,
+          created_at, claimed_at, completed_at, confirmed_at,
+          client:client_id(full_name)
+        `)
+        .eq('master_id', masterId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getMasterOrderHistory failed:`, error);
+      return [];
+    }
+  }
+
+  // ============================================
+  // PLATFORM SETTINGS
+  // ============================================
+
+  /**
+   * Get platform settings (admin-configurable)
+   * Returns the singleton settings row from platform_settings table
+   */
+  getPlatformSettings = async () => {
+    console.log(`${LOG_PREFIX} Fetching platform settings...`);
+    try {
+      const { data, error } = await supabase
+        .from('platform_settings')
+        .select('*')
+        .eq('id', 1)
+        .single();
+
+      if (error) throw error;
+
+      // Map to friendly names for UI
+      return {
+        base_price: data.default_guaranteed_payout || 500,
+        commission_rate: Math.round((data.commission_rate || 0.15) * 100),
+        min_balance: data.min_balance_for_orders || 1000,
+        order_expiry_hours: data.order_expiry_hours || 24,
+        max_immediate_orders: data.default_max_immediate_orders || 2,
+        max_pending_confirmation: data.default_max_pending_confirmation || 5,
+        price_deviation_threshold: Math.round((data.price_deviation_threshold || 0.25) * 100),
+        commission_exempt_base_fee: data.commission_exempt_base_fee || false,
+        ...data // Include all raw fields too
+      };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getPlatformSettings failed:`, error);
+      return {
+        base_price: 500,
+        commission_rate: 15,
+        min_balance: 1000,
+        order_expiry_hours: 24
+      };
     }
   }
 }

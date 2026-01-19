@@ -82,7 +82,7 @@ export default function LoginScreen({ navigation }) {
           <View style={styles.logoContainer}>
             <Text style={styles.logoIcon}>🔧</Text>
           </View>
-          <Text style={styles.title}>PlumberHub</Text>
+          <Text style={styles.title}>Master KG</Text>
           <Text style={styles.subtitle}>Professional Service Platform</Text>
         </View>
 

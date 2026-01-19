@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import authService from '../services/auth';
 import ordersService, { ORDER_STATUS } from '../services/orders';
 import { useToast } from '../contexts/ToastContext';
@@ -22,7 +23,8 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const STATUS_COLORS = {
     placed: '#3b82f6', claimed: '#f59e0b', started: '#8b5cf6',
     completed: '#f97316', confirmed: '#22c55e',
-    canceled_by_master: '#ef4444', canceled_by_client: '#ef4444', reopened: '#3b82f6',
+    canceled_by_master: '#ef4444', canceled_by_client: '#ef4444',
+    reopened: '#06b6d4', expired: '#6b7280',
 };
 
 const SERVICE_TYPES = [
@@ -35,43 +37,46 @@ const SERVICE_TYPES = [
 // Status filter options
 // Status filter options
 const STATUS_OPTIONS = [
-    { id: 'All', label: 'All Orders' },
-    { id: 'placed', label: 'Placed' },
-    { id: 'claimed', label: 'Claimed' },
-    { id: 'confirmed', label: 'Confirmed' },
-    { id: 'started', label: 'Started' },
-    { id: 'completed', label: 'Completed (Unpaid)' },
-    { id: 'Payment', label: 'Awaiting Payment' }, // Custom filter for completed but unpaid if needed, or handle via status
-    { id: 'Disputed', label: 'Disputed' },
-    { id: 'Canceled', label: 'Canceled' },
+    { id: 'All', label: 'statusAll' },
+    { id: 'Active', label: 'statusActive' },
+    { id: 'placed', label: 'filterStatusPlaced' },
+    { id: 'reopened', label: 'filterStatusReopened' },
+    { id: 'claimed', label: 'filterStatusClaimed' },
+    { id: 'started', label: 'filterStatusStarted' },
+    { id: 'completed', label: 'filterStatusCompleted' },
+    { id: 'confirmed', label: 'filterStatusConfirmed' },
+    { id: 'Payment', label: 'statusPayment' },
+    { id: 'Disputed', label: 'statusDisputed' },
+    { id: 'Canceled', label: 'statusCanceled' },
+    { id: 'expired', label: 'filterStatusExpired' },
 ];
 
 // Urgency filter options
 const URGENCY_OPTIONS = [
-    { id: 'all', label: 'All Urgency' },
-    { id: 'emergency', label: 'Emergency' },
-    { id: 'urgent', label: 'Urgent' },
-    { id: 'planned', label: 'Planned' },
+    { id: 'all', label: 'filterAllUrgency' },
+    { id: 'emergency', label: 'urgencyEmergency' },
+    { id: 'urgent', label: 'urgencyUrgent' },
+    { id: 'planned', label: 'urgencyPlanned' },
 ];
 
 const ATTENTION_FILTER_OPTIONS = [
-    { id: 'All', label: 'All Issues' },
-    { id: 'Stuck', label: 'Stuck' },
-    { id: 'Disputed', label: 'Disputed' },
-    { id: 'Payment', label: 'Unpaid' },
-    { id: 'Canceled', label: 'Canceled' },
+    { id: 'All', label: 'issueAllIssues' },
+    { id: 'Stuck', label: 'issueStuck' },
+    { id: 'Disputed', label: 'issueDisputed' },
+    { id: 'Payment', label: 'issueUnpaid' },
+    { id: 'Canceled', label: 'issueCanceled' },
 ];
 
 // Dispatcher filter options
 const DISPATCHER_OPTIONS = [
-    { id: 'all', label: 'All Orders' },
-    { id: 'me', label: 'My Orders' },
+    { id: 'all', label: 'filterAllOrders' },
+    { id: 'me', label: 'filterMyOrders' },
 ];
 
 // Sort options
 const SORT_OPTIONS = [
-    { id: 'newest', label: 'Newest First' },
-    { id: 'oldest', label: 'Oldest First' },
+    { id: 'newest', label: 'filterNewestFirst' },
+    { id: 'oldest', label: 'filterOldestFirst' },
 ];
 
 // Translations
@@ -152,7 +157,112 @@ const TRANSLATIONS = {
         noMasters: 'No available masters',
         actionReopen: 'Reopen Order',
         actionPay: 'Pay',
-        msgNoMatch: 'No items match filter'
+        msgNoMatch: 'No items match filter',
+        // Schedule & Pricing
+        schedule: 'Schedule',
+        pricing: 'Pricing',
+        urgencyPlanned: 'Planned',
+        urgencyUrgent: 'Urgent',
+        urgencyEmergency: 'Emergency',
+        pricingMasterQuotes: 'Master Quotes',
+        pricingFixed: 'Fixed Price',
+        calloutFee: 'Call-out Fee',
+        fixedAmount: 'Fixed Amount',
+        preferredDate: 'Preferred Date',
+        preferredTime: 'Preferred Time',
+        dateToday: 'Today',
+        dateTomorrow: 'Tomorrow',
+        timeMorning: '🌅 Morning',
+        timeAfternoon: '☀️ Afternoon',
+        timeEvening: '🌙 Evening',
+        problemDesc: 'Problem Description',
+        // Placeholders & misc
+        districtPlaceholder: 'e.g. Leninsky',
+        addressPlaceholder: 'Full Address',
+        keepLocation: 'Keep Location',
+        startFresh: 'Start Fresh',
+        createAnotherOrder: 'Create Another Order',
+        // Toast messages
+        toastPasted: 'Pasted & formatted',
+        toastClipboardEmpty: 'Clipboard empty',
+        toastPasteFailed: 'Paste failed - check permissions',
+        toastConfirmDetails: 'Please confirm details',
+        toastFillRequired: 'Please fill required fields',
+        toastFixPhone: 'Fix phone format',
+        toastOrderCreated: 'Order created!',
+        toastOrderFailed: 'Order creation failed',
+        toastPaymentConfirmed: 'Payment confirmed!',
+        toastMasterAssigned: 'Master assigned!',
+        toastUpdated: 'Order updated',
+        toastCopied: 'Copied!',
+        // Missing Keys Added
+        alertAssignTitle: 'Assign Master',
+        alertAssignMsg: 'Assign {0} to this order?',
+        alertAssignBtn: 'Assign',
+        toastAssignFail: 'Assignment failed',
+        alertCancelTitle: 'Cancel Order',
+        alertCancelMsg: 'Are you sure?',
+        alertLogoutTitle: 'Logout',
+        alertLogoutMsg: 'Are you sure?',
+        alertLogoutBtn: 'Logout',
+        toastFormCleared: 'Form cleared',
+        placeholderSearch: 'Search...',
+        pickerStatus: 'Status',
+        pickerDispatcher: 'Dispatcher',
+        pickerUrgency: 'Urgency',
+        pickerService: 'Service',
+        pickerSort: 'Sort',
+        pickerErrorType: 'Error Type',
+        labelAllServices: 'All Services',
+        btnSortNewest: '↓ Newest',
+        btnSortOldest: '↑ Oldest',
+        badgeDispute: 'Dispute',
+        badgeUnpaid: 'Unpaid',
+        badgeStuck: 'Stuck',
+        badgeCanceled: 'Canceled',
+        labelMasterPrefix: 'Master: ',
+        btnPayWithAmount: 'Pay {0}c',
+        emptyList: 'No orders found',
+        drawerTitle: 'Order #{0}',
+        debtPrefix: 'Debt: ',
+        priceOpen: 'Open',
+        modalOrderPrefix: 'Order #{0}',
+        paymentCash: 'Cash',
+        paymentTransfer: 'Transfer',
+        paymentCard: 'Card',
+        issueAllIssues: 'All Issues',
+        issueStuck: 'Stuck',
+        issueDisputed: 'Disputed',
+        issueUnpaid: 'Unpaid',
+        issueCanceled: 'Canceled',
+        filterAllOrders: 'All Orders',
+        filterMyOrders: 'My Orders',
+        filterNewestFirst: 'Newest First',
+        filterOldestFirst: 'Oldest First',
+        filterAllUrgency: 'All Urgency',
+        filterStatusPlaced: 'Placed',
+        filterStatusReopened: 'Reopened',
+        filterStatusClaimed: 'Claimed',
+        filterStatusStarted: 'Started',
+        filterStatusCompleted: 'Completed (Unpaid)',
+        filterStatusConfirmed: 'Confirmed',
+        filterStatusPayment: 'Awaiting Payment',
+        filterStatusDisputed: 'Disputed',
+        filterStatusCanceled: 'Canceled',
+        filterStatusExpired: 'Expired',
+        tabOrders: 'Orders Queue',
+        tabCreate: 'Create Order',
+        timeUnitNow: 'Just now',
+        timeUnitMins: 'm ago',
+        timeUnitHours: 'h ago',
+        timeUnitDays: 'd ago',
+        // New Errors
+        toastSelectPaymentMethod: 'Select payment method',
+        toastProofRequired: 'Proof required for transfers',
+        toastNoOrderSelected: 'No order selected',
+        toastFailedPrefix: 'Failed: ',
+        toastCreateFailed: 'Create failed',
+        errorPhoneFormat: 'Invalid format (+996...)',
     },
     ru: {
         ordersQueue: 'Очередь заказов',
@@ -230,10 +340,115 @@ const TRANSLATIONS = {
         noMasters: 'Нет доступных мастеров',
         actionReopen: 'Переоткрыть',
         actionPay: 'Оплатить',
-        msgNoMatch: 'Нет результатов'
+        msgNoMatch: 'Нет результатов',
+        // Schedule & Pricing
+        schedule: 'Расписание',
+        pricing: 'Цена',
+        urgencyPlanned: 'Планово',
+        urgencyUrgent: 'Срочно',
+        urgencyEmergency: 'Экстренно',
+        pricingMasterQuotes: 'Оценка мастера',
+        pricingFixed: 'Фикс. цена',
+        calloutFee: 'Плата за выезд',
+        fixedAmount: 'Фикс. сумма',
+        preferredDate: 'Желаемая дата',
+        preferredTime: 'Желаемое время',
+        dateToday: 'Сегодня',
+        dateTomorrow: 'Завтра',
+        timeMorning: '🌅 Утро',
+        timeAfternoon: '☀️ День',
+        timeEvening: '🌙 Вечер',
+        problemDesc: 'Описание проблемы',
+        // Placeholders & misc
+        districtPlaceholder: 'напр. Ленинский',
+        addressPlaceholder: 'Полный адрес',
+        keepLocation: 'Оставить адрес',
+        startFresh: 'Начать заново',
+        createAnotherOrder: 'Создать еще заказ',
+        // Toast messages
+        toastPasted: 'Вставлено и отформатировано',
+        toastClipboardEmpty: 'Буфер пуст',
+        toastPasteFailed: 'Ошибка вставки - проверьте разрешения',
+        toastConfirmDetails: 'Подтвердите детали',
+        toastFillRequired: 'Заполните обязательные поля',
+        toastFixPhone: 'Исправьте формат телефона',
+        toastOrderCreated: 'Заказ создан!',
+        toastOrderFailed: 'Ошибка создания заказа',
+        toastPaymentConfirmed: 'Оплата подтверждена!',
+        toastMasterAssigned: 'Мастер назначен!',
+        toastUpdated: 'Заказ обновлен',
+        toastCopied: 'Скопировано!',
+        // Missing Keys Added
+        alertAssignTitle: 'Назначить мастера',
+        alertAssignMsg: 'Назначить {0} на этот заказ?',
+        alertAssignBtn: 'Назначить',
+        toastAssignFail: 'Ошибка назначения',
+        alertCancelTitle: 'Отменить заказ',
+        alertCancelMsg: 'Вы уверены?',
+        alertLogoutTitle: 'Выход',
+        alertLogoutMsg: 'Вы уверены?',
+        alertLogoutBtn: 'Выход',
+        toastFormCleared: 'Форма очищена',
+        placeholderSearch: 'Поиск...',
+        pickerStatus: 'Статус',
+        pickerDispatcher: 'Диспетчер',
+        pickerUrgency: 'Срочность',
+        pickerService: 'Сервис',
+        pickerSort: 'Сортировка',
+        pickerErrorType: 'Тип ошибки',
+        labelAllServices: 'Все услуги',
+        btnSortNewest: '↓ Новые',
+        btnSortOldest: '↑ Старые',
+        badgeDispute: 'Спор',
+        badgeUnpaid: 'Не оплачен',
+        badgeStuck: 'Застрял',
+        badgeCanceled: 'Отменен',
+        labelMasterPrefix: 'Мастер: ',
+        btnPayWithAmount: 'Оплатить {0}c',
+        emptyList: 'Заказов не найдено',
+        drawerTitle: 'Заказ #{0}',
+        debtPrefix: 'Долг: ',
+        priceOpen: 'Открыто',
+        modalOrderPrefix: 'Заказ #{0}',
+        paymentCash: 'Наличные',
+        paymentTransfer: 'Перевод',
+        paymentCard: 'Карта',
+        issueAllIssues: 'Все вопросы',
+        issueStuck: 'Застрял',
+        issueDisputed: 'Спорный',
+        issueUnpaid: 'Не оплачен',
+        issueCanceled: 'Отменен',
+        filterAllOrders: 'Все заказы',
+        filterMyOrders: 'Мои заказы',
+        filterNewestFirst: 'Сначала новые',
+        filterOldestFirst: 'Сначала старые',
+        filterAllUrgency: 'Любая срочность',
+        filterStatusPlaced: 'Новый',
+        filterStatusReopened: 'Переоткрыт',
+        filterStatusClaimed: 'Принят',
+        filterStatusStarted: 'В работе',
+        filterStatusCompleted: 'Выполнен (Не оплачен)',
+        filterStatusConfirmed: 'Подтвержден',
+        filterStatusPayment: 'Ожидает оплаты',
+        filterStatusDisputed: 'Спорный',
+        filterStatusCanceled: 'Отменен',
+        filterStatusExpired: 'Истек',
+        timeUnitNow: 'Только что',
+        timeUnitMins: ' м назад',
+        timeUnitHours: ' ч назад',
+        timeUnitDays: ' д назад',
+        // New Errors
+        toastSelectPaymentMethod: 'Выберите способ оплаты',
+        toastProofRequired: 'Нужен чек перевода',
+        toastNoOrderSelected: 'Заказ не выбран',
+        toastFailedPrefix: 'Ошибка: ',
+        toastCreateFailed: 'Ошибка создания',
+        errorPhoneFormat: 'Неверный формат (+996...)',
+        tabOrders: 'Очередь',
+        tabCreate: 'Создать'
     },
     kg: {
-        ordersQueue: 'Буйрутмалар керзеги',
+        ordersQueue: 'Буйрутмалар кезеги',
         createOrder: 'Буйрутма түзүү',
         showFilters: 'Фильтрлерди көрсөтүү',
         hideFilters: 'Фильтрлерди жашыруу',
@@ -294,32 +509,174 @@ const TRANSLATIONS = {
         createAnother: 'Дагы түзүү',
         createSuccess: 'Буйрутма түзүлдү!',
         createViewQueue: 'Кезекти көрүү',
+        timeJustNow: 'Азыр эле',
+        timeMinsAgo: 'м мурун',
+        timeHoursAgo: 'с мурун',
+        timeDaysAgo: 'к мурун',
+        // New Errors
+        toastSelectPaymentMethod: 'Төлөм ыкмасын тандаңыз',
+        toastProofRequired: 'Чек талап кылынат',
+        toastNoOrderSelected: 'Буйрутма тандалган жок',
+        toastFailedPrefix: 'Ката: ',
+        toastCreateFailed: 'Түзүү катасы',
+        errorPhoneFormat: 'Ката формат (+996...)',
+        urgencyEmergency: 'Авариялык',
+        urgencyUrgent: 'Шашылыш',
+        urgencyPlanned: 'Пландалган',
+        filterMe: 'Мен',
+        filterOthers: 'Башкалар',
         recentBtn: 'Акыркы',
         needsAttentionSort: 'Реттөө',
         sortNewest: 'Жаңылар',
-        sortOldest: 'Эскилер'
-    }
+        sortOldest: 'Эскилер',
+        // Schedule & Pricing
+        schedule: 'Убакыт',
+        pricing: 'Баа',
+        urgencyPlanned: 'Пландуу',
+        urgencyUrgent: 'Шашылыш',
+        urgencyEmergency: 'Өзгөчө',
+        pricingMasterQuotes: 'Мастер баа',
+        pricingFixed: 'Белгиленген',
+        calloutFee: 'Чыгуу акысы',
+        fixedAmount: 'Белгиленген сумма',
+        preferredDate: 'Каалаган дата',
+        preferredTime: 'Каалаган убакыт',
+        dateToday: 'Бүгүн',
+        dateTomorrow: 'Эртең',
+        timeMorning: '🌅 Эртең менен',
+        timeAfternoon: '☀️ Түш',
+        timeEvening: '🌙 Кечинде',
+        problemDesc: 'Көйгөй сүрөттөмө',
+        // Placeholders & misc
+        districtPlaceholder: 'мис. Ленин',
+        addressPlaceholder: 'Толук дарек',
+        keepLocation: 'Даректи сактоо',
+        startFresh: 'Жаңыдан баштоо',
+        createAnotherOrder: 'Дагы буйрутма түзүү',
+        // Toast messages
+        toastPasted: 'Киргизилди',
+        toastClipboardEmpty: 'Буфер бош',
+        toastPasteFailed: 'Ката - уруксатты текшериңиз',
+        toastConfirmDetails: 'Маалыматтарды ырастаңыз',
+        toastFillRequired: 'Талап кылынган талааларды толтуруңуз',
+        toastFixPhone: 'Телефон форматын оңдоңуз',
+        toastOrderCreated: 'Буйрутма түзүлдү!',
+        toastOrderFailed: 'Буйрутма түзүү катасы',
+        toastPaymentConfirmed: 'Төлөм ырасталды!',
+        toastMasterAssigned: 'Мастер дайындалды!',
+        toastUpdated: 'Буйрутма жаңыланды',
+        toastCopied: 'Көчүрүлдү!',
+        // Added missing keys
+        btnSaveChanges: 'Сактоо',
+        titlePayment: 'Төлөмдү ырастоо',
+        labelAmount: 'Сумма:',
+        labelProof: 'Чектин шилтемеси',
+        titleSelectMaster: 'Уста тандаңыз',
+        labelRating: 'Рейтинг',
+        labelJobs: 'иштер',
+        noMasters: 'Бош уста жок',
+        actionReopen: 'Кайра ачуу',
+        actionPay: 'Төлөө',
+        msgNoMatch: 'Эч нерсе табылган жок',
+        // Missing Keys Added
+        alertAssignTitle: 'Устаны дайындоо',
+        alertAssignMsg: '{0} деген устаны бул буйрутмага дайындайсызбы?',
+        alertAssignBtn: 'Дайындоо',
+        toastAssignFail: 'Дайындоо катасы',
+        alertCancelTitle: 'Буйрутманы жокко чыгаруу',
+        alertCancelMsg: 'Ишенимдүүсүзбү?',
+        alertLogoutTitle: 'Чыгуу',
+        alertLogoutMsg: 'Ишенимдүүсүзбү?',
+        alertLogoutBtn: 'Чыгуу',
+        toastFormCleared: 'Форма тазаланды',
+        placeholderSearch: 'Издөө...',
+        pickerStatus: 'Статус',
+        pickerDispatcher: 'Диспетчер',
+        pickerUrgency: 'Шашылыштык',
+        pickerService: 'Кызмат',
+        pickerSort: 'Реттөө',
+        pickerErrorType: 'Ката түрү',
+        labelAllServices: 'Бардык кызматтар',
+        btnSortNewest: '↓ Жаңылар',
+        btnSortOldest: '↑ Эскилер',
+        badgeDispute: 'Талаш',
+        badgeUnpaid: 'Төлөнбөгөн',
+        badgeStuck: 'Токтогон',
+        badgeCanceled: 'Жокко чыгарылган',
+        labelMasterPrefix: 'Уста: ',
+        btnPayWithAmount: '{0}с төлөө',
+        emptyList: 'Буйрутма табылган жок',
+        drawerTitle: 'Буйрутма #{0}',
+        debtPrefix: 'Карыз: ',
+        priceOpen: 'Ачык',
+        modalOrderPrefix: 'Буйрутма #{0}',
+        paymentCash: 'Накталай',
+        paymentTransfer: 'Которуу',
+        paymentCard: 'Карта',
+        issueAllIssues: 'Бардык маселелер',
+        issueStuck: 'Токтогон',
+        issueDisputed: 'Талаштуу',
+        issueUnpaid: 'Төлөнбөгөн',
+        issueCanceled: 'Жокко чыгарылган',
+        filterAllOrders: 'Бардык буйрутмалар',
+        filterMyOrders: 'Менин буйрутмаларым',
+        filterNewestFirst: 'Жаңылар биринчи',
+        filterOldestFirst: 'Эскилер биринчи',
+        filterAllUrgency: 'Бардык шашылыштык',
+        filterStatusPlaced: 'Жаңы',
+        filterStatusReopened: 'Кайра ачылган',
+        filterStatusClaimed: 'Алынган',
+        filterStatusStarted: 'Иште',
+        filterStatusCompleted: 'Аяктаган (Төлөнбөгөн)',
+        filterStatusConfirmed: 'Тастыкталган',
+        filterStatusPayment: 'Төлөм күтүүдө',
+        filterStatusDisputed: 'Талаштуу',
+        filterStatusCanceled: 'Жокко чыгарылган',
+        filterStatusExpired: 'Мөөнөтү бүткөн',
+        tabOrders: 'Кезек',
+        tabCreate: 'Жаңы түзүү',
+        timeUnitNow: 'Азыр эле',
+        timeUnitMins: 'м мурун',
+        timeUnitHours: 'с мурун',
+        timeUnitDays: 'к мурун',
+    },
 };
 
 // Storage keys
 const STORAGE_KEYS = { DRAFT: 'dispatcher_draft_order', RECENT_ADDR: 'dispatcher_recent_addresses' };
 
-// Initial form state
 const INITIAL_ORDER_STATE = {
     clientName: '', clientPhone: '', pricingType: 'unknown', initialPrice: '', calloutFee: '',
     serviceType: 'repair', urgency: 'planned', problemDescription: '',
     area: '', fullAddress: '', preferredDate: '', preferredTime: '', dispatcherNote: '',
 };
 
+// Kyrgyzstan districts for autocomplete
+const DISTRICT_OPTIONS = [
+    'Leninsky', 'Oktyabrsky', 'Pervomaysky', 'Sverdlovsky',
+    'Alamedin', 'Sokuluk', 'Ysyk-Ata', 'Jayil', 'Moskovsky'
+];
+
+// Generate unique ID for idempotency
+const generateIdempotencyKey = () => {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+};
+
 // Helper: time ago
-const getTimeAgo = (dateStr) => {
+// Helper: time ago
+const getTimeAgo = (dateStr, language) => {
     const diff = Date.now() - new Date(dateStr).getTime();
     const mins = Math.floor(diff / 60000);
     const hrs = Math.floor(mins / 60);
     const days = Math.floor(hrs / 24);
-    if (days > 0) return `${days}d ago`;
-    if (hrs > 0) return `${hrs}h ago`;
-    return `${mins}m ago`;
+    if (days > 0) return `${days}${TRANSLATIONS[language]?.timeUnitDays || 'd ago'}`;
+    if (hrs > 0) return `${hrs}${TRANSLATIONS[language]?.timeUnitHours || 'h ago'}`;
+    if (mins > 0) return `${mins}${TRANSLATIONS[language]?.timeUnitMins || 'm ago'}`;
+    return TRANSLATIONS[language]?.timeUnitNow || 'Just now';
 };
 
 // Helper: normalize phone
@@ -335,6 +692,30 @@ const normalizePhone = (input) => {
 
 // Helper: validate phone
 const isValidPhone = (phone) => /^(\+996)\d{9}$/.test(phone);
+
+const getOrderStatusLabel = (status, language) => {
+    if (!status) return '';
+    const key = `filterStatus${status.charAt(0).toUpperCase() + status.slice(1)}`;
+    return TRANSLATIONS[language]?.[key] || TRANSLATIONS[language]?.[`status${status.charAt(0).toUpperCase() + status.slice(1)}`] || status.replace(/_/g, ' ');
+};
+
+// Helper: Get Translated Service Label
+const getServiceLabel = (serviceCode, language) => {
+    if (!serviceCode) return '';
+    const normalized = serviceCode.toLowerCase().replace(/_/g, '');
+    const keyMap = {
+        plumbing: 'servicePlumbing', electrician: 'serviceElectrician', cleaning: 'serviceCleaning',
+        carpenter: 'serviceCarpenter', repair: 'serviceRepair', installation: 'serviceInstallation',
+        maintenance: 'serviceMaintenance', other: 'serviceOther', appliancerepair: 'serviceApplianceRepair',
+        building: 'serviceBuilding', inspection: 'serviceInspection', hvac: 'serviceHvac',
+        painting: 'servicePainting', flooring: 'serviceFlooring', roofing: 'serviceRoofing',
+        landscaping: 'serviceLandscaping',
+    };
+    const translationKey = keyMap[normalized];
+    return translationKey && TRANSLATIONS[language]?.[translationKey]
+        ? TRANSLATIONS[language][translationKey]
+        : serviceCode.charAt(0).toUpperCase() + serviceCode.slice(1).replace(/_/g, ' ');
+};
 
 // Pagination Component
 const Pagination = ({ current, total, onPageChange }) => {
@@ -362,9 +743,10 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [orders, setOrders] = useState([]);
     const [masters, setMasters] = useState([]);
     const [recentAddresses, setRecentAddresses] = useState([]);
+    const [serviceTypes, setServiceTypes] = useState(SERVICE_TYPES);
 
     // UI States
-    const [activeTab, setActiveTab] = useState('queue');
+    const [activeTab, setActiveTab] = useState('create');
     const [refreshing, setRefreshing] = useState(false);
     const [loading, setLoading] = useState(true);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -375,6 +757,8 @@ export default function DispatcherDashboard({ navigation, route }) {
 
     // Picker modal state
     const [pickerModal, setPickerModal] = useState({ visible: false, options: [], value: '', onChange: null, title: '' });
+    const [showDatePicker, setShowDatePicker] = useState(false);
+    const [showTimePicker, setShowTimePicker] = useState(false);
 
     // Filters
     const [viewMode, setViewMode] = useState('compact');
@@ -397,6 +781,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     // Modals
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [paymentData, setPaymentData] = useState({ method: 'cash', proofUrl: '' });
+    const [paymentOrder, setPaymentOrder] = useState(null); // Store order for payment modal
     const [showAssignModal, setShowAssignModal] = useState(false);
     const [assignTarget, setAssignTarget] = useState(null);
 
@@ -406,6 +791,8 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [confirmChecked, setConfirmChecked] = useState(false);
     const [creationSuccess, setCreationSuccess] = useState(null);
     const [showRecentAddr, setShowRecentAddr] = useState(false);
+    const [idempotencyKey, setIdempotencyKey] = useState(generateIdempotencyKey());
+    const [showDistrictDropdown, setShowDistrictDropdown] = useState(false);
 
     // ============================================
     // DATA LOADING
@@ -415,7 +802,13 @@ export default function DispatcherDashboard({ navigation, route }) {
         loadData();
         loadDraft();
         loadRecentAddresses();
+        loadServiceTypes();
     }, []);
+
+    // Reload service types when language changes
+    useEffect(() => {
+        loadServiceTypes();
+    }, [language]);
 
     const loadData = async () => {
         if (!refreshing) setLoading(true);
@@ -472,6 +865,23 @@ export default function DispatcherDashboard({ navigation, route }) {
         setMasters(data);
     };
 
+    const loadServiceTypes = async () => {
+        try {
+            const types = await ordersService.getServiceTypes();
+            if (types && types.length > 0) {
+                // Use correct language field based on current language
+                const labelField = language === 'ru' ? 'name_ru' : language === 'kg' ? 'name_kg' : 'name_en';
+                setServiceTypes(types.map(t => ({
+                    id: t.code,
+                    label: t[labelField] || t.name_en // Fallback to English
+                })));
+            }
+        } catch (error) {
+            console.error(`${LOG_PREFIX} loadServiceTypes error:`, error);
+            // Keep fallback SERVICE_TYPES
+        }
+    };
+
     const onRefresh = useCallback(async () => {
         setRefreshing(true);
         await loadData();
@@ -487,6 +897,7 @@ export default function DispatcherDashboard({ navigation, route }) {
         return orders.filter(o => {
             if (o.is_disputed) return true;
             if (o.status === ORDER_STATUS.COMPLETED) return true;
+            if (o.status === ORDER_STATUS.CANCELED_BY_MASTER || o.status === ORDER_STATUS.CANCELED_BY_CLIENT) return true;
             if (o.status === ORDER_STATUS.PLACED && (now - new Date(o.created_at).getTime()) > 15 * 60000) return true;
             if (o.status === ORDER_STATUS.CLAIMED && (now - new Date(o.updated_at).getTime()) > 30 * 60000) return true;
             return false;
@@ -510,8 +921,11 @@ export default function DispatcherDashboard({ navigation, route }) {
 
         // Status tabs
         switch (statusFilter) {
+            case 'All':
+                // Show all orders, no filtering
+                break;
             case 'Active':
-                res = res.filter(o => ['placed', 'claimed', 'started'].includes(o.status) && !o.is_disputed);
+                res = res.filter(o => ['placed', 'reopened', 'claimed', 'started'].includes(o.status) && !o.is_disputed);
                 break;
             case 'Payment':
                 res = res.filter(o => o.status === 'completed' && !o.is_disputed);
@@ -521,6 +935,15 @@ export default function DispatcherDashboard({ navigation, route }) {
                 break;
             case 'Canceled':
                 res = res.filter(o => o.status?.includes('canceled'));
+                break;
+            case 'placed':
+            case 'reopened':
+            case 'claimed':
+            case 'started':
+            case 'completed':
+            case 'confirmed':
+            case 'expired':
+                res = res.filter(o => o.status === statusFilter);
                 break;
         }
 
@@ -557,11 +980,11 @@ export default function DispatcherDashboard({ navigation, route }) {
     // ============================================
 
     const handleCreateOrder = async () => {
-        if (!confirmChecked) { showToast?.('Please confirm details', 'error'); return; }
+        if (!confirmChecked) { showToast?.(TRANSLATIONS[language].toastConfirmDetails, 'error'); return; }
         if (!newOrder.clientPhone || !newOrder.problemDescription || !newOrder.area || !newOrder.fullAddress) {
-            showToast?.('Please fill required fields', 'error'); return;
+            showToast?.(TRANSLATIONS[language].toastFillRequired, 'error'); return;
         }
-        if (phoneError) { showToast?.('Fix phone format', 'error'); return; }
+        if (phoneError) { showToast?.(TRANSLATIONS[language].toastFixPhone, 'error'); return; }
 
         setActionLoading(true);
         try {
@@ -575,7 +998,8 @@ export default function DispatcherDashboard({ navigation, route }) {
                 problemDescription: newOrder.problemDescription,
                 area: newOrder.area,
                 fullAddress: newOrder.fullAddress,
-                preferredDate: newOrder.preferredDate || null,
+                fullAddress: newOrder.fullAddress,
+                preferredDate: newOrder.preferredDate ? newOrder.preferredDate.split('.').reverse().join('-') : null,
                 preferredTime: newOrder.preferredTime || null,
                 dispatcherNote: newOrder.dispatcherNote || null,
             }, user.id);
@@ -591,7 +1015,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                 showToast?.(result.message, 'error');
             }
         } catch (error) {
-            showToast?.('Create failed', 'error');
+            showToast?.(TRANSLATIONS[language].toastCreateFailed, 'error');
         } finally {
             setActionLoading(false);
         }
@@ -600,44 +1024,82 @@ export default function DispatcherDashboard({ navigation, route }) {
     const handlePhoneBlur = () => {
         const val = normalizePhone(newOrder.clientPhone);
         setNewOrder(prev => ({ ...prev, clientPhone: val }));
-        setPhoneError(val && !isValidPhone(val) ? 'Invalid format (+996...)' : '');
+        setPhoneError(val && !isValidPhone(val) ? TRANSLATIONS[language].errorPhoneFormat : '');
+    };
+
+    // Paste phone from clipboard and auto-format
+    const handlePastePhone = async () => {
+        try {
+            let text = '';
+            // Use browser API for web, react-native API for mobile
+            if (Platform.OS === 'web' && navigator?.clipboard) {
+                text = await navigator.clipboard.readText();
+            } else {
+                text = await Clipboard.getString();
+            }
+            if (text) {
+                const val = normalizePhone(text);
+                setNewOrder(prev => ({ ...prev, clientPhone: val }));
+                showToast?.(TRANSLATIONS[language].toastPasted, 'success');
+                setPhoneError(val && !isValidPhone(val) ? TRANSLATIONS[language].errorPhoneFormat : '');
+            } else {
+                showToast?.(TRANSLATIONS[language].toastClipboardEmpty, 'info');
+            }
+        } catch (e) {
+            console.log('Paste error:', e);
+            showToast?.(TRANSLATIONS[language].toastPasteFailed, 'error');
+        }
+    };
+
+    // Make phone call
+    const handleCall = (phone) => {
+        if (phone) {
+            Linking.openURL(`tel:${phone}`);
+        }
     };
 
     const handleConfirmPayment = async () => {
-        if (!paymentData.method) { showToast?.('Select payment method', 'error'); return; }
+        if (!paymentData.method) { showToast?.(TRANSLATIONS[language].toastSelectPaymentMethod, 'error'); return; }
         if (paymentData.method === 'transfer' && !paymentData.proofUrl) {
-            showToast?.('Proof required for transfers', 'error'); return;
+            showToast?.(TRANSLATIONS[language].toastProofRequired, 'error'); return;
         }
+        if (!paymentOrder?.id) { showToast?.(TRANSLATIONS[language].toastNoOrderSelected, 'error'); return; }
+
         setActionLoading(true);
         try {
-            const result = await ordersService.confirmPayment(detailsOrder.id, user.id, {
+            const result = await ordersService.confirmPayment(paymentOrder.id, user.id, {
                 paymentMethod: paymentData.method, paymentProofUrl: paymentData.proofUrl || null
             });
             if (result.success) {
-                showToast?.('Payment confirmed!', 'success');
-                setShowPaymentModal(false); setDetailsOrder(null);
+                showToast?.(TRANSLATIONS[language].toastPaymentConfirmed, 'success');
+                setShowPaymentModal(false);
+                setPaymentOrder(null);
                 setPaymentData({ method: 'cash', proofUrl: '' });
                 await loadData();
             } else { showToast?.(result.message, 'error'); }
-        } catch (e) { showToast?.('Failed', 'error'); }
+        } catch (e) {
+            console.error('Payment confirm error:', e);
+            showToast?.(TRANSLATIONS[language].toastFailedPrefix + e.message, 'error');
+        }
         finally { setActionLoading(false); }
     };
 
     const handleAssignMaster = async (master) => {
         const targetId = assignTarget?.id || detailsOrder?.id;
-        Alert.alert('Assign Master', `Assign ${master.full_name} to this order?`, [
-            { text: 'Cancel', style: 'cancel' },
+        const msg = (TRANSLATIONS[language].alertAssignMsg || 'Assign {0}?').replace('{0}', master.full_name);
+        Alert.alert(TRANSLATIONS[language].alertAssignTitle, msg, [
+            { text: TRANSLATIONS[language].cancel, style: 'cancel' },
             {
-                text: 'Assign', onPress: async () => {
+                text: TRANSLATIONS[language].alertAssignBtn, onPress: async () => {
                     setActionLoading(true);
                     try {
                         const result = await ordersService.forceAssignMaster(targetId, master.id, 'Dispatcher assignment');
                         if (result.success) {
-                            showToast?.('Master assigned!', 'success');
+                            showToast?.(TRANSLATIONS[language].toastMasterAssigned, 'success');
                             setShowAssignModal(false); setDetailsOrder(null);
                             await loadData();
                         } else { showToast?.(result.message, 'error'); }
-                    } catch (e) { showToast?.('Assignment failed', 'error'); }
+                    } catch (e) { showToast?.(TRANSLATIONS[language].toastAssignFail, 'error'); }
                     finally { setActionLoading(false); }
                 }
             }
@@ -660,7 +1122,7 @@ export default function DispatcherDashboard({ navigation, route }) {
 
             const result = await ordersService.updateOrderInline(detailsOrder.id, updates);
             if (result.success) {
-                showToast?.('Updated!', 'success');
+                showToast?.(TRANSLATIONS[language].toastUpdated, 'success');
                 setIsEditing(false);
                 await loadData();
                 setDetailsOrder(prev => ({
@@ -672,18 +1134,18 @@ export default function DispatcherDashboard({ navigation, route }) {
                         phone: editForm.client_phone
                     }
                 }));
-            } else { showToast?.('Update failed', 'error'); }
-        } catch (e) { showToast?.('Error', 'error'); }
+            } else { showToast?.(TRANSLATIONS[language].toastOrderFailed, 'error'); }
+        } catch (e) { showToast?.(TRANSLATIONS[language].toastFailedPrefix + 'Error', 'error'); }
         finally { setActionLoading(false); }
     };
 
     const handleCancel = (orderId) => {
-        Alert.alert('Cancel Order', 'Are you sure?', [
-            { text: 'No', style: 'cancel' },
+        Alert.alert(TRANSLATIONS[language].alertCancelTitle, TRANSLATIONS[language].alertCancelMsg, [
+            { text: TRANSLATIONS[language].cancel, style: 'cancel' },
             {
                 text: 'Yes', style: 'destructive', onPress: async () => {
                     const result = await ordersService.cancelByClient(orderId, user.id, 'client_request');
-                    if (result.success) { showToast?.('Canceled', 'success'); await loadData(); }
+                    if (result.success) { showToast?.(TRANSLATIONS[language].statusCanceled, 'success'); await loadData(); }
                     else showToast?.(result.message, 'error');
                 }
             }
@@ -692,14 +1154,14 @@ export default function DispatcherDashboard({ navigation, route }) {
 
     const handleReopen = async (orderId) => {
         const result = await ordersService.reopenOrder(orderId, user.id);
-        if (result.success) { showToast?.('Reopened', 'success'); await loadData(); }
+        if (result.success) { showToast?.(TRANSLATIONS[language].filterStatusReopened, 'success'); await loadData(); }
         else showToast?.(result.message, 'error');
     };
 
     const copyToClipboard = (text) => {
         if (!text) return;
         Clipboard.setString(text);
-        showToast?.('Copied!', 'success');
+        showToast?.(TRANSLATIONS[language].toastCopied, 'success');
     };
 
     const handleLogout = async () => {
@@ -708,11 +1170,11 @@ export default function DispatcherDashboard({ navigation, route }) {
             navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
         };
         if (Platform.OS === 'web') {
-            if (window.confirm('Logout?')) await doLogout();
+            if (window.confirm(TRANSLATIONS[language].alertLogoutTitle + '?')) await doLogout();
         } else {
-            Alert.alert('Logout', 'Are you sure?', [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Logout', onPress: doLogout }
+            Alert.alert(TRANSLATIONS[language].alertLogoutTitle, TRANSLATIONS[language].alertLogoutMsg, [
+                { text: TRANSLATIONS[language].cancel, style: 'cancel' },
+                { text: TRANSLATIONS[language].alertLogoutBtn, onPress: doLogout }
             ]);
         }
     };
@@ -720,8 +1182,21 @@ export default function DispatcherDashboard({ navigation, route }) {
     const clearForm = () => {
         setNewOrder(INITIAL_ORDER_STATE);
         setConfirmChecked(false); setPhoneError('');
+        setIdempotencyKey(generateIdempotencyKey());
         AsyncStorage.removeItem(STORAGE_KEYS.DRAFT);
-        showToast?.('Form cleared', 'success');
+        showToast?.(TRANSLATIONS[language].toastFormCleared, 'success');
+    };
+
+    // Keep location but clear other fields
+    const keepLocationAndReset = () => {
+        setNewOrder(prev => ({
+            ...INITIAL_ORDER_STATE,
+            area: prev.area,
+            fullAddress: prev.fullAddress
+        }));
+        setIdempotencyKey(generateIdempotencyKey());
+        setConfirmChecked(false);
+        setCreationSuccess(null);
     };
 
     // Save draft on change
@@ -736,6 +1211,44 @@ export default function DispatcherDashboard({ navigation, route }) {
     useEffect(() => {
         if (showAssignModal) loadMasters();
     }, [showAssignModal]);
+
+    // Date/Time Parsers & Handlers
+    const parseDateStr = (str) => {
+        if (!str) return new Date();
+        const parts = str.split('.');
+        if (parts.length !== 3) return new Date();
+        // DD.MM.YYYY
+        return new Date(parts[2], parseInt(parts[1], 10) - 1, parts[0]);
+    };
+
+    const parseTimeStr = (str) => {
+        if (!str) return new Date();
+        const parts = str.split(':');
+        if (parts.length !== 2) return new Date();
+        const d = new Date();
+        d.setHours(parseInt(parts[0], 10));
+        d.setMinutes(parseInt(parts[1], 10));
+        return d;
+    };
+
+    const onDateChange = (event, selectedDate) => {
+        if (Platform.OS !== 'ios') setShowDatePicker(false);
+        if (selectedDate) {
+            const d = selectedDate.getDate().toString().padStart(2, '0');
+            const m = (selectedDate.getMonth() + 1).toString().padStart(2, '0');
+            const y = selectedDate.getFullYear();
+            setNewOrder(prev => ({ ...prev, preferredDate: `${d}.${m}.${y}` }));
+        }
+    };
+
+    const onTimeChange = (event, selectedTime) => {
+        if (Platform.OS !== 'ios') setShowTimePicker(false);
+        if (selectedTime) {
+            const h = selectedTime.getHours().toString().padStart(2, '0');
+            const m = selectedTime.getMinutes().toString().padStart(2, '0');
+            setNewOrder(prev => ({ ...prev, preferredTime: `${h}:${m}` }));
+        }
+    };
 
     // ============================================
     // RENDER COMPONENTS
@@ -760,7 +1273,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     setPickerModal(prev => ({ ...prev, visible: false }));
                                 }}>
                                 <Text style={[styles.pickerOptionText, pickerModal.value === opt.id && styles.pickerOptionTextActive]}>
-                                    {opt.label}
+                                    {TRANSLATIONS[language][opt.label] || opt.label}
                                 </Text>
                                 {pickerModal.value === opt.id && <Text style={styles.pickerCheck}>✓</Text>}
                             </TouchableOpacity>
@@ -858,7 +1371,7 @@ export default function DispatcherDashboard({ navigation, route }) {
             <View style={styles.searchRow}>
                 <View style={[styles.searchInputWrapper, !isDark && styles.btnLight]}>
                     <Text style={styles.searchIcon}>⌕</Text>
-                    <TextInput style={[styles.searchInput, !isDark && styles.textDark]} placeholder="Search..." placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                    <TextInput style={[styles.searchInput, !isDark && styles.textDark]} placeholder={TRANSLATIONS[language].placeholderSearch} placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                         value={searchQuery} onChangeText={setSearchQuery} />
                     {searchQuery ? (
                         <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.searchClear}>
@@ -890,48 +1403,47 @@ export default function DispatcherDashboard({ navigation, route }) {
             {/* Dropdown Filters (when shown) */}
             {showFilters && (
                 <View style={styles.filterDropdownRow}>
-                    {/* Status Content (now a dropdown) */}
                     <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
-                        visible: true, title: 'Status', options: STATUS_OPTIONS, value: statusFilter, onChange: setStatusFilter
+                        visible: true, title: TRANSLATIONS[language].pickerStatus, options: STATUS_OPTIONS, value: statusFilter, onChange: setStatusFilter
                     })}>
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
-                            {STATUS_OPTIONS.find(o => o.id === statusFilter)?.label || statusFilter}
+                            {TRANSLATIONS[language][STATUS_OPTIONS.find(o => o.id === statusFilter)?.label] || STATUS_OPTIONS.find(o => o.id === statusFilter)?.label || statusFilter}
                         </Text>
                         <Text style={styles.filterDropdownArrow}>▾</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
-                        visible: true, title: 'Dispatcher', options: DISPATCHER_OPTIONS, value: filterDispatcher, onChange: setFilterDispatcher
+                        visible: true, title: TRANSLATIONS[language].pickerDispatcher, options: DISPATCHER_OPTIONS, value: filterDispatcher, onChange: setFilterDispatcher
                     })}>
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
-                            {DISPATCHER_OPTIONS.find(o => o.id === filterDispatcher)?.label || filterDispatcher}
+                            {TRANSLATIONS[language][DISPATCHER_OPTIONS.find(o => o.id === filterDispatcher)?.label] || DISPATCHER_OPTIONS.find(o => o.id === filterDispatcher)?.label || filterDispatcher}
                         </Text>
                         <Text style={styles.filterDropdownArrow}>▾</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
-                        visible: true, title: 'Urgency', options: URGENCY_OPTIONS, value: filterUrgency, onChange: setFilterUrgency
+                        visible: true, title: TRANSLATIONS[language].pickerUrgency, options: URGENCY_OPTIONS, value: filterUrgency, onChange: setFilterUrgency
                     })}>
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
-                            {URGENCY_OPTIONS.find(o => o.id === filterUrgency)?.label || filterUrgency}
+                            {TRANSLATIONS[language][URGENCY_OPTIONS.find(o => o.id === filterUrgency)?.label] || URGENCY_OPTIONS.find(o => o.id === filterUrgency)?.label || filterUrgency}
                         </Text>
                         <Text style={styles.filterDropdownArrow}>▾</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
-                        visible: true, title: 'Service', options: [{ id: 'all', label: 'All Services' }, ...SERVICE_TYPES], value: filterService, onChange: setFilterService
+                        visible: true, title: TRANSLATIONS[language].pickerService, options: [{ id: 'all', label: TRANSLATIONS[language].labelAllServices }, ...serviceTypes], value: filterService, onChange: setFilterService
                     })}>
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
-                            {filterService === 'all' ? 'All Services' : SERVICE_TYPES.find(s => s.id === filterService)?.label || filterService}
+                            {filterService === 'all' ? TRANSLATIONS[language].labelAllServices : serviceTypes.find(s => s.id === filterService)?.label || filterService}
                         </Text>
                         <Text style={styles.filterDropdownArrow}>▾</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
-                        visible: true, title: 'Sort', options: SORT_OPTIONS, value: filterSort, onChange: setFilterSort
+                        visible: true, title: TRANSLATIONS[language].pickerSort, options: SORT_OPTIONS, value: filterSort, onChange: setFilterSort
                     })}>
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
-                            {SORT_OPTIONS.find(o => o.id === filterSort)?.label || filterSort}
+                            {TRANSLATIONS[language][SORT_OPTIONS.find(o => o.id === filterSort)?.label] || SORT_OPTIONS.find(o => o.id === filterSort)?.label || filterSort}
                         </Text>
                         <Text style={styles.filterDropdownArrow}>▾</Text>
                     </TouchableOpacity>
@@ -979,9 +1491,9 @@ export default function DispatcherDashboard({ navigation, route }) {
 
                     {/* Filter Dropdown */}
                     <TouchableOpacity style={[styles.miniFilterBtn, !isDark && styles.btnLight]} onPress={() => setPickerModal({
-                        visible: true, title: 'Error Type', options: ATTENTION_FILTER_OPTIONS, value: filterAttentionType, onChange: setFilterAttentionType
+                        visible: true, title: TRANSLATIONS[language].pickerErrorType, options: ATTENTION_FILTER_OPTIONS, value: filterAttentionType, onChange: setFilterAttentionType
                     })}>
-                        <Text style={styles.miniFilterText}>{filterAttentionType}</Text>
+                        <Text style={styles.miniFilterText}>{TRANSLATIONS[language][ATTENTION_FILTER_OPTIONS.find(o => o.id === filterAttentionType)?.label] || TRANSLATIONS[language][filterAttentionType] || filterAttentionType}</Text>
                         <Text style={styles.miniFilterArrow}>▾</Text>
                     </TouchableOpacity>
                 </View>
@@ -1001,9 +1513,9 @@ export default function DispatcherDashboard({ navigation, route }) {
                         {/* Attention Filter */}
                         {showNeedsAttention && (
                             <TouchableOpacity style={[styles.miniFilterBtn, !isDark && styles.btnLight]} onPress={() => setPickerModal({
-                                visible: true, title: 'Error Type', options: ATTENTION_FILTER_OPTIONS, value: filterAttentionType, onChange: setFilterAttentionType
+                                visible: true, title: TRANSLATIONS[language].pickerErrorType, options: ATTENTION_FILTER_OPTIONS, value: filterAttentionType, onChange: setFilterAttentionType
                             })}>
-                                <Text style={styles.miniFilterText}>{filterAttentionType}</Text>
+                                <Text style={styles.miniFilterText}>{TRANSLATIONS[language][ATTENTION_FILTER_OPTIONS.find(o => o.id === filterAttentionType)?.label] || TRANSLATIONS[language][filterAttentionType] || filterAttentionType}</Text>
                                 <Text style={styles.miniFilterArrow}>▾</Text>
                             </TouchableOpacity>
                         )}
@@ -1011,7 +1523,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                         {/* Sort Button - Redesigned */}
                         {showNeedsAttention && (
                             <TouchableOpacity style={styles.cleanSortBtn} onPress={() => setSortOrder(prev => prev === 'newest' ? 'oldest' : 'newest')}>
-                                <Text style={styles.cleanSortText}>{sortOrder === 'newest' ? '↓ Newest' : '↑ Oldest'}</Text>
+                                <Text style={styles.cleanSortText}>{sortOrder === 'newest' ? TRANSLATIONS[language].btnSortNewest : TRANSLATIONS[language].btnSortOldest}</Text>
                             </TouchableOpacity>
                         )}
                     </View>
@@ -1020,8 +1532,8 @@ export default function DispatcherDashboard({ navigation, route }) {
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.attentionScroll}>
                         {sortedNeedsAction.map(o => (
                             <TouchableOpacity key={o.id} style={[styles.attentionCard, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(o)}>
-                                <Text style={styles.attentionBadge}>{o.is_disputed ? 'Dispute' : o.status === 'completed' ? 'Unpaid' : 'Stuck'}</Text>
-                                <Text style={[styles.attentionService, !isDark && styles.textDark]}>{o.service_type}</Text>
+                                <Text style={styles.attentionBadge}>{o.is_disputed ? TRANSLATIONS[language].badgeDispute : o.status === 'completed' ? TRANSLATIONS[language].badgeUnpaid : o.status?.includes('canceled') ? (TRANSLATIONS[language].badgeCanceled || 'Canceled') : TRANSLATIONS[language].badgeStuck}</Text>
+                                <Text style={[styles.attentionService, !isDark && styles.textDark]}>{getServiceLabel(o.service_type, language)}</Text>
                                 <Text style={[styles.attentionAddr, !isDark && styles.textSecondary]} numberOfLines={1}>{o.full_address}</Text>
                             </TouchableOpacity>
                         ))}
@@ -1036,29 +1548,29 @@ export default function DispatcherDashboard({ navigation, route }) {
         <TouchableOpacity style={[styles.compactRow, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(item)}>
             {/* Status indicator */}
             <View style={[styles.compactStatusBadge, { backgroundColor: STATUS_COLORS[item.status] || '#64748b' }]}>
-                <Text style={styles.compactStatusText}>{item.status?.replace(/_/g, ' ')}</Text>
+                <Text style={styles.compactStatusText}>{getOrderStatusLabel(item.status, language)}</Text>
             </View>
             {/* Main info */}
             <View style={styles.compactMain}>
                 <View style={styles.compactTopRow}>
                     <Text style={[styles.compactId, !isDark && styles.textSecondary]}>#{item.id?.slice(-6)}</Text>
-                    <Text style={[styles.compactService, !isDark && styles.textDark]}>{item.service_type}</Text>
+                    <Text style={[styles.compactService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, language)}</Text>
                     {item.urgency && item.urgency !== 'planned' && (
                         <Text style={[styles.compactUrgency, item.urgency === 'emergency' && styles.compactUrgencyEmergency]}>
-                            {item.urgency.toUpperCase()}
+                            {TRANSLATIONS[language][`urgency${item.urgency.charAt(0).toUpperCase() + item.urgency.slice(1)}`] || item.urgency.toUpperCase()}
                         </Text>
                     )}
                 </View>
                 <Text style={[styles.compactAddr, !isDark && styles.textSecondary]} numberOfLines={1}>{item.full_address}</Text>
                 <View style={styles.compactBottomRow}>
                     <Text style={[styles.compactClient, !isDark && styles.textDark]}>{item.client?.full_name || 'N/A'}</Text>
-                    {item.master && <Text style={styles.compactMaster}>Master: {item.master.full_name}</Text>}
+                    {item.master && <Text style={styles.compactMaster}>{TRANSLATIONS[language].labelMasterPrefix}{item.master.full_name}</Text>}
                     {item.final_price && <Text style={styles.compactPrice}>{item.final_price}c</Text>}
                 </View>
             </View>
             {/* Right side */}
             <View style={styles.compactRight}>
-                <Text style={styles.compactTime}>{getTimeAgo(item.created_at)}</Text>
+                <Text style={styles.compactTime}>{getTimeAgo(item.created_at, language)}</Text>
                 <Text style={[styles.compactChevron, !isDark && styles.textSecondary]}>›</Text>
             </View>
         </TouchableOpacity>
@@ -1067,19 +1579,19 @@ export default function DispatcherDashboard({ navigation, route }) {
     const renderCard = ({ item }) => (
         <TouchableOpacity style={[styles.orderCard, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(item)}>
             <View style={styles.cardHeader}>
-                <Text style={[styles.cardService, !isDark && styles.textDark]}>{item.service_type}</Text>
+                <Text style={[styles.cardService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, language)}</Text>
                 <View style={[styles.cardStatus, { backgroundColor: STATUS_COLORS[item.status] }]}>
-                    <Text style={styles.cardStatusText}>{item.status?.replace(/_/g, ' ')}</Text>
+                    <Text style={styles.cardStatusText}>{getOrderStatusLabel(item.status, language)}</Text>
                 </View>
             </View>
             <Text style={[styles.cardAddr, !isDark && styles.textSecondary]} numberOfLines={2}>{item.full_address}</Text>
             <View style={styles.cardFooter}>
                 <Text style={[styles.cardClient, !isDark && styles.textDark]}>{item.client?.full_name || 'N/A'}</Text>
-                <Text style={styles.cardTime}>{getTimeAgo(item.created_at)}</Text>
+                <Text style={styles.cardTime}>{getTimeAgo(item.created_at, language)}</Text>
             </View>
             {item.status === 'completed' && (
                 <TouchableOpacity style={styles.cardPayBtn} onPress={(e) => { e.stopPropagation?.(); setDetailsOrder(item); setShowPaymentModal(true); }}>
-                    <Text style={styles.cardPayText}>Pay {item.final_price}c</Text>
+                    <Text style={styles.cardPayText}>{TRANSLATIONS[language].btnPayWithAmount ? TRANSLATIONS[language].btnPayWithAmount.replace('{0}', item.final_price) : `Pay ${item.final_price}c`}</Text>
                 </TouchableOpacity>
             )}
         </TouchableOpacity>
@@ -1102,7 +1614,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                     key={viewMode}
                     contentContainerStyle={styles.listContent}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={isDark ? "#3b82f6" : "#0f172a"} />}
-                    ListEmptyComponent={<View style={styles.empty}><Text style={[styles.emptyText, !isDark && { color: '#64748b' }]}>No orders found</Text></View>}
+                    ListEmptyComponent={<View style={styles.empty}><Text style={[styles.emptyText, !isDark && { color: '#64748b' }]}>{TRANSLATIONS[language].emptyList}</Text></View>}
                     ListFooterComponent={<Pagination current={page} total={totalPages} onPageChange={setPage} />}
                 />
             </View>
@@ -1120,9 +1632,17 @@ export default function DispatcherDashboard({ navigation, route }) {
                         <TouchableOpacity style={styles.successBtn} onPress={() => { setActiveTab('queue'); setCreationSuccess(null); clearForm(); }}>
                             <Text style={styles.successBtnText}>{TRANSLATIONS[language].createViewQueue}</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.successBtnAlt} onPress={() => { setCreationSuccess(null); clearForm(); }}>
-                            <Text style={styles.successBtnAltText}>{TRANSLATIONS[language].createAnother}</Text>
-                        </TouchableOpacity>
+                        <View style={styles.successDivider}>
+                            <Text style={styles.successDividerText}>{TRANSLATIONS[language].createAnotherOrder}</Text>
+                        </View>
+                        <View style={styles.successButtonRow}>
+                            <TouchableOpacity style={styles.successKeepLocationBtn} onPress={keepLocationAndReset}>
+                                <Text style={styles.successKeepLocationText}>{TRANSLATIONS[language].keepLocation} →</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.successBtnAlt} onPress={() => { setCreationSuccess(null); clearForm(); }}>
+                                <Text style={styles.successBtnAltText}>{TRANSLATIONS[language].startFresh}</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
                 ) : (
                     <>
@@ -1130,10 +1650,13 @@ export default function DispatcherDashboard({ navigation, route }) {
                         <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
                             <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createClientDetails}</Text>
                             <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createPhone} *</Text>
-                            <View style={styles.phoneRow}>
-                                <TextInput style={[styles.input, styles.phoneInput, phoneError && styles.inputError, !isDark && styles.inputLight]} placeholder="+996..."
+                            <View style={styles.inputWithIcon}>
+                                <TextInput style={[styles.input, styles.inputWithPaste, phoneError && styles.inputError, !isDark && styles.inputLight]} placeholder="+996..."
                                     value={newOrder.clientPhone} onChangeText={t => setNewOrder({ ...newOrder, clientPhone: t })}
                                     onBlur={handlePhoneBlur} keyboardType="phone-pad" placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
+                                <TouchableOpacity style={styles.inFieldBtn} onPress={handlePastePhone}>
+                                    <Text style={styles.inFieldBtnText}>⎘</Text>
+                                </TouchableOpacity>
                             </View>
                             {phoneError && <Text style={styles.errorText}>{phoneError}</Text>}
                             <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createName}</Text>
@@ -1143,33 +1666,31 @@ export default function DispatcherDashboard({ navigation, route }) {
 
                         {/* Location */}
                         <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <View style={styles.formSectionHeader}>
-                                <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createLocation}</Text>
-                            </View>
+                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createLocation}</Text>
 
                             <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createDistrict} *</Text>
                             {/* Autocomplete-style District Input */}
                             <View style={{ zIndex: 10 }}>
                                 <TextInput
                                     style={[styles.input, !isDark && styles.inputLight, { paddingRight: 40 }]}
-                                    placeholder="e.g. Leninsky"
+                                    placeholder={TRANSLATIONS[language].districtPlaceholder}
                                     value={newOrder.area}
                                     onChangeText={t => setNewOrder({ ...newOrder, area: t })}
-                                    onFocus={() => setShowRecentAddr(true)}
                                     placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                 />
                                 {/* Dropdown Chevron */}
                                 <TouchableOpacity style={styles.inputChevron} onPress={() => setShowRecentAddr(!showRecentAddr)}>
-                                    <Text style={styles.inputChevronText}>▼</Text>
+                                    <Text style={styles.inputChevronText}>{showRecentAddr ? '▲' : '▼'}</Text>
                                 </TouchableOpacity>
-                                {showRecentAddr && newOrder.area.length > 0 && (
+                                {/* Recent Addresses Dropdown */}
+                                {showRecentAddr && recentAddresses.length > 0 && (
                                     <View style={[styles.suggestionList, !isDark && styles.cardLight]}>
-                                        {recentAddresses.filter(a => a.area.toLowerCase().includes(newOrder.area.toLowerCase())).slice(0, 3).map((a, i) => (
+                                        {recentAddresses.slice(0, 5).map((a, i) => (
                                             <TouchableOpacity key={i} style={styles.suggestionItem} onPress={() => {
-                                                setNewOrder({ ...newOrder, area: a.area, fullAddress: a.fullAddress }); // Also fill address if user picks distinct recent
+                                                setNewOrder({ ...newOrder, area: a.area, fullAddress: a.fullAddress });
                                                 setShowRecentAddr(false);
                                             }}>
-                                                <Text style={[styles.suggestionText, !isDark && styles.textDark]}>{a.area} - {a.fullAddress.substring(0, 20)}...</Text>
+                                                <Text style={[styles.suggestionText, !isDark && styles.textDark]}>{a.area} - {a.fullAddress.substring(0, 25)}...</Text>
                                             </TouchableOpacity>
                                         ))}
                                     </View>
@@ -1189,62 +1710,196 @@ export default function DispatcherDashboard({ navigation, route }) {
                         <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
                             <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createServiceType}</Text>
                             <View style={styles.serviceGrid}>
-                                {SERVICE_TYPES.map(s => (
+                                {serviceTypes.map(s => (
                                     <TouchableOpacity key={s.id} style={[styles.serviceBtn, newOrder.serviceType === s.id && styles.serviceBtnActive, !isDark && newOrder.serviceType !== s.id && styles.btnLight]}
                                         onPress={() => setNewOrder({ ...newOrder, serviceType: s.id })}>
                                         <Text style={[styles.serviceBtnText, !isDark && newOrder.serviceType !== s.id && styles.textDark, newOrder.serviceType === s.id && styles.serviceBtnTextActive]}>{s.label}</Text>
                                     </TouchableOpacity>
                                 ))}
                             </View>
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>Problem Description *</Text>
-                            <TextInput style={[styles.input, styles.textArea, !isDark && styles.inputLight]} placeholder="Describe the issue..." value={newOrder.problemDescription}
-                                onChangeText={t => setNewOrder({ ...newOrder, problemDescription: t })} multiline numberOfLines={3} placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
+                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].problemDesc} *</Text>
+                            <View style={{ position: 'relative' }}>
+                                <TextInput style={[styles.input, styles.textArea, !isDark && styles.inputLight]} placeholder="..." value={newOrder.problemDescription}
+                                    onChangeText={t => setNewOrder({ ...newOrder, problemDescription: t.substring(0, 500) })} multiline numberOfLines={3} placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} maxLength={500} />
+                                <Text style={styles.charCounter}>{newOrder.problemDescription.length}/500</Text>
+                            </View>
                         </View>
 
                         {/* Schedule */}
                         <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>Schedule</Text>
+                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].schedule}</Text>
                             <View style={styles.urgencyRow}>
-                                {['planned', 'urgent', 'emergency'].map(u => (
-                                    <TouchableOpacity key={u} style={[styles.urgencyBtn, newOrder.urgency === u && styles.urgencyBtnActive,
-                                    u === 'emergency' && { borderColor: '#ef4444' }, !isDark && newOrder.urgency !== u && styles.btnLight]}
-                                        onPress={() => setNewOrder({ ...newOrder, urgency: u })}>
-                                        <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== u && styles.textDark, newOrder.urgency === u && styles.urgencyTextActive]}>{u}</Text>
-                                    </TouchableOpacity>
-                                ))}
+                                <TouchableOpacity style={[styles.urgencyBtn, newOrder.urgency === 'planned' && styles.urgencyBtnActive, !isDark && newOrder.urgency !== 'planned' && styles.btnLight]}
+                                    onPress={() => setNewOrder({ ...newOrder, urgency: 'planned' })}>
+                                    <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'planned' && styles.textDark, newOrder.urgency === 'planned' && styles.urgencyTextActive]}>{TRANSLATIONS[language].urgencyPlanned}</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={[styles.urgencyBtn, newOrder.urgency === 'urgent' && styles.urgencyBtnActive, !isDark && newOrder.urgency !== 'urgent' && styles.btnLight]}
+                                    onPress={() => setNewOrder({ ...newOrder, urgency: 'urgent' })}>
+                                    <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'urgent' && styles.textDark, newOrder.urgency === 'urgent' && styles.urgencyTextActive]}>{TRANSLATIONS[language].urgencyUrgent}</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={[styles.urgencyBtn, newOrder.urgency === 'emergency' && styles.urgencyBtnActive, { borderColor: '#ef4444' }, !isDark && newOrder.urgency !== 'emergency' && styles.btnLight]}
+                                    onPress={() => setNewOrder({ ...newOrder, urgency: 'emergency' })}>
+                                    <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'emergency' && styles.textDark, newOrder.urgency === 'emergency' && styles.urgencyTextActive]}>{TRANSLATIONS[language].urgencyEmergency}</Text>
+                                </TouchableOpacity>
                             </View>
+                            {/* Date/Time Selection for Planned Orders */}
+                            {newOrder.urgency === 'planned' && (
+                                <View style={styles.plannedPickerContainer}>
+                                    <View style={styles.plannedTimeRow}>
+                                        <View style={styles.plannedDateInput}>
+                                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].preferredDate || 'Date'}</Text>
+                                            {Platform.OS === 'web' ? (
+                                                <View style={[styles.input, styles.webPickerInput, !isDark && styles.inputLight]}>
+                                                    {React.createElement('input', {
+                                                        type: 'date',
+                                                        value: newOrder.preferredDate ? newOrder.preferredDate.split('.').reverse().join('-') : '',
+                                                        onChange: (e) => {
+                                                            const val = e.target.value; // YYYY-MM-DD
+                                                            if (val) {
+                                                                const [y, m, d] = val.split('-');
+                                                                setNewOrder({ ...newOrder, preferredDate: `${d}.${m}.${y}` });
+                                                            } else {
+                                                                setNewOrder({ ...newOrder, preferredDate: '' });
+                                                            }
+                                                        },
+                                                        style: {
+                                                            border: 'none',
+                                                            outline: 'none',
+                                                            background: 'transparent',
+                                                            color: isDark ? '#fff' : '#0f172a',
+                                                            width: '100%',
+                                                            height: '100%',
+                                                            fontFamily: 'system-ui',
+                                                            fontSize: 14
+                                                        }
+                                                    })}
+                                                </View>
+                                            ) : (
+                                                <TouchableOpacity
+                                                    style={[styles.input, styles.pickerBtnDisplay, !isDark && styles.inputLight]}
+                                                    onPress={() => setShowDatePicker(true)}
+                                                >
+                                                    <Text style={[styles.pickerBtnText, !newOrder.preferredDate && styles.placeholderText, !isDark && styles.textDark]}>
+                                                        {newOrder.preferredDate || 'DD.MM.YYYY'}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            )}
+                                        </View>
+                                        <View style={styles.plannedTimeInput}>
+                                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].preferredTime || 'Time'}</Text>
+                                            {Platform.OS === 'web' ? (
+                                                <View style={[styles.input, styles.webPickerInput, !isDark && styles.inputLight]}>
+                                                    {React.createElement('input', {
+                                                        type: 'time',
+                                                        value: newOrder.preferredTime || '',
+                                                        onChange: (e) => setNewOrder({ ...newOrder, preferredTime: e.target.value }),
+                                                        style: {
+                                                            border: 'none',
+                                                            outline: 'none',
+                                                            background: 'transparent',
+                                                            color: isDark ? '#fff' : '#0f172a',
+                                                            width: '100%',
+                                                            height: '100%',
+                                                            fontFamily: 'system-ui',
+                                                            fontSize: 14
+                                                        }
+                                                    })}
+                                                </View>
+                                            ) : (
+                                                <TouchableOpacity
+                                                    style={[styles.input, styles.pickerBtnDisplay, !isDark && styles.inputLight]}
+                                                    onPress={() => setShowTimePicker(true)}
+                                                >
+                                                    <Text style={[styles.pickerBtnText, !newOrder.preferredTime && styles.placeholderText, !isDark && styles.textDark]}>
+                                                        {newOrder.preferredTime || 'HH:MM'}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            )}
+                                        </View>
+                                    </View>
+
+                                    {/* Mobile Native Pickers (Modal) */}
+                                    {Platform.OS !== 'web' && showDatePicker && (
+                                        <DateTimePicker
+                                            value={parseDateStr(newOrder.preferredDate)}
+                                            mode="date"
+                                            display="default"
+                                            onChange={onDateChange}
+                                        />
+                                    )}
+                                    {Platform.OS !== 'web' && showTimePicker && (
+                                        <DateTimePicker
+                                            value={parseTimeStr(newOrder.preferredTime)}
+                                            mode="time"
+                                            display="default"
+                                            onChange={onTimeChange}
+                                        />
+                                    )}
+                                </View>
+                            )}
                         </View>
 
                         {/* Pricing */}
                         <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>Pricing</Text>
-                            <View style={styles.pricingRow}>
+                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].pricing}</Text>
+                            {/* Pricing Type Selector */}
+                            <View style={styles.pricingTypeRow}>
+                                <TouchableOpacity
+                                    style={[styles.pricingTypeBtn, newOrder.pricingType === 'unknown' && styles.pricingTypeBtnActive]}
+                                    onPress={() => setNewOrder({ ...newOrder, pricingType: 'unknown' })}>
+                                    <Text style={[styles.pricingTypeBtnText, newOrder.pricingType === 'unknown' && styles.pricingTypeBtnTextActive]}>{TRANSLATIONS[language].pricingMasterQuotes}</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.pricingTypeBtn, newOrder.pricingType === 'fixed' && styles.pricingTypeBtnActiveGreen]}
+                                    onPress={() => setNewOrder({ ...newOrder, pricingType: 'fixed' })}>
+                                    <Text style={[styles.pricingTypeBtnText, newOrder.pricingType === 'fixed' && styles.pricingTypeBtnTextActive]}>{TRANSLATIONS[language].pricingFixed}</Text>
+                                </TouchableOpacity>
+                            </View>
+                            {/* Price Inputs */}
+                            <View style={styles.pricingInputRow}>
                                 <View style={styles.priceInputItem}>
-                                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>Amount (KGS)</Text>
+                                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].calloutFee}</Text>
                                     <TextInput
                                         style={[styles.input, !isDark && styles.inputLight]}
-                                        placeholder={TRANSLATIONS[language].createPrice}
+                                        placeholder="200"
                                         keyboardType="numeric"
-                                        value={newOrder.price}
-                                        onChangeText={t => setNewOrder({ ...newOrder, price: t })}
+                                        value={newOrder.calloutFee}
+                                        onChangeText={t => setNewOrder({ ...newOrder, calloutFee: t })}
                                         placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                     />
                                 </View>
+                                {newOrder.pricingType === 'fixed' && (
+                                    <View style={styles.priceInputItem}>
+                                        <Text style={[styles.inputLabel, { color: '#22c55e' }]}>{TRANSLATIONS[language].fixedAmount}</Text>
+                                        <TextInput
+                                            style={[styles.input, !isDark && styles.inputLight]}
+                                            placeholder="0"
+                                            keyboardType="numeric"
+                                            value={newOrder.initialPrice}
+                                            onChangeText={t => setNewOrder({ ...newOrder, initialPrice: t })}
+                                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                        />
+                                    </View>
+                                )}
                             </View>
                         </View>
 
                         {/* Internal Note */}
                         <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
                             <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].sectionNote}</Text>
-                            <TextInput
-                                style={[styles.input, styles.textArea, !isDark && styles.inputLight]}
-                                placeholder={TRANSLATIONS[language].createInternalNote}
-                                value={newOrder.dispatcherNote}
-                                onChangeText={t => setNewOrder({ ...newOrder, dispatcherNote: t })}
-                                multiline
-                                numberOfLines={2}
-                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                            />
+                            <View style={{ position: 'relative' }}>
+                                <TextInput
+                                    style={[styles.input, styles.textArea, !isDark && styles.inputLight]}
+                                    placeholder={TRANSLATIONS[language].createInternalNote}
+                                    value={newOrder.dispatcherNote}
+                                    onChangeText={t => setNewOrder({ ...newOrder, dispatcherNote: t.substring(0, 500) })}
+                                    multiline
+                                    numberOfLines={2}
+                                    maxLength={500}
+                                    placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                />
+                                <Text style={styles.charCounter}>{(newOrder.dispatcherNote || '').length}/500</Text>
+                            </View>
                         </View>
 
                         {/* Spacer for fixed bottom bar */}
@@ -1329,7 +1984,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                     <View style={[styles.drawerContent, !isDark && styles.drawerContentLight]}>
                         <View style={[styles.drawerHeader, !isDark && styles.drawerHeaderLight]}>
                             <View>
-                                <Text style={[styles.drawerTitle, !isDark && styles.textDark]}>Order #{detailsOrder.id.slice(0, 8)}</Text>
+                                <Text style={[styles.drawerTitle, !isDark && styles.textDark]}>{(TRANSLATIONS[language].drawerTitle || 'Order #{0}').replace('{0}', detailsOrder.id.slice(0, 8))}</Text>
                                 <Text style={styles.drawerDate}>{new Date(detailsOrder.created_at).toLocaleString()}</Text>
                             </View>
                             <View style={styles.drawerActions}>
@@ -1366,7 +2021,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                             <View style={styles.drawerSection}>
                                 <View style={styles.drawerStatusRow}>
                                     <View style={[styles.drawerStatusBadge, { backgroundColor: STATUS_COLORS[detailsOrder.status] }]}>
-                                        <Text style={styles.drawerStatusText}>{detailsOrder.status?.replace(/_/g, ' ')}</Text>
+                                        <Text style={styles.drawerStatusText}>{getOrderStatusLabel(detailsOrder.status, language)}</Text>
                                     </View>
                                     {detailsOrder.status === 'placed' && (
                                         <TouchableOpacity style={styles.drawerBtn} onPress={() => { setAssignTarget(detailsOrder); setDetailsOrder(null); setShowAssignModal(true); }}>
@@ -1374,7 +2029,11 @@ export default function DispatcherDashboard({ navigation, route }) {
                                         </TouchableOpacity>
                                     )}
                                     {detailsOrder.status === 'completed' && (
-                                        <TouchableOpacity style={[styles.drawerBtn, { backgroundColor: '#22c55e' }]} onPress={() => setShowPaymentModal(true)}>
+                                        <TouchableOpacity style={[styles.drawerBtn, { backgroundColor: '#22c55e' }]} onPress={() => {
+                                            setPaymentOrder(detailsOrder); // Store order for payment modal
+                                            setDetailsOrder(null); // Close drawer
+                                            setShowPaymentModal(true);
+                                        }}>
                                             <Text style={styles.drawerBtnText}>{TRANSLATIONS[language].actionPay}</Text>
                                         </TouchableOpacity>
                                     )}
@@ -1434,7 +2093,14 @@ export default function DispatcherDashboard({ navigation, route }) {
                                         <View style={styles.drawerSection}>
                                             <Text style={styles.drawerSectionTitle}>{TRANSLATIONS[language].sectionMaster}</Text>
                                             <View style={[styles.drawerCard, !isDark && styles.drawerCardLight]}>
-                                                <Text style={[styles.drawerCardTitle, !isDark && styles.textDark]}>{detailsOrder.master.full_name}</Text>
+                                                <View style={styles.masterHeaderRow}>
+                                                    <Text style={[styles.drawerCardTitle, !isDark && styles.textDark]}>{detailsOrder.master.full_name}</Text>
+                                                    <View style={[styles.masterBalanceBadge, detailsOrder.master.balance < 0 && styles.masterDebtBadge]}>
+                                                        <Text style={[styles.masterBalanceText, detailsOrder.master.balance < 0 && styles.masterDebtText]}>
+                                                            {detailsOrder.master.balance >= 0 ? `${detailsOrder.master.balance}c` : `${TRANSLATIONS[language].debtPrefix}${Math.abs(detailsOrder.master.balance)}c`}
+                                                        </Text>
+                                                    </View>
+                                                </View>
                                                 <View style={styles.drawerRow}>
                                                     <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>{detailsOrder.master.phone}</Text>
                                                     <View style={styles.drawerRowBtns}>
@@ -1460,7 +2126,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                         <View style={styles.finRow}>
                                             <Text style={styles.finLabel}>{detailsOrder.final_price ? TRANSLATIONS[language].labelFinal : TRANSLATIONS[language].labelInitial}</Text>
                                             <Text style={[styles.finValue, !isDark && styles.textDark, detailsOrder.final_price && { color: '#22c55e' }]}>
-                                                {detailsOrder.final_price || detailsOrder.initial_price || 'Open'}c
+                                                {detailsOrder.final_price || detailsOrder.initial_price || TRANSLATIONS[language].priceOpen}c
                                             </Text>
                                         </View>
                                     </View>
@@ -1479,7 +2145,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     )}
                                     {detailsOrder.status === 'placed' && (
                                         <TouchableOpacity style={styles.cancelBtn} onPress={() => { handleCancel(detailsOrder.id); setDetailsOrder(null); }}>
-                                            <Text style={styles.cancelText}>Cancel Order</Text>
+                                            <Text style={styles.cancelText}>{TRANSLATIONS[language].alertCancelTitle}</Text>
                                         </TouchableOpacity>
                                     )}
                                 </>
@@ -1497,12 +2163,13 @@ export default function DispatcherDashboard({ navigation, route }) {
             <View style={styles.modalOverlay}>
                 <View style={styles.modalContent}>
                     <Text style={styles.modalTitle}>{TRANSLATIONS[language].titlePayment}</Text>
-                    <Text style={styles.modalAmount}>{TRANSLATIONS[language].labelAmount} {detailsOrder?.final_price}c</Text>
+                    <Text style={styles.modalSubtitle}>{TRANSLATIONS[language].modalOrderPrefix.replace('{0}', paymentOrder?.id?.slice(-8))}</Text>
+                    <Text style={styles.modalAmount}>{TRANSLATIONS[language].labelAmount} {paymentOrder?.final_price || paymentOrder?.initial_price || 'N/A'}с</Text>
                     <View style={styles.paymentMethods}>
                         {['cash', 'transfer', 'card'].map(m => (
                             <TouchableOpacity key={m} style={[styles.paymentMethod, paymentData.method === m && styles.paymentMethodActive]}
                                 onPress={() => setPaymentData({ ...paymentData, method: m })}>
-                                <Text style={styles.paymentMethodText}>{m}</Text>
+                                <Text style={[styles.paymentMethodText, paymentData.method === m && { color: '#fff' }]}>{TRANSLATIONS[language][`payment${m.charAt(0).toUpperCase() + m.slice(1)}`] || m}</Text>
                             </TouchableOpacity>
                         ))}
                     </View>
@@ -1511,7 +2178,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                             onChangeText={t => setPaymentData({ ...paymentData, proofUrl: t })} placeholderTextColor="#64748b" />
                     )}
                     <View style={styles.modalButtons}>
-                        <TouchableOpacity style={styles.modalCancel} onPress={() => setShowPaymentModal(false)}>
+                        <TouchableOpacity style={styles.modalCancel} onPress={() => { setShowPaymentModal(false); setPaymentOrder(null); }}>
                             <Text style={styles.modalCancelText}>{TRANSLATIONS[language].cancel}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity style={styles.modalConfirm} onPress={handleConfirmPayment} disabled={actionLoading}>
@@ -1769,10 +2436,11 @@ const styles = StyleSheet.create({
     cancelText: { fontSize: 13, fontWeight: '600', color: '#fff' },
 
     // Modals
-    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', paddingHorizontal: 20 },
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', paddingHorizontal: 20, zIndex: 9999 },
     modalContent: { backgroundColor: '#1e293b', borderRadius: 20, padding: 24 },
-    modalTitle: { fontSize: 18, fontWeight: '700', color: '#fff', marginBottom: 8 },
-    modalAmount: { fontSize: 16, color: '#22c55e', fontWeight: '600', marginBottom: 16 },
+    modalTitle: { fontSize: 18, fontWeight: '700', color: '#fff', marginBottom: 4 },
+    modalSubtitle: { fontSize: 12, color: '#64748b', marginBottom: 12 },
+    modalAmount: { fontSize: 20, color: '#22c55e', fontWeight: '700', marginBottom: 16 },
     paymentMethods: { flexDirection: 'row', gap: 8, marginBottom: 16 },
     paymentMethod: { flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: 'rgba(71,85,105,0.4)', alignItems: 'center' },
     paymentMethodActive: { backgroundColor: '#3b82f6' },
@@ -1944,4 +2612,67 @@ const styles = StyleSheet.create({
     // Input Chevron
     inputChevron: { position: 'absolute', right: 10, top: 12, alignItems: 'center', justifyContent: 'center', zIndex: 11 },
     inputChevronText: { color: '#94a3b8', fontSize: 12 },
+
+    // Paste Button (inside input field)
+    inputWithIcon: { position: 'relative' },
+    inputWithPaste: { paddingRight: 44 },
+    inFieldBtn: { position: 'absolute', right: 4, top: 4, bottom: 4, width: 36, backgroundColor: 'rgba(59,130,246,0.15)', borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+    inFieldBtnText: { fontSize: 16, color: '#3b82f6' },
+
+    // Character Counter
+    charCounter: { position: 'absolute', bottom: 8, right: 12, fontSize: 10, color: '#64748b', fontWeight: '500' },
+
+    // Success Screen Improvements
+    successDivider: { marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(71,85,105,0.3)', width: '100%', alignItems: 'center' },
+    successDividerText: { fontSize: 12, color: '#64748b', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 },
+    successButtonRow: { flexDirection: 'row', gap: 12, marginTop: 16, width: '100%' },
+    successKeepLocationBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: '#3b82f6', alignItems: 'center' },
+    successKeepLocationText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+
+    // Recent Address Button
+    recentAddrBtn: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: 'rgba(59,130,246,0.2)', borderRadius: 8 },
+    recentAddrBtnText: { fontSize: 11, color: '#3b82f6', fontWeight: '600' },
+
+    // Master Balance Badge
+    masterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+    masterBalanceBadge: { paddingHorizontal: 10, paddingVertical: 4, backgroundColor: 'rgba(34,197,94,0.2)', borderRadius: 8 },
+    masterBalanceText: { fontSize: 11, fontWeight: '700', color: '#22c55e' },
+    masterDebtBadge: { backgroundColor: 'rgba(239,68,68,0.2)' },
+    masterDebtText: { color: '#ef4444' },
+
+    // Pricing Type Selector
+    pricingTypeRow: { flexDirection: 'row', backgroundColor: 'rgba(71,85,105,0.2)', borderRadius: 12, padding: 4, marginBottom: 16 },
+    pricingTypeBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+    pricingTypeBtnText: { fontSize: 12, fontWeight: '700', color: '#64748b' },
+    pricingTypeBtnActive: { backgroundColor: '#475569' },
+    pricingTypeBtnActiveGreen: { backgroundColor: '#22c55e' },
+    pricingTypeBtnTextActive: { color: '#fff' },
+    pricingInputRow: { flexDirection: 'row', gap: 12 },
+
+    // Planned Date/Time Picker
+    plannedPickerContainer: { marginTop: 16 },
+    plannedTimeRow: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+    plannedDateInput: { flex: 1, minWidth: 160 },
+    plannedTimeInput: { flex: 1, minWidth: 130 },
+
+    // Web Picker specific
+    webPickerInput: {
+        paddingVertical: Platform.OS === 'web' ? 8 : 0,
+        paddingHorizontal: Platform.OS === 'web' ? 8 : 12,
+        height: 40,
+        justifyContent: 'center',
+        overflow: 'hidden'
+    },
+
+    // Mobile Picker Button Display
+    pickerBtnDisplay: {
+        justifyContent: 'center'
+    },
+    pickerBtnText: {
+        fontSize: 14,
+        color: '#fff'
+    },
+    placeholderText: {
+        color: '#94a3b8'
+    }
 });

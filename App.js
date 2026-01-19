@@ -1,5 +1,5 @@
 /**
- * PlumberHub v5 - Main Application Entry
+ * Master KG v5 - Main Application Entry
  * Dispatcher-mediated architecture with role-based routing
  */
 
@@ -126,11 +126,15 @@ function AppNavigator() {
   );
 }
 
+import { LocalizationProvider } from './src/contexts/LocalizationContext';
+
 export default function App() {
   return (
     <ToastProvider>
-      <StatusBar style="light" />
-      <AppNavigator />
+      <LocalizationProvider>
+        <StatusBar style="light" />
+        <AppNavigator />
+      </LocalizationProvider>
     </ToastProvider>
   );
 }

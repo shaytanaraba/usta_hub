@@ -1,4 +1,4 @@
-# PlumberHub v5 - Complete Technical Documentation
+# Master KG v5 - Complete Technical Documentation
 
 > **Version**: 5.0  
 > **Last Updated**: January 2026  
@@ -19,7 +19,7 @@
 
 ## 1.1 Application Purpose
 
-PlumberHub is a **dispatcher-mediated plumbing service marketplace** connecting clients with verified master plumbers. Unlike traditional P2P marketplaces, all client interactions flow through dispatchers who:
+Master KG is a **dispatcher-mediated plumbing service marketplace** connecting clients with verified master plumbers. Unlike traditional P2P marketplaces, all client interactions flow through dispatchers who:
 
 - Receive client calls and create orders
 - Assign jobs to verified masters
@@ -63,7 +63,7 @@ flowchart LR
 ## 1.4 Project Structure
 
 ```
-plumber-hub-expo/
+master-kg/
 ├── App.js                 # Main entry, navigation setup
 ├── src/
 │   ├── screens/           # UI screens (9 files)
@@ -83,7 +83,7 @@ plumber-hub-expo/
 
 ## 2.1 Database Schema Overview
 
-PlumberHub v5 uses **9 core tables**:
+Master KG v5 uses **9 core tables**:
 
 ```mermaid
 erDiagram
@@ -496,9 +496,9 @@ sequenceDiagram
 |------|---------|--------|
 | `COMPLETE_SETUP.sql` | Full schema + RLS + triggers | ✅ Primary |
 | `SEED_DATA.sql` | Test users and orders | ✅ Primary |
-| `plumberhub_v5_schema.sql` | Schema definitions | Reference |
-| `plumberhub_v5_rls.sql` | RLS policies | Reference |
-| `plumberhub_v5_patches.sql` | Commission system additions | Reference |
+| `masterkg_v5_schema.sql` | Schema definitions | Reference |
+| `masterkg_v5_rls.sql` | RLS policies | Reference |
+| `masterkg_v5_patches.sql` | Commission system additions | Reference |
 | `migration_guide.md` | v4 to v5 migration | Reference |
 | `dev_quick_reference.md` | Developer quick start | Reference |
 

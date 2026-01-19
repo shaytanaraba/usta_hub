@@ -10,7 +10,7 @@ class SettingsService {
     constructor() {
         this.defaultSettings = {
             commissionRate: 0.15,
-            supportEmail: 'support@plumberhub.com',
+            supportEmail: 'support@masterkg.com',
             supportPhone: '',
             bankDetails: {}
         };

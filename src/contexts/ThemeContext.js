@@ -6,7 +6,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const STORAGE_KEY = '@plumberhub_theme';
+const STORAGE_KEY = '@masterkg_theme';
 
 // Theme definitions
 export const THEMES = {

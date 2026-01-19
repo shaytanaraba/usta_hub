@@ -41,7 +41,7 @@ export default function Sidebar({
         <View style={styles.sidebar}>
             {/* Header */}
             <View style={styles.header}>
-                <Text style={styles.logo}>🔧 PlumberHub</Text>
+                <Text style={styles.logo}>🔧 Master KG</Text>
                 <View style={styles.userInfo}>
                     <View style={styles.avatar}>
                         <Text style={styles.avatarText}>

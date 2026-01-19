@@ -1,6 +1,6 @@
-# PlumberHub - Expo Mobile App
+# Master KG - Expo Mobile App
 
-A React Native (Expo) version of the PlumberHub marketplace platform for connecting clients with plumbers.
+A React Native (Expo) version of the Master KG marketplace platform for connecting clients with plumbers.
 
 ## Features
 
@@ -47,7 +47,7 @@ A React Native (Expo) version of the PlumberHub marketplace platform for connect
 
 1. Navigate to the project directory:
 ```bash
-cd plumber-hub-expo
+cd master-kg
 ```
 
 2. Install dependencies:
@@ -108,7 +108,7 @@ npx expo start
 ## Project Structure
 
 ```
-plumber-hub-expo/
+master-kg/
 ├── App.js                      # Main app component with navigation
 ├── package.json
 ├── src/
