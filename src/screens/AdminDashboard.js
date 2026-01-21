@@ -195,6 +195,30 @@ export default function AdminDashboard({ navigation }) {
     // --------------------
     const [actionLoading, setActionLoading] = useState(false);
 
+    // NEW: State for additional modals
+    const [showBalanceModal, setShowBalanceModal] = useState(false);
+    const [balanceData, setBalanceData] = useState({ amount: '', type: 'top_up', notes: '' });
+    const [showAssignModal, setShowAssignModal] = useState(false);
+    const [availableMasters, setAvailableMasters] = useState([]);
+    const [showDepositModal, setShowDepositModal] = useState(false);
+    const [depositAmount, setDepositAmount] = useState('');
+    const [detailsPerson, setDetailsPerson] = useState(null); // For person details drawer (master/dispatcher)
+    const [isEditingPerson, setIsEditingPerson] = useState(false);
+    const [editPersonData, setEditPersonData] = useState({});
+    const [showOrderHistoryModal, setShowOrderHistoryModal] = useState(false);
+    const [masterOrderHistory, setMasterOrderHistory] = useState([]);
+
+    // NEW: Add User Modal State
+    const [showAddUserModal, setShowAddUserModal] = useState(false);
+    const [addUserRole, setAddUserRole] = useState('master'); // 'master' or 'dispatcher'
+    const [newUserData, setNewUserData] = useState({ email: '', password: '', full_name: '', phone: '', service_area: '', experience_years: '' });
+
+    // Password Reset Modal State
+    const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
+    const [passwordResetTarget, setPasswordResetTarget] = useState(null);
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+
     // Initial Load
     useEffect(() => {
         loadAllData();
@@ -297,7 +321,7 @@ export default function AdminDashboard({ navigation }) {
 
     // Handlers
     const handleLogout = async () => {
-        await authService.signOut();
+        await authService.logoutUser();
         navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
     };
 
@@ -452,7 +476,244 @@ export default function AdminDashboard({ navigation }) {
         } catch (e) { showToast('Action failed', 'error'); }
         finally { setActionLoading(false); }
     };
+
+    // --- NEW: Missing Admin Handlers ---
+    const handleReopenOrder = async (orderId) => {
+        Alert.alert('Reopen Order', 'Return this order to the pool for new claims?', [
+            { text: 'Cancel' },
+            {
+                text: 'Reopen',
+                onPress: async () => {
+                    setActionLoading(true);
+                    try {
+                        const result = await ordersService.reopenOrderAdmin(orderId, 'Reopened by admin');
+                        if (result.success) {
+                            showToast('Order reopened', 'success');
+                            setDetailsOrder(null);
+                            loadOrders();
+                        } else {
+                            showToast(result.message, 'error');
+                        }
+                    } catch (e) { showToast('Reopen failed', 'error'); }
+                    finally { setActionLoading(false); }
+                }
+            }
+        ]);
+    };
+
+    const handleExpireOrders = async () => {
+        Alert.alert('Expire Old Orders', 'This will mark all expired orders. Continue?', [
+            { text: 'Cancel' },
+            {
+                text: 'Expire',
+                style: 'destructive',
+                onPress: async () => {
+                    setActionLoading(true);
+                    try {
+                        const result = await ordersService.expireOldOrders();
+                        if (result.success) {
+                            showToast(`${result.expiredCount} orders expired`, 'success');
+                            loadOrders();
+                            loadStats();
+                        } else {
+                            showToast(result.message, 'error');
+                        }
+                    } catch (e) { showToast('Expire failed', 'error'); }
+                    finally { setActionLoading(false); }
+                }
+            }
+        ]);
+    };
+
+    const handleForceAssignMaster = async (orderId, masterId, masterName) => {
+        Alert.alert('Force Assign', `Assign this order to ${masterName}?`, [
+            { text: 'Cancel' },
+            {
+                text: 'Assign',
+                onPress: async () => {
+                    setActionLoading(true);
+                    try {
+                        const result = await ordersService.forceAssignMasterAdmin(orderId, masterId, 'Admin assignment');
+                        if (result.success) {
+                            showToast(`Assigned to ${result.masterName}`, 'success');
+                            setDetailsOrder(null);
+                            setShowAssignModal(false);
+                            loadOrders();
+                        } else {
+                            showToast(result.message, 'error');
+                        }
+                    } catch (e) { showToast('Assign failed', 'error'); }
+                    finally { setActionLoading(false); }
+                }
+            }
+        ]);
+    };
+
+    const handleVerifyPaymentProof = async (orderId, isValid) => {
+        setActionLoading(true);
+        try {
+            const result = await ordersService.verifyPaymentProof(orderId, isValid, isValid ? 'Approved by admin' : 'Rejected by admin');
+            if (result.success) {
+                showToast(result.message, 'success');
+                setDetailsOrder(null);
+                loadOrders();
+            } else {
+                showToast(result.message, 'error');
+            }
+        } catch (e) { showToast('Verification failed', 'error'); }
+        finally { setActionLoading(false); }
+    };
+
+    const handleAddMasterBalance = async (masterId, amount, type, notes) => {
+        setActionLoading(true);
+        try {
+            const result = await earningsService.addMasterBalance(masterId, parseFloat(amount), type, notes);
+            if (result.success) {
+                showToast(result.message, 'success');
+                setShowBalanceModal(false);
+                setBalanceData({ amount: '', type: 'top_up', notes: '' });
+                loadMasters();
+                loadCommissionData();
+            } else {
+                showToast(result.message, 'error');
+            }
+        } catch (e) { showToast('Balance update failed', 'error'); }
+        finally { setActionLoading(false); }
+    };
+
+    const handleSetInitialDeposit = async (masterId, amount) => {
+        setActionLoading(true);
+        try {
+            const result = await authService.setMasterInitialDeposit(masterId, parseFloat(amount));
+            if (result.success) {
+                showToast(result.message, 'success');
+                setShowDepositModal(false);
+                loadMasters();
+            } else {
+                showToast(result.message, 'error');
+            }
+        } catch (e) { showToast('Deposit failed', 'error'); }
+        finally { setActionLoading(false); }
+    };
     // ----------------------
+
+    // Handle save person profile
+    const handleSavePersonProfile = async () => {
+        setActionLoading(true);
+        try {
+            const updates = {
+                full_name: editPersonData.full_name,
+                phone: editPersonData.phone,
+                email: editPersonData.email,
+            };
+
+            if (detailsPerson?.type === 'master') {
+                updates.service_area = editPersonData.service_area;
+                updates.experience_years = editPersonData.experience_years;
+            }
+
+            const result = await authService.updateProfile(detailsPerson?.id, updates);
+
+            if (result.success) {
+                showToast('Profile updated!', 'success');
+                setIsEditingPerson(false);
+                setDetailsPerson(null);
+                if (detailsPerson?.type === 'master') loadMasters();
+                else loadDispatchers();
+            } else {
+                showToast(result.message || 'Update failed', 'error');
+            }
+        } catch (e) {
+            console.error('Profile update failed:', e);
+            showToast('Update failed', 'error');
+        }
+        finally { setActionLoading(false); }
+    };
+
+    // Handle create new user (master/dispatcher)
+    const handleCreateUser = async () => {
+        if (!newUserData.email || !newUserData.password || !newUserData.full_name) {
+            showToast('Email, password, and name are required', 'error');
+            return;
+        }
+
+        setActionLoading(true);
+        try {
+            const result = await authService.createUser({
+                ...newUserData,
+                role: addUserRole
+            });
+
+            if (result.success) {
+                showToast(result.message, 'success');
+                setShowAddUserModal(false);
+                setNewUserData({ email: '', password: '', full_name: '', phone: '', service_area: '', experience_years: '' });
+                if (addUserRole === 'master') loadMasters();
+                else loadDispatchers();
+            } else {
+                showToast(result.message || 'Failed to create user', 'error');
+            }
+        } catch (e) {
+            console.error('Create user failed:', e);
+            showToast('Failed to create user', 'error');
+        }
+        finally { setActionLoading(false); }
+    };
+
+    // Handle password reset for master/dispatcher
+    const handleResetPassword = async () => {
+        if (!newPassword || newPassword.length < 6) {
+            showToast('Password must be at least 6 characters', 'error');
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            showToast('Passwords do not match', 'error');
+            return;
+        }
+
+        setActionLoading(true);
+        try {
+            const result = await authService.resetUserPassword(passwordResetTarget?.id, newPassword);
+
+            if (result.success) {
+                showToast(result.message, 'success');
+                setShowPasswordResetModal(false);
+                setPasswordResetTarget(null);
+                setNewPassword('');
+                setConfirmPassword('');
+            } else {
+                showToast(result.message || 'Password reset failed', 'error');
+            }
+        } catch (e) {
+            console.error('Password reset failed:', e);
+            showToast('Password reset failed', 'error');
+        }
+        finally { setActionLoading(false); }
+    };
+
+    // Load order history when modal opens (works for both masters and dispatchers)
+    const loadOrderHistory = async (person) => {
+        try {
+            let history;
+            if (person?.type === 'dispatcher' || person?.role === 'dispatcher') {
+                // Get orders created by this dispatcher
+                history = await ordersService.getDispatcherOrderHistory(person.id);
+            } else {
+                // Get orders completed by this master
+                history = await ordersService.getMasterOrderHistory(person.id);
+            }
+            setMasterOrderHistory(history || []);
+        } catch (e) {
+            console.error('Failed to load order history:', e);
+            setMasterOrderHistory([]);
+        }
+    };
+
+    useEffect(() => {
+        if (showOrderHistoryModal && selectedMaster?.id) {
+            loadOrderHistory(selectedMaster);
+        }
+    }, [showOrderHistoryModal, selectedMaster]);
 
     // ============================================
     // RENDERERS
@@ -631,7 +892,7 @@ export default function AdminDashboard({ navigation }) {
                 {/* Main Charts Row */}
                 <View style={styles.chartsRow}>
                     {/* Revenue Trend */}
-                    <View style={[styles.chartCard, !isDark && styles.chartCardLight, { flex: 2, marginRight: 16 }]}>
+                    <View style={[styles.chartCard, !isDark && styles.chartCardLight, { flex: 2, marginRight: 16, minWidth: 350 }]}>
                         <Text style={[styles.chartTitle, !isDark && styles.textDark]}>Revenue Trend</Text>
                         <Text style={styles.chartSubtitle}>Selected Period</Text>
 
@@ -643,7 +904,7 @@ export default function AdminDashboard({ navigation }) {
                                         data: stats.revenueData || [0, 0, 0, 0, 0, 0, 0]
                                     }]
                                 }}
-                                width={SCREEN_WIDTH > 1000 ? SCREEN_WIDTH * 0.45 : SCREEN_WIDTH - 80}
+                                width={SCREEN_WIDTH > 768 ? SCREEN_WIDTH * 0.45 : SCREEN_WIDTH - 80}
                                 height={220}
                                 yAxisLabel=""
                                 yAxisSuffix=""
@@ -654,7 +915,7 @@ export default function AdminDashboard({ navigation }) {
                                     decimalPlaces: 0,
                                     color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
                                     labelColor: (opacity = 1) => isDark ? `rgba(148, 163, 184, ${opacity})` : `rgba(15, 23, 42, ${opacity})`,
-                                    barPercentage: 0.5,
+                                    barPercentage: 0.7,
                                     propsForBackgroundLines: {
                                         strokeWidth: 1,
                                         stroke: isDark ? '#334155' : '#e2e8f0',
@@ -665,15 +926,16 @@ export default function AdminDashboard({ navigation }) {
                                     marginVertical: 8,
                                     borderRadius: 0,
                                 }}
-                                withInnerLines={false}
-                                showValuesOnTopOfBars={false}
+                                withInnerLines={true}
+                                segments={4}
+                                showValuesOnTopOfBars={true}
                                 fromZero
                             />
                         </View>
                     </View>
 
                     {/* Orders by Service */}
-                    <View style={{ flex: 1, minWidth: 300 }}>
+                    <View style={{ flex: 1, minWidth: 320 }}>
                         <OrdersByService data={stats.serviceBreakdown || {}} isDark={isDark} />
                     </View>
                 </View>
@@ -681,12 +943,12 @@ export default function AdminDashboard({ navigation }) {
                 {/* Bottom Charts Row */}
                 <View style={styles.chartsRow}>
                     {/* Order Status Bar Chart */}
-                    <View style={{ flex: 1, marginRight: 16 }}>
+                    <View style={{ flex: 1, marginRight: 16, minWidth: 300 }}>
                         <StatusChart data={stats.statusBreakdown || {}} isDark={isDark} />
                     </View>
 
                     {/* Commission Donut */}
-                    <View style={{ flex: 1 }}>
+                    <View style={{ flex: 1, minWidth: 300 }}>
                         <CommissionWidget
                             collected={commissionStats.totalCollected || 0}
                             outstanding={commissionStats.totalOutstanding || 0}
@@ -1001,6 +1263,18 @@ export default function AdminDashboard({ navigation }) {
 
         return (
             <View style={{ flex: 1 }}>
+                {/* Add Master Button Row */}
+                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 12 }}>
+                    <TouchableOpacity
+                        style={[styles.actionButton, { backgroundColor: '#22c55e', paddingHorizontal: 16, paddingVertical: 10 }]}
+                        onPress={() => { setAddUserRole('master'); setShowAddUserModal(true); }}
+                    >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <Ionicons name="person-add" size={16} color="#fff" />
+                            <Text style={styles.actionButtonText}>{TRANSLATIONS.addMaster || 'Add Master'}</Text>
+                        </View>
+                    </TouchableOpacity>
+                </View>
                 {renderSearchBar()}
                 <FlatList
                     data={paginated}
@@ -1010,28 +1284,38 @@ export default function AdminDashboard({ navigation }) {
                     renderItem={({ item }) => (
                         <View style={[styles.listItemCard, !isDark && styles.listItemCardLight]}>
                             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                <TouchableOpacity
+                                    style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}
+                                    onPress={() => setDetailsPerson({ ...item, type: 'master' })}
+                                >
                                     <View style={[styles.avatarCircle, { backgroundColor: item.is_verified ? '#22c55e' : '#64748b' }]}>
                                         <Text style={{ color: '#fff' }}>{item.full_name?.charAt(0)}</Text>
                                     </View>
-                                    <View>
+                                    <View style={{ flex: 1 }}>
                                         <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{item.full_name}</Text>
                                         <Text style={styles.itemSubtitle}>{item.phone}</Text>
                                     </View>
-                                </View>
+                                </TouchableOpacity>
                                 <View style={{ alignItems: 'flex-end' }}>
-                                    <View style={{ marginBottom: 6, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: 'rgba(245, 158, 11, 0.1)', borderRadius: 4, borderWidth: 1, borderColor: 'rgba(245, 158, 11, 0.2)' }}>
-                                        <Text style={{ fontSize: 11, color: '#f59e0b', fontWeight: '600' }}>
-                                            DL: {item.total_commission_owed || 0} сом
+                                    <View style={{ marginBottom: 6, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderRadius: 4, borderWidth: 1, borderColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)' }}>
+                                        <Text style={{ fontSize: 11, color: (item.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '600' }}>
+                                            {TRANSLATIONS.prepaidBalance || 'Balance'}: {item.prepaid_balance || 0} сом
                                         </Text>
                                     </View>
 
                                     <View style={{ flexDirection: 'row', gap: 8 }}>
                                         <TouchableOpacity
-                                            onPress={() => { setSelectedMaster(item); setShowPaymentModal(true); }}
-                                            style={[styles.miniActionBtn, { backgroundColor: '#334155', borderWidth: 1, borderColor: '#475569' }]}
+                                            onPress={() => { setSelectedMaster(item); setShowBalanceModal(true); }}
+                                            style={[styles.miniActionBtn, { backgroundColor: 'rgba(59,130,246,0.1)', borderWidth: 1, borderColor: 'rgba(59,130,246,0.2)' }]}
                                         >
-                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#94a3b8' }}>TOP UP</Text>
+                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#3b82f6' }}>TOP UP</Text>
+                                        </TouchableOpacity>
+
+                                        <TouchableOpacity
+                                            onPress={() => setDetailsPerson({ ...item, type: 'master' })}
+                                            style={[styles.miniActionBtn, { backgroundColor: isDark ? '#334155' : '#e2e8f0', borderWidth: 1, borderColor: isDark ? '#475569' : '#cbd5e1' }]}
+                                        >
+                                            <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? '#94a3b8' : '#475569' }}>EDIT</Text>
                                         </TouchableOpacity>
 
                                         <TouchableOpacity
@@ -1069,6 +1353,18 @@ export default function AdminDashboard({ navigation }) {
 
         return (
             <View style={{ flex: 1 }}>
+                {/* Add Dispatcher Button Row */}
+                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 12 }}>
+                    <TouchableOpacity
+                        style={[styles.actionButton, { backgroundColor: '#3b82f6', paddingHorizontal: 16, paddingVertical: 10 }]}
+                        onPress={() => { setAddUserRole('dispatcher'); setShowAddUserModal(true); }}
+                    >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <Ionicons name="person-add" size={16} color="#fff" />
+                            <Text style={styles.actionButtonText}>{TRANSLATIONS.addDispatcher || 'Add Dispatcher'}</Text>
+                        </View>
+                    </TouchableOpacity>
+                </View>
                 {renderSearchBar()}
                 <FlatList
                     data={paginated}
@@ -1078,23 +1374,41 @@ export default function AdminDashboard({ navigation }) {
                     renderItem={({ item }) => (
                         <View style={[styles.listItemCard, !isDark && styles.listItemCardLight]}>
                             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                <TouchableOpacity
+                                    style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}
+                                    onPress={() => setDetailsPerson({ ...item, type: 'dispatcher' })}
+                                >
                                     <View style={[styles.avatarCircle, { backgroundColor: item.is_active ? '#3b82f6' : '#64748b' }]}>
                                         <Text style={{ color: '#fff' }}>{item.full_name?.charAt(0)}</Text>
                                     </View>
-                                    <View>
+                                    <View style={{ flex: 1 }}>
                                         <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{item.full_name}</Text>
                                         <Text style={styles.itemSubtitle}>{item.phone || item.email}</Text>
                                     </View>
-                                </View>
-                                <TouchableOpacity
-                                    onPress={() => handleToggleDispatcher(item.id, item.is_active)}
-                                    style={[styles.miniActionBtn, { backgroundColor: item.is_active ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', borderWidth: 1, borderColor: item.is_active ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)' }]}
-                                >
-                                    <Text style={{ fontSize: 10, fontWeight: '600', color: item.is_active ? '#22c55e' : '#ef4444' }}>
-                                        {item.is_active ? 'ACTIVE' : 'INACTIVE'}
-                                    </Text>
                                 </TouchableOpacity>
+                                <View style={{ alignItems: 'flex-end' }}>
+                                    <View style={{ marginBottom: 6, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: item.is_active ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderRadius: 4, borderWidth: 1, borderColor: item.is_active ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)' }}>
+                                        <Text style={{ fontSize: 11, color: item.is_active ? '#22c55e' : '#ef4444', fontWeight: '600' }}>
+                                            {item.is_active ? 'Active' : 'Inactive'}
+                                        </Text>
+                                    </View>
+                                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                                        <TouchableOpacity
+                                            onPress={() => setDetailsPerson({ ...item, type: 'dispatcher' })}
+                                            style={[styles.miniActionBtn, { backgroundColor: 'rgba(139,92,246,0.1)', borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' }]}
+                                        >
+                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#8b5cf6' }}>EDIT</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            onPress={() => handleToggleDispatcher(item.id, item.is_active)}
+                                            style={[styles.miniActionBtn, { backgroundColor: item.is_active ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)', borderWidth: 1, borderColor: item.is_active ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.2)' }]}
+                                        >
+                                            <Text style={{ fontSize: 10, fontWeight: '600', color: item.is_active ? '#ef4444' : '#22c55e' }}>
+                                                {item.is_active ? 'DEACTIVATE' : 'ACTIVATE'}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
                             </View>
                         </View>
                     )}
@@ -1114,154 +1428,443 @@ export default function AdminDashboard({ navigation }) {
         <View style={{ flex: 1 }}>
             {renderHeader(TRANSLATIONS.settingsTitle || 'Platform Settings')}
             <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
-                <View style={[styles.sectionHeader, !isDark && styles.sectionHeaderLight]}>
-                    <Text style={[styles.sectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.settingsTitle || 'Configuration'}</Text>
-                    {isEditing ? (
-                        <View style={{ flexDirection: 'row', gap: 10 }}>
-                            <TouchableOpacity onPress={() => setIsEditing(false)} style={[styles.editBtn, { backgroundColor: isDark ? '#334155' : '#e2e8f0', borderColor: isDark ? '#475569' : '#cbd5e1' }]}>
-                                <Text style={[styles.editBtnText, !isDark && styles.textDark]}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                onPress={async () => {
-                                    setActionLoading(true);
-                                    try {
-                                        await ordersService.updatePlatformSettings({
-                                            default_guaranteed_payout: parseFloat(tempSettings.default_guaranteed_payout) || 0,
-                                            commission_rate: (parseFloat(tempSettings.commission_rate) || 0) / 100,
-                                            price_deviation_threshold: (parseFloat(tempSettings.price_deviation_threshold) || 0) / 100,
-                                            claim_timeout_minutes: parseInt(tempSettings.claim_timeout_minutes) || 30,
-                                            order_expiry_hours: parseInt(tempSettings.order_expiry_hours) || 48
+
+                {/* ============================================ */}
+                {/* CONFIGURATION SECTION */}
+                {/* ============================================ */}
+                <View style={[styles.settingsSection, !isDark && styles.settingsSectionLight]}>
+                    {/* Section Header */}
+                    <View style={styles.settingsSectionHeader}>
+                        <View style={styles.settingsSectionTitleRow}>
+                            <View style={[styles.settingsSectionIcon, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+                                <Ionicons name="settings" size={20} color="#3b82f6" />
+                            </View>
+                            <View>
+                                <Text style={[styles.settingsSectionTitle, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS.configurationTitle || 'Configuration'}
+                                </Text>
+                                <Text style={styles.settingsSectionSubtitle}>
+                                    Platform-wide settings and parameters
+                                </Text>
+                            </View>
+                        </View>
+
+                        {/* Edit/Save Buttons - Now on the left within section flow */}
+                        <View style={styles.settingsActionRow}>
+                            {isEditing ? (
+                                <View style={{ flexDirection: 'row', gap: 10 }}>
+                                    <TouchableOpacity
+                                        onPress={() => setIsEditing(false)}
+                                        style={[styles.settingsBtn, styles.settingsBtnSecondary, !isDark && styles.settingsBtnSecondaryLight]}
+                                    >
+                                        <Ionicons name="close" size={16} color={isDark ? '#94a3b8' : '#64748b'} />
+                                        <Text style={[styles.settingsBtnText, !isDark && { color: '#64748b' }]}>Cancel</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        onPress={async () => {
+                                            setActionLoading(true);
+                                            try {
+                                                await ordersService.updatePlatformSettings({
+                                                    default_guaranteed_payout: parseFloat(tempSettings.default_guaranteed_payout) || 0,
+                                                    commission_rate: (parseFloat(tempSettings.commission_rate) || 0) / 100,
+                                                    price_deviation_threshold: (parseFloat(tempSettings.price_deviation_threshold) || 0) / 100,
+                                                    claim_timeout_minutes: parseInt(tempSettings.claim_timeout_minutes) || 30,
+                                                    order_expiry_hours: parseInt(tempSettings.order_expiry_hours) || 48
+                                                });
+                                                showToast('Settings saved', 'success');
+                                                loadSettings();
+                                                setIsEditing(false);
+                                            } catch (error) {
+                                                showToast('Error saving settings', 'error');
+                                            } finally {
+                                                setActionLoading(false);
+                                            }
+                                        }}
+                                        style={[styles.settingsBtn, styles.settingsBtnPrimary]}
+                                        disabled={actionLoading}
+                                    >
+                                        {actionLoading ? (
+                                            <ActivityIndicator color="#fff" size="small" />
+                                        ) : (
+                                            <>
+                                                <Ionicons name="checkmark" size={16} color="#fff" />
+                                                <Text style={[styles.settingsBtnText, { color: '#fff' }]}>Save Changes</Text>
+                                            </>
+                                        )}
+                                    </TouchableOpacity>
+                                </View>
+                            ) : (
+                                <TouchableOpacity
+                                    onPress={() => {
+                                        setTempSettings({
+                                            ...settings,
+                                            default_guaranteed_payout: String(settings.default_guaranteed_payout || ''),
+                                            commission_rate: settings.commission_rate ? (settings.commission_rate * 100).toFixed(0) : '',
+                                            price_deviation_threshold: settings.price_deviation_threshold ? (settings.price_deviation_threshold * 100).toFixed(0) : '',
+                                            claim_timeout_minutes: String(settings.claim_timeout_minutes || ''),
+                                            order_expiry_hours: String(settings.order_expiry_hours || '')
                                         });
-                                        showToast('Settings saved', 'success');
-                                        loadSettings();
-                                        setIsEditing(false);
-                                    } catch (error) {
-                                        showToast('Error saving settings', 'error');
-                                    } finally {
-                                        setActionLoading(false);
-                                    }
-                                }}
-                                style={[styles.editBtn, { backgroundColor: '#22c55e', borderColor: '#22c55e', minWidth: 80 }]}
-                            >
-                                {actionLoading ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.editBtnTextActive}>Save</Text>}
-                            </TouchableOpacity>
+                                        setIsEditing(true);
+                                    }}
+                                    style={[styles.settingsBtn, styles.settingsBtnOutline, !isDark && styles.settingsBtnOutlineLight]}
+                                >
+                                    <Ionicons name="pencil" size={16} color="#3b82f6" />
+                                    <Text style={[styles.settingsBtnText, { color: '#3b82f6' }]}>Edit Settings</Text>
+                                </TouchableOpacity>
+                            )}
                         </View>
-                    ) : (
+                    </View>
+
+                    {/* Configuration Grid */}
+                    <View style={[styles.settingsCard, !isDark && styles.settingsCardLight]}>
+                        <View style={styles.settingsGrid}>
+                            {/* Row 1 */}
+                            <View style={styles.settingsGridItem}>
+                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>Base Payout</Text>
+                                <Text style={styles.settingsFieldHint}>Standard Call-out Fee</Text>
+                                {isEditing ? (
+                                    <View style={styles.settingsInputWrapper}>
+                                        <TextInput
+                                            style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
+                                            keyboardType="numeric"
+                                            value={tempSettings.default_guaranteed_payout}
+                                            onChangeText={v => setTempSettings({ ...tempSettings, default_guaranteed_payout: v })}
+                                            placeholder="0"
+                                            placeholderTextColor="#64748b"
+                                        />
+                                        <Text style={styles.settingsInputSuffix}>сом</Text>
+                                    </View>
+                                ) : (
+                                    <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
+                                        {settings.default_guaranteed_payout || 0} <Text style={styles.settingsFieldUnit}>сом</Text>
+                                    </Text>
+                                )}
+                            </View>
+
+                            <View style={styles.settingsGridItem}>
+                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>Commission Rate</Text>
+                                <Text style={styles.settingsFieldHint}>Platform commission percentage</Text>
+                                {isEditing ? (
+                                    <View style={styles.settingsInputWrapper}>
+                                        <TextInput
+                                            style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
+                                            keyboardType="numeric"
+                                            value={tempSettings.commission_rate}
+                                            onChangeText={v => setTempSettings({ ...tempSettings, commission_rate: v })}
+                                            placeholder="0"
+                                            placeholderTextColor="#64748b"
+                                        />
+                                        <Text style={styles.settingsInputSuffix}>%</Text>
+                                    </View>
+                                ) : (
+                                    <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
+                                        {(settings.commission_rate * 100).toFixed(0)}<Text style={styles.settingsFieldUnit}>%</Text>
+                                    </Text>
+                                )}
+                            </View>
+
+                            {/* Row 2 */}
+                            <View style={styles.settingsGridItem}>
+                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>Price Deviation</Text>
+                                <Text style={styles.settingsFieldHint}>Threshold for price alerts</Text>
+                                {isEditing ? (
+                                    <View style={styles.settingsInputWrapper}>
+                                        <TextInput
+                                            style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
+                                            keyboardType="numeric"
+                                            value={tempSettings.price_deviation_threshold}
+                                            onChangeText={v => setTempSettings({ ...tempSettings, price_deviation_threshold: v })}
+                                            placeholder="0"
+                                            placeholderTextColor="#64748b"
+                                        />
+                                        <Text style={styles.settingsInputSuffix}>%</Text>
+                                    </View>
+                                ) : (
+                                    <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
+                                        {(settings.price_deviation_threshold * 100).toFixed(0)}<Text style={styles.settingsFieldUnit}>%</Text>
+                                    </Text>
+                                )}
+                            </View>
+
+                            <View style={styles.settingsGridItem}>
+                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>Auto-Claim Timeout</Text>
+                                <Text style={styles.settingsFieldHint}>Minutes before order expires</Text>
+                                {isEditing ? (
+                                    <View style={styles.settingsInputWrapper}>
+                                        <TextInput
+                                            style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
+                                            keyboardType="numeric"
+                                            value={tempSettings.claim_timeout_minutes}
+                                            onChangeText={v => setTempSettings({ ...tempSettings, claim_timeout_minutes: v })}
+                                            placeholder="30"
+                                            placeholderTextColor="#64748b"
+                                        />
+                                        <Text style={styles.settingsInputSuffix}>min</Text>
+                                    </View>
+                                ) : (
+                                    <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
+                                        {settings.claim_timeout_minutes || 30} <Text style={styles.settingsFieldUnit}>min</Text>
+                                    </Text>
+                                )}
+                            </View>
+
+                            {/* Row 3 */}
+                            <View style={styles.settingsGridItem}>
+                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>Order Expiry</Text>
+                                <Text style={styles.settingsFieldHint}>Hours until unclaimed orders expire</Text>
+                                {isEditing ? (
+                                    <View style={styles.settingsInputWrapper}>
+                                        <TextInput
+                                            style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
+                                            keyboardType="numeric"
+                                            value={tempSettings.order_expiry_hours}
+                                            onChangeText={v => setTempSettings({ ...tempSettings, order_expiry_hours: v })}
+                                            placeholder="48"
+                                            placeholderTextColor="#64748b"
+                                        />
+                                        <Text style={styles.settingsInputSuffix}>hours</Text>
+                                    </View>
+                                ) : (
+                                    <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
+                                        {settings.order_expiry_hours || 48} <Text style={styles.settingsFieldUnit}>hours</Text>
+                                    </Text>
+                                )}
+                            </View>
+
+                            <View style={[styles.settingsGridItem, { opacity: 0 }]} />
+                        </View>
+                    </View>
+                </View>
+
+                {/* Section Divider */}
+                <View style={[styles.settingsDivider, !isDark && styles.settingsDividerLight]} />
+
+                {/* ============================================ */}
+                {/* SERVICE TYPES SECTION */}
+                {/* ============================================ */}
+                <View style={[styles.settingsSection, !isDark && styles.settingsSectionLight]}>
+                    {/* Section Header */}
+                    <View style={styles.settingsSectionHeader}>
+                        <View style={styles.settingsSectionTitleRow}>
+                            <View style={[styles.settingsSectionIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
+                                <Ionicons name="construct" size={20} color="#22c55e" />
+                            </View>
+                            <View>
+                                <Text style={[styles.settingsSectionTitle, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS.serviceTypesTitle || 'Service Types'}
+                                </Text>
+                                <Text style={styles.settingsSectionSubtitle}>
+                                    Manage available service categories
+                                </Text>
+                            </View>
+                        </View>
+
+                        {/* Add Service Type Button */}
                         <TouchableOpacity
-                            onPress={() => {
-                                setTempSettings({
-                                    ...settings,
-                                    default_guaranteed_payout: String(settings.default_guaranteed_payout || ''),
-                                    commission_rate: settings.commission_rate ? (settings.commission_rate * 100).toFixed(0) : '',
-                                    price_deviation_threshold: settings.price_deviation_threshold ? (settings.price_deviation_threshold * 100).toFixed(0) : '',
-                                    claim_timeout_minutes: String(settings.claim_timeout_minutes || ''),
-                                    order_expiry_hours: String(settings.order_expiry_hours || '')
-                                });
-                                setIsEditing(true);
-                            }}
-                            style={styles.editBtn}
+                            onPress={() => setServiceTypeModal({ visible: true, type: null })}
+                            style={[styles.settingsBtn, styles.settingsBtnPrimary]}
                         >
-                            <Text style={styles.editBtnText}>Edit</Text>
+                            <Ionicons name="add" size={18} color="#fff" />
+                            <Text style={[styles.settingsBtnText, { color: '#fff' }]}>Add Service Type</Text>
                         </TouchableOpacity>
-                    )}
-                </View>
-
-                {/* Settings Form Grid */}
-                <View style={[styles.card, !isDark && styles.cardLight, { gap: 20 }]}>
-                    <View style={{ flexDirection: 'row', gap: 20 }}>
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.inputLabel}>Base Payout (Standard Call-out)</Text>
-                            {isEditing ? (
-                                <TextInput style={[styles.input, !isDark && styles.inputLight]} keyboardType="numeric" value={tempSettings.default_guaranteed_payout} onChangeText={v => setTempSettings({ ...tempSettings, default_guaranteed_payout: v })} />
-                            ) : (
-                                <Text style={[styles.valueText, !isDark && styles.textDark]}>{settings.default_guaranteed_payout || 0} сом</Text>
-                            )}
-                        </View>
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.inputLabel}>Commission Rate (%)</Text>
-                            {isEditing ? (
-                                <TextInput style={[styles.input, !isDark && styles.inputLight]} keyboardType="numeric" value={tempSettings.commission_rate} onChangeText={v => setTempSettings({ ...tempSettings, commission_rate: v })} />
-                            ) : (
-                                <Text style={[styles.valueText, !isDark && styles.textDark]}>{(settings.commission_rate * 100).toFixed(0)}%</Text>
-                            )}
-                        </View>
                     </View>
 
-                    <View style={{ flexDirection: 'row', gap: 20 }}>
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.inputLabel}>Price Deviation Threshold (%)</Text>
-                            {isEditing ? (
-                                <TextInput style={[styles.input, !isDark && styles.inputLight]} keyboardType="numeric" value={tempSettings.price_deviation_threshold} onChangeText={v => setTempSettings({ ...tempSettings, price_deviation_threshold: v })} />
-                            ) : (
-                                <Text style={[styles.valueText, !isDark && styles.textDark]}>{(settings.price_deviation_threshold * 100).toFixed(0)}%</Text>
-                            )}
-                        </View>
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.inputLabel}>Auto-Claim Timeout (min)</Text>
-                            {isEditing ? (
-                                <TextInput style={[styles.input, !isDark && styles.inputLight]} keyboardType="numeric" value={tempSettings.claim_timeout_minutes} onChangeText={v => setTempSettings({ ...tempSettings, claim_timeout_minutes: v })} />
-                            ) : (
-                                <Text style={[styles.valueText, !isDark && styles.textDark]}>{settings.claim_timeout_minutes || 30} m</Text>
-                            )}
-                        </View>
-                    </View>
+                    {/* Service Types Grid */}
+                    <View style={styles.serviceTypesGrid}>
+                        {serviceTypes.map((type) => (
+                            <View key={type.id} style={[styles.serviceTypeCard, !isDark && styles.serviceTypeCardLight]}>
 
-                    <View style={{ flexDirection: 'row', gap: 20 }}>
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.inputLabel}>Order Expiry (hours)</Text>
-                            {isEditing ? (
-                                <TextInput style={[styles.input, !isDark && styles.inputLight]} keyboardType="numeric" value={tempSettings.order_expiry_hours} onChangeText={v => setTempSettings({ ...tempSettings, order_expiry_hours: v })} />
-                            ) : (
-                                <Text style={[styles.valueText, !isDark && styles.textDark]}>{settings.order_expiry_hours || 48} h</Text>
-                            )}
-                        </View>
-                        <View style={{ flex: 1 }} />
-                    </View>
-                </View>
 
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 32, marginBottom: 16 }}>
-                    <Text style={[styles.sectionTitle, !isDark && styles.textDark]}>Service Types</Text>
-                    <TouchableOpacity
-                        onPress={() => setServiceTypeModal({ visible: true, type: null })}
-                        style={{ backgroundColor: '#2563eb', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 }}
-                    >
-                        <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>+ Add Check</Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* Service Types Grid */}
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-                    {serviceTypes.map((type) => (
-                        <View key={type.id} style={[styles.serviceCard, !isDark && styles.cardLight]}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-                                <View style={[styles.serviceIcon, !isDark && styles.serviceIconLight]}>
-                                    <Text style={{ fontSize: 18 }}>{type.icon || '🔧'}</Text>
+                                <View style={styles.serviceTypeContent}>
+                                    <Text style={[styles.serviceTypeName, !isDark && styles.textDark]} numberOfLines={1}>
+                                        {type.name_en}
+                                    </Text>
+                                    <Text style={styles.serviceTypeSubName} numberOfLines={1}>
+                                        {type.name_ru || type.name_kg || '—'}
+                                    </Text>
+                                    <Text style={styles.serviceTypeCode}>
+                                        Code: {type.code || type.id}
+                                    </Text>
                                 </View>
-                                <View style={{ flex: 1 }}>
-                                    <Text style={[styles.serviceName, !isDark && styles.textDark]} numberOfLines={1}>{type.name_en}</Text>
-                                    <Text style={styles.serviceSubName} numberOfLines={1}>{type.name_ru}</Text>
-                                </View>
-                            </View>
 
-                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <View style={[styles.statusBadge, { backgroundColor: type.is_active ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', paddingHorizontal: 6 }]}>
-                                    <Text style={{ fontSize: 9, color: type.is_active ? '#22c55e' : '#ef4444', fontWeight: '700' }}>{type.is_active ? 'ON' : 'OFF'}</Text>
-                                </View>
-                                <View style={{ flexDirection: 'row', gap: 4 }}>
-                                    <TouchableOpacity onPress={() => setServiceTypeModal({ visible: true, type })} style={{ padding: 4 }}>
-                                        <Ionicons name="pencil" size={14} color="#94a3b8" />
+                                <View style={styles.serviceTypeActions}>
+                                    <TouchableOpacity
+                                        onPress={() => setServiceTypeModal({ visible: true, type })}
+                                        style={[styles.serviceTypeActionBtn, styles.serviceTypeEditBtn, !isDark && styles.serviceTypeActionBtnLight]}
+                                    >
+                                        <Ionicons name="pencil" size={16} color="#3b82f6" />
                                     </TouchableOpacity>
-                                    <TouchableOpacity onPress={() => handleDeleteServiceType(type.id)} style={{ padding: 4 }}>
-                                        <Ionicons name="trash" size={14} color="#ef4444" />
+                                    <TouchableOpacity
+                                        onPress={() => handleDeleteServiceType(type.id)}
+                                        style={[styles.serviceTypeActionBtn, styles.serviceTypeDeleteBtn]}
+                                    >
+                                        <Ionicons name="trash" size={16} color="#ef4444" />
                                     </TouchableOpacity>
                                 </View>
                             </View>
-                        </View>
-                    ))}
+                        ))}
+
+                        {/* Empty State */}
+                        {serviceTypes.length === 0 && (
+                            <View style={[styles.settingsEmptyState, !isDark && styles.settingsEmptyStateLight]}>
+                                <Ionicons name="construct-outline" size={48} color="#64748b" />
+                                <Text style={styles.settingsEmptyText}>No service types configured</Text>
+                                <Text style={styles.settingsEmptyHint}>Add your first service type to get started</Text>
+                            </View>
+                        )}
+                    </View>
                 </View>
+
                 <View style={{ height: 100 }} />
             </ScrollView>
+
+            {/* Service Type Sidebar Drawer */}
+            {renderServiceTypeSidebar()}
         </View>
+    );
+
+    // Service Type Sidebar (Right-side drawer instead of modal)
+    const renderServiceTypeSidebar = () => (
+        <Modal
+            visible={serviceTypeModal.visible}
+            transparent
+            animationType="none"
+            onRequestClose={() => setServiceTypeModal({ visible: false, type: null })}
+        >
+            <View style={styles.sidebarDrawerOverlay}>
+                {/* Backdrop */}
+                <TouchableOpacity
+                    style={styles.sidebarDrawerBackdrop}
+                    activeOpacity={1}
+                    onPress={() => setServiceTypeModal({ visible: false, type: null })}
+                />
+
+                {/* Sidebar Content */}
+                <Animated.View style={[styles.sidebarDrawerContent, !isDark && styles.sidebarDrawerContentLight]}>
+                    {/* Header */}
+                    <View style={[styles.sidebarDrawerHeader, !isDark && styles.sidebarDrawerHeaderLight]}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                            <View style={[styles.sidebarDrawerIconWrapper, { backgroundColor: serviceTypeModal.type ? 'rgba(59, 130, 246, 0.15)' : 'rgba(34, 197, 94, 0.15)' }]}>
+                                <Ionicons
+                                    name={serviceTypeModal.type ? "pencil" : "add"}
+                                    size={20}
+                                    color={serviceTypeModal.type ? "#3b82f6" : "#22c55e"}
+                                />
+                            </View>
+                            <View>
+                                <Text style={[styles.sidebarDrawerTitle, !isDark && styles.textDark]}>
+                                    {serviceTypeModal.type ? 'Edit Service Type' : 'Add Service Type'}
+                                </Text>
+                                <Text style={styles.sidebarDrawerSubtitle}>
+                                    {serviceTypeModal.type ? 'Modify existing service' : 'Create a new service category'}
+                                </Text>
+                            </View>
+                        </View>
+                        <TouchableOpacity
+                            onPress={() => setServiceTypeModal({ visible: false, type: null })}
+                            style={[styles.sidebarDrawerCloseBtn, !isDark && styles.sidebarDrawerCloseBtnLight]}
+                        >
+                            <Ionicons name="close" size={24} color={isDark ? '#94a3b8' : '#64748b'} />
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Form Content */}
+                    <ScrollView style={styles.sidebarDrawerBody} showsVerticalScrollIndicator={false}>
+                        <View style={{ gap: 20 }}>
+                            {/* Code Field */}
+                            <View style={styles.sidebarFormGroup}>
+                                <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
+                                    Code (Unique ID) {serviceTypeModal.type && <Text style={{ color: '#64748b' }}>• Read-only</Text>}
+                                </Text>
+                                <TextInput
+                                    style={[
+                                        styles.sidebarFormInput,
+                                        !isDark && styles.sidebarFormInputLight,
+                                        serviceTypeModal.type && styles.sidebarFormInputDisabled
+                                    ]}
+                                    value={tempServiceType.code}
+                                    onChangeText={v => setTempServiceType({ ...tempServiceType, code: v })}
+                                    placeholder="e.g. plumbing, electrician"
+                                    placeholderTextColor="#64748b"
+                                    editable={!serviceTypeModal.type}
+                                />
+                            </View>
+
+                            {/* Names Section */}
+                            <View style={[styles.sidebarFormSection, !isDark && styles.sidebarFormSectionLight]}>
+                                <Text style={styles.sidebarFormSectionTitle}>
+                                    <Ionicons name="globe-outline" size={14} color="#64748b" /> Localized Names
+                                </Text>
+
+                                <View style={styles.sidebarFormGroup}>
+                                    <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
+                                        English Name
+                                    </Text>
+                                    <TextInput
+                                        style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
+                                        value={tempServiceType.name_en}
+                                        onChangeText={v => setTempServiceType({ ...tempServiceType, name_en: v })}
+                                        placeholder="Service Name"
+                                        placeholderTextColor="#64748b"
+                                    />
+                                </View>
+
+                                <View style={styles.sidebarFormGroup}>
+                                    <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
+                                        Russian Name
+                                    </Text>
+                                    <TextInput
+                                        style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
+                                        value={tempServiceType.name_ru}
+                                        onChangeText={v => setTempServiceType({ ...tempServiceType, name_ru: v })}
+                                        placeholder="Название услуги"
+                                        placeholderTextColor="#64748b"
+                                    />
+                                </View>
+
+                                <View style={styles.sidebarFormGroup}>
+                                    <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
+                                        Kyrgyz Name
+                                    </Text>
+                                    <TextInput
+                                        style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
+                                        value={tempServiceType.name_kg}
+                                        onChangeText={v => setTempServiceType({ ...tempServiceType, name_kg: v })}
+                                        placeholder="Кызматтын аты"
+                                        placeholderTextColor="#64748b"
+                                    />
+                                </View>
+                            </View>
+
+
+                        </View>
+                    </ScrollView>
+
+                    {/* Footer Actions */}
+                    <View style={[styles.sidebarDrawerFooter, !isDark && styles.sidebarDrawerFooterLight]}>
+                        <TouchableOpacity
+                            style={[styles.sidebarDrawerBtn, styles.sidebarDrawerBtnSecondary, !isDark && styles.sidebarDrawerBtnSecondaryLight]}
+                            onPress={() => setServiceTypeModal({ visible: false, type: null })}
+                        >
+                            <Text style={[styles.sidebarDrawerBtnText, { color: isDark ? '#94a3b8' : '#64748b' }]}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.sidebarDrawerBtn, styles.sidebarDrawerBtnPrimary]}
+                            onPress={() => handleSaveServiceType(tempServiceType)}
+                            disabled={actionLoading}
+                        >
+                            {actionLoading ? (
+                                <ActivityIndicator color="#fff" size="small" />
+                            ) : (
+                                <Text style={[styles.sidebarDrawerBtnText, { color: '#fff' }]}>
+                                    {serviceTypeModal.type ? 'Update Service' : 'Create Service'}
+                                </Text>
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                </Animated.View>
+            </View>
+        </Modal>
     );
 
     const renderPeople = () => (
@@ -1269,16 +1872,16 @@ export default function AdminDashboard({ navigation }) {
             {renderHeader(TRANSLATIONS.tabPeople || 'People Management')}
 
             <View style={{ alignItems: 'center', marginBottom: 20 }}>
-                <View style={{ flexDirection: 'row', backgroundColor: '#0f172a', padding: 4, borderRadius: 100, borderWidth: 1, borderColor: '#334155' }}>
+                <View style={{ flexDirection: 'row', backgroundColor: isDark ? '#0f172a' : '#e2e8f0', padding: 4, borderRadius: 100, borderWidth: 1, borderColor: isDark ? '#334155' : '#cbd5e1' }}>
                     <TouchableOpacity
-                        style={[styles.tabBtn, peopleView === 'masters' && styles.tabBtnActive, { borderRadius: 100, paddingHorizontal: 20 }]}
+                        style={[styles.tabBtn, peopleView === 'masters' && styles.tabBtnActive, !isDark && peopleView !== 'masters' && styles.tabBtnLight, { borderRadius: 100, paddingHorizontal: 20 }]}
                         onPress={() => setPeopleView('masters')}>
-                        <Text style={[styles.tabBtnText, peopleView === 'masters' && styles.tabBtnTextActive]}>{TRANSLATIONS.peopleMasters || 'Masters'}</Text>
+                        <Text style={[styles.tabBtnText, peopleView === 'masters' && styles.tabBtnTextActive, !isDark && peopleView !== 'masters' && styles.textDark]}>{TRANSLATIONS.peopleMasters || 'Masters'}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                        style={[styles.tabBtn, peopleView === 'staff' && styles.tabBtnActive, { borderRadius: 100, paddingHorizontal: 20 }]}
+                        style={[styles.tabBtn, peopleView === 'staff' && styles.tabBtnActive, !isDark && peopleView !== 'staff' && styles.tabBtnLight, { borderRadius: 100, paddingHorizontal: 20 }]}
                         onPress={() => setPeopleView('staff')}>
-                        <Text style={[styles.tabBtnText, peopleView === 'staff' && styles.tabBtnTextActive]}>{TRANSLATIONS.peopleDispatchers || 'Dispatchers'}</Text>
+                        <Text style={[styles.tabBtnText, peopleView === 'staff' && styles.tabBtnTextActive, !isDark && peopleView !== 'staff' && styles.textDark]}>{TRANSLATIONS.peopleDispatchers || 'Dispatchers'}</Text>
                     </TouchableOpacity>
                 </View>
             </View>
@@ -1426,6 +2029,64 @@ export default function AdminDashboard({ navigation }) {
                                     </TouchableOpacity>
                                 )}
                             </View>
+
+                            {/* --- NEW: Admin Action Buttons --- */}
+                            {/* Reopen Order (for canceled/expired) */}
+                            {['canceled_by_master', 'canceled_by_client', 'expired'].includes(detailsOrder.status) && (
+                                <TouchableOpacity
+                                    style={[styles.actionButton, { backgroundColor: '#3b82f6', marginTop: 12 }]}
+                                    onPress={() => handleReopenOrder(detailsOrder.id)}
+                                    disabled={actionLoading}
+                                >
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                        <Ionicons name="refresh" size={16} color="#fff" />
+                                        <Text style={styles.actionButtonText}>
+                                            {actionLoading ? 'Processing...' : 'Reopen Order'}
+                                        </Text>
+                                    </View>
+                                </TouchableOpacity>
+                            )}
+
+                            {/* Force Assign Master (for placed/reopened orders) */}
+                            {['placed', 'reopened'].includes(detailsOrder.status) && (
+                                <TouchableOpacity
+                                    style={[styles.actionButton, { backgroundColor: '#8b5cf6', marginTop: 12 }]}
+                                    onPress={async () => {
+                                        const mastersData = await ordersService.getAvailableMasters();
+                                        setAvailableMasters(mastersData);
+                                        setShowAssignModal(true);
+                                    }}
+                                    disabled={actionLoading}
+                                >
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                        <Ionicons name="person-add" size={16} color="#fff" />
+                                        <Text style={styles.actionButtonText}>Force Assign Master</Text>
+                                    </View>
+                                </TouchableOpacity>
+                            )}
+
+                            {/* Verify Payment Proof (for completed orders with pending transfer proof) */}
+                            {detailsOrder.status === 'completed' && detailsOrder.payment_method === 'transfer' && detailsOrder.payment_proof_url && (
+                                <View style={{ marginTop: 12 }}>
+                                    <Text style={{ color: '#94a3b8', fontSize: 12, marginBottom: 8 }}>PAYMENT PROOF VERIFICATION</Text>
+                                    <View style={{ flexDirection: 'row', gap: 10 }}>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { flex: 1, backgroundColor: '#22c55e' }]}
+                                            onPress={() => handleVerifyPaymentProof(detailsOrder.id, true)}
+                                            disabled={actionLoading}
+                                        >
+                                            <Text style={styles.actionButtonText}>✓ Approve</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { flex: 1, backgroundColor: '#ef4444' }]}
+                                            onPress={() => handleVerifyPaymentProof(detailsOrder.id, false)}
+                                            disabled={actionLoading}
+                                        >
+                                            <Text style={styles.actionButtonText}>✗ Reject</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
+                            )}
                         </ScrollView>
                     </View>
                 </View>
@@ -1480,22 +2141,22 @@ export default function AdminDashboard({ navigation }) {
                 onRequestClose={() => setShowPaymentModal(false)}
             >
                 <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>Record Commission Payment</Text>
-                        <Text style={{ color: '#94a3b8', marginBottom: 15 }}>
+                    <View style={[styles.modalContent, !isDark && styles.modalContentLight]}>
+                        <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>Record Commission Payment</Text>
+                        <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 15 }}>
                             Master: {selectedMaster?.full_name}
                         </Text>
 
                         <TextInput
-                            style={styles.input}
+                            style={[styles.input, !isDark && styles.inputLight]}
                             placeholder="Amount (сом)"
-                            placeholderTextColor="#64748b"
+                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                             keyboardType="numeric"
                             value={paymentData.amount}
                             onChangeText={(text) => setPaymentData({ ...paymentData, amount: text })}
                         />
 
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-end', gap: 10, marginTop: 20 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: '#334155' }]}
                                 onPress={() => setShowPaymentModal(false)}
@@ -1514,121 +2175,615 @@ export default function AdminDashboard({ navigation }) {
                 </View>
             </Modal>
 
-            {/* Service Type Modal */}
+
+
+            {/* Ported Details Drawer */}
+            {renderDetailsDrawer()}
+            {renderPickerModal()}
+
+            {/* Force Assign Master Modal */}
             <Modal
                 animationType="fade"
                 transparent={true}
-                visible={serviceTypeModal.visible}
-                onRequestClose={() => setServiceTypeModal({ visible: false, type: null })}
+                visible={showAssignModal}
+                onRequestClose={() => setShowAssignModal(false)}
             >
                 <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>{serviceTypeModal.type ? 'Edit Service Type' : 'Add Service Type'}</Text>
-
-                        <ScrollView style={{ maxHeight: 400 }}>
-                            <View style={{ gap: 16 }}>
-                                <View>
-                                    <Text style={{ color: '#94a3b8', marginBottom: 5, fontSize: 12 }}>Code (Unique ID)</Text>
-                                    <TextInput
-                                        style={[styles.input, serviceTypeModal.type && { opacity: 0.5 }]}
-                                        value={tempServiceType.code}
-                                        onChangeText={v => setTempServiceType({ ...tempServiceType, code: v })}
-                                        placeholder="e.g. plumbing"
-                                        placeholderTextColor="#64748b"
-                                        editable={!serviceTypeModal.type}
-                                    />
-                                </View>
-
-                                <View>
-                                    <Text style={{ color: '#94a3b8', marginBottom: 5, fontSize: 12 }}>Name (English)</Text>
-                                    <TextInput
-                                        style={styles.input}
-                                        value={tempServiceType.name_en}
-                                        onChangeText={v => setTempServiceType({ ...tempServiceType, name_en: v })}
-                                        placeholder="Service Name"
-                                        placeholderTextColor="#64748b"
-                                    />
-                                </View>
-
-                                <View>
-                                    <Text style={{ color: '#94a3b8', marginBottom: 5, fontSize: 12 }}>Name (Russian)</Text>
-                                    <TextInput
-                                        style={styles.input}
-                                        value={tempServiceType.name_ru}
-                                        onChangeText={v => setTempServiceType({ ...tempServiceType, name_ru: v })}
-                                        placeholder="Название услуги"
-                                        placeholderTextColor="#64748b"
-                                    />
-                                </View>
-
-                                <View>
-                                    <Text style={{ color: '#94a3b8', marginBottom: 5, fontSize: 12 }}>Name (Kyrgyz)</Text>
-                                    <TextInput
-                                        style={styles.input}
-                                        value={tempServiceType.name_kg}
-                                        onChangeText={v => setTempServiceType({ ...tempServiceType, name_kg: v })}
-                                        placeholder="Кызматтын аты"
-                                        placeholderTextColor="#64748b"
-                                    />
-                                </View>
-
-                                <View style={{ flexDirection: 'row', gap: 16 }}>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={{ color: '#94a3b8', marginBottom: 5, fontSize: 12 }}>Icon (Emoji)</Text>
-                                        <TextInput
-                                            style={styles.input}
-                                            value={tempServiceType.icon}
-                                            onChangeText={v => setTempServiceType({ ...tempServiceType, icon: v })}
-                                            placeholder="🔧"
-                                            placeholderTextColor="#64748b"
-                                        />
-                                    </View>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={{ color: '#94a3b8', marginBottom: 5, fontSize: 12 }}>Sort Order</Text>
-                                        <TextInput
-                                            style={styles.input}
-                                            value={String(tempServiceType.sort_order || '')}
-                                            onChangeText={v => setTempServiceType({ ...tempServiceType, sort_order: parseInt(v) || 0 })}
-                                            keyboardType="numeric"
-                                            placeholder="0"
-                                            placeholderTextColor="#64748b"
-                                        />
-                                    </View>
-                                </View>
-
-                                <TouchableOpacity
-                                    onPress={() => setTempServiceType({ ...tempServiceType, is_active: !tempServiceType.is_active })}
-                                    style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#1e293b', padding: 12, borderRadius: 8, marginTop: 4 }}
-                                >
-                                    <Ionicons name={tempServiceType.is_active ? "checkbox" : "square-outline"} size={22} color={tempServiceType.is_active ? "#22c55e" : "#64748b"} />
-                                    <Text style={{ color: '#fff' }}>Active Status</Text>
-                                </TouchableOpacity>
-                            </View>
+                    <View style={[styles.modalContent, { maxHeight: 500 }]}>
+                        <Text style={styles.modalTitle}>Force Assign Master</Text>
+                        <Text style={{ color: '#94a3b8', marginBottom: 15 }}>
+                            Select a master to assign this order to:
+                        </Text>
+                        <ScrollView style={{ maxHeight: 300 }}>
+                            {availableMasters.length === 0 ? (
+                                <Text style={{ color: '#64748b', textAlign: 'center', paddingVertical: 20 }}>
+                                    No available masters found
+                                </Text>
+                            ) : (
+                                availableMasters.map(master => (
+                                    <TouchableOpacity
+                                        key={master.id}
+                                        style={[styles.listItemCard, { marginBottom: 8 }]}
+                                        onPress={() => handleForceAssignMaster(detailsOrder?.id, master.id, master.full_name)}
+                                    >
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                            <View style={[styles.avatarCircle, { backgroundColor: master.is_verified ? '#22c55e' : '#64748b' }]}>
+                                                <Text style={{ color: '#fff' }}>{master.full_name?.charAt(0)}</Text>
+                                            </View>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={styles.itemTitle}>{master.full_name}</Text>
+                                                <Text style={styles.itemSubtitle}>{master.phone} • Rating: {master.rating || 'N/A'}</Text>
+                                            </View>
+                                            <Ionicons name="chevron-forward" size={16} color="#64748b" />
+                                        </View>
+                                    </TouchableOpacity>
+                                ))
+                            )}
                         </ScrollView>
+                        <TouchableOpacity
+                            style={[styles.actionButton, { backgroundColor: '#334155', marginTop: 16 }]}
+                            onPress={() => setShowAssignModal(false)}
+                        >
+                            <Text style={styles.actionButtonText}>Cancel</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
 
-                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
+            {/* Balance Management Modal */}
+            <Modal
+                animationType="fade"
+                transparent={true}
+                visible={showBalanceModal}
+                onRequestClose={() => setShowBalanceModal(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, !isDark && styles.modalContentLight]}>
+                        <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>Add Master Balance</Text>
+                        <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 15 }}>
+                            Master: {selectedMaster?.full_name}
+                        </Text>
+
+                        <TextInput
+                            style={[styles.input, !isDark && styles.inputLight]}
+                            placeholder="Amount (сом)"
+                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                            keyboardType="numeric"
+                            value={balanceData.amount}
+                            onChangeText={(text) => setBalanceData({ ...balanceData, amount: text })}
+                        />
+
+                        <TextInput
+                            style={[styles.input, { height: 60 }, !isDark && styles.inputLight]}
+                            placeholder="Notes (optional)"
+                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                            multiline
+                            value={balanceData.notes}
+                            onChangeText={(text) => setBalanceData({ ...balanceData, notes: text })}
+                        />
+
+                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: '#334155' }]}
-                                onPress={() => setServiceTypeModal({ visible: false, type: null })}
+                                onPress={() => setShowBalanceModal(false)}
                             >
                                 <Text style={styles.actionButtonText}>Cancel</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.actionButton}
-                                onPress={() => handleSaveServiceType(tempServiceType)}
-                                disabled={actionLoading}
+                                onPress={() => handleAddMasterBalance(selectedMaster?.id, balanceData.amount, balanceData.type, balanceData.notes)}
+                                disabled={actionLoading || !balanceData.amount}
                             >
-                                <Text style={styles.actionButtonText}>{actionLoading ? 'Saving...' : 'Save'}</Text>
+                                <Text style={styles.actionButtonText}>{actionLoading ? 'Saving...' : 'Add Balance'}</Text>
                             </TouchableOpacity>
                         </View>
                     </View>
                 </View>
             </Modal>
 
-            {/* Ported Details Drawer */}
-            {renderDetailsDrawer()}
-            {renderPickerModal()}
-        </LinearGradient>
+            {/* Person Details Drawer (Master/Dispatcher) */}
+            <Modal visible={!!detailsPerson} transparent animationType="fade">
+                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', flexDirection: 'row', justifyContent: 'flex-end' }}>
+                    <TouchableOpacity style={{ flex: 1 }} onPress={() => setDetailsPerson(null)} />
+                    <View style={{ width: 500, backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                <View style={[styles.avatarCircle, { width: 48, height: 48, borderRadius: 24, backgroundColor: detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? '#22c55e' : '#64748b') : (detailsPerson?.is_active ? '#3b82f6' : '#64748b') }]}>
+                                    <Text style={{ color: '#fff', fontSize: 18 }}>{detailsPerson?.full_name?.charAt(0)}</Text>
+                                </View>
+                                <View>
+                                    <Text style={[styles.pageTitle, !isDark && styles.textDark]}>{detailsPerson?.full_name}</Text>
+                                    <View style={[styles.statusBadge, { backgroundColor: detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? '#22c55e' : '#64748b') : (detailsPerson?.is_active ? '#3b82f6' : '#64748b'), alignSelf: 'flex-start', marginTop: 4 }]}>
+                                        <Text style={styles.statusText}>
+                                            {detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? 'VERIFIED' : 'UNVERIFIED') : (detailsPerson?.is_active ? 'ACTIVE' : 'INACTIVE')}
+                                        </Text>
+                                    </View>
+                                </View>
+                            </View>
+                            <TouchableOpacity onPress={() => setDetailsPerson(null)}>
+                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>✕</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView showsVerticalScrollIndicator={false}>
+                            {/* Contact Info - Editable when isEditingPerson */}
+                            <View style={[styles.card, !isDark && styles.cardLight]}>
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                    <Text style={{ color: '#94a3b8', fontSize: 12 }}>CONTACT INFO</Text>
+                                    {!isEditingPerson && (
+                                        <TouchableOpacity onPress={() => { setIsEditingPerson(true); setEditPersonData({ ...detailsPerson }); }}>
+                                            <Text style={{ color: '#3b82f6', fontSize: 12 }}>Edit</Text>
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
+                                {isEditingPerson ? (
+                                    <View style={{ gap: 12 }}>
+                                        <View>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Full Name</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                value={editPersonData.full_name || ''}
+                                                onChangeText={(text) => setEditPersonData({ ...editPersonData, full_name: text })}
+                                                placeholderTextColor="#64748b"
+                                            />
+                                        </View>
+                                        <View>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Phone</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                value={editPersonData.phone || ''}
+                                                onChangeText={(text) => setEditPersonData({ ...editPersonData, phone: text })}
+                                                placeholderTextColor="#64748b"
+                                            />
+                                        </View>
+                                        <View>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Email</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                value={editPersonData.email || ''}
+                                                onChangeText={(text) => setEditPersonData({ ...editPersonData, email: text })}
+                                                placeholderTextColor="#64748b"
+                                            />
+                                        </View>
+                                        {detailsPerson?.type === 'master' && (
+                                            <>
+                                                <View>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Service Area</Text>
+                                                    <TextInput
+                                                        style={[styles.input, !isDark && styles.inputLight]}
+                                                        value={editPersonData.service_area || ''}
+                                                        onChangeText={(text) => setEditPersonData({ ...editPersonData, service_area: text })}
+                                                        placeholderTextColor="#64748b"
+                                                    />
+                                                </View>
+                                                <View>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Experience (years)</Text>
+                                                    <TextInput
+                                                        style={[styles.input, !isDark && styles.inputLight]}
+                                                        value={String(editPersonData.experience_years || '')}
+                                                        onChangeText={(text) => setEditPersonData({ ...editPersonData, experience_years: text })}
+                                                        keyboardType="numeric"
+                                                        placeholderTextColor="#64748b"
+                                                    />
+                                                </View>
+                                            </>
+                                        )}
+                                        <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                                            <TouchableOpacity
+                                                style={[styles.actionButton, { backgroundColor: '#22c55e', flex: 1 }]}
+                                                onPress={handleSavePersonProfile}
+                                                disabled={actionLoading}
+                                            >
+                                                <Text style={styles.actionButtonText}>{actionLoading ? 'Saving...' : 'Save Changes'}</Text>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                                style={[styles.actionButton, { backgroundColor: isDark ? '#334155' : '#e2e8f0', flex: 1 }]}
+                                                onPress={() => setIsEditingPerson(false)}
+                                            >
+                                                <Text style={[styles.actionButtonText, !isDark && { color: '#475569' }]}>Cancel</Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                    </View>
+                                ) : (
+                                    <View style={{ gap: 8 }}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                            <Ionicons name="call" size={16} color="#3b82f6" />
+                                            <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.phone || 'N/A'}</Text>
+                                        </View>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                            <Ionicons name="mail" size={16} color="#3b82f6" />
+                                            <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.email || 'N/A'}</Text>
+                                        </View>
+                                    </View>
+                                )}
+                            </View>
+
+                            {/* Master-specific info */}
+                            {detailsPerson?.type === 'master' && (
+                                <>
+                                    <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
+                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>FINANCIALS</Text>
+                                        <View style={{ gap: 8 }}>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                <Text style={{ color: '#64748b' }}>Balance:</Text>
+                                                <Text style={{ color: (detailsPerson?.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '700' }}>{detailsPerson?.prepaid_balance || 0} сом</Text>
+                                            </View>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                <Text style={{ color: '#64748b' }}>Initial Deposit:</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.initial_deposit || 0} сом</Text>
+                                            </View>
+                                        </View>
+                                    </View>
+
+                                    <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
+                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>PERFORMANCE</Text>
+                                        <View style={{ gap: 8 }}>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                <Text style={{ color: '#64748b' }}>Completed Jobs:</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.completed_jobs || 0}</Text>
+                                            </View>
+                                        </View>
+                                    </View>
+
+                                    {/* Master Actions */}
+                                    <View style={{ marginTop: 20, gap: 10 }}>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: '#8b5cf6' }]}
+                                            onPress={() => { setSelectedMaster(detailsPerson); setShowOrderHistoryModal(true); setDetailsPerson(null); }}
+                                        >
+                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.sectionHistory || 'View Order History'}</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: '#3b82f6' }]}
+                                            onPress={() => { setSelectedMaster(detailsPerson); setShowBalanceModal(true); setDetailsPerson(null); }}
+                                        >
+                                            <Text style={styles.actionButtonText}>Top Up Balance</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: detailsPerson?.is_verified ? '#ef4444' : '#22c55e' }]}
+                                            onPress={() => { handleVerifyMaster(detailsPerson?.id, detailsPerson?.is_verified); setDetailsPerson(null); }}
+                                        >
+                                            <Text style={styles.actionButtonText}>{detailsPerson?.is_verified ? 'Unverify Master' : 'Verify Master'}</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: '#f59e0b' }]}
+                                            onPress={() => { setPasswordResetTarget(detailsPerson); setShowPasswordResetModal(true); setDetailsPerson(null); }}
+                                        >
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Ionicons name="key" size={16} color="#fff" />
+                                                <Text style={styles.actionButtonText}>Reset Password</Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                    </View>
+                                </>
+                            )}
+
+                            {/* Dispatcher-specific info */}
+                            {detailsPerson?.type === 'dispatcher' && (
+                                <>
+                                    <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
+                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>STATS</Text>
+                                        <View style={{ gap: 8 }}>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                <Text style={{ color: '#64748b' }}>Status:</Text>
+                                                <Text style={{ color: detailsPerson?.is_active ? '#22c55e' : '#ef4444', fontWeight: '600' }}>{detailsPerson?.is_active ? 'Active' : 'Inactive'}</Text>
+                                            </View>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                <Text style={{ color: '#64748b' }}>Created:</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.created_at ? new Date(detailsPerson.created_at).toLocaleDateString() : 'N/A'}</Text>
+                                            </View>
+                                        </View>
+                                    </View>
+
+                                    {/* Dispatcher Actions */}
+                                    <View style={{ marginTop: 20, gap: 10 }}>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: '#8b5cf6' }]}
+                                            onPress={() => { setSelectedMaster(detailsPerson); setShowOrderHistoryModal(true); setDetailsPerson(null); }}
+                                        >
+                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.sectionHistory || 'View Order History'}</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: detailsPerson?.is_active ? '#ef4444' : '#22c55e' }]}
+                                            onPress={() => { handleToggleDispatcher(detailsPerson?.id, detailsPerson?.is_active); setDetailsPerson(null); }}
+                                        >
+                                            <Text style={styles.actionButtonText}>{detailsPerson?.is_active ? 'Deactivate' : 'Activate'}</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: '#f59e0b' }]}
+                                            onPress={() => { setPasswordResetTarget(detailsPerson); setShowPasswordResetModal(true); setDetailsPerson(null); }}
+                                        >
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Ionicons name="key" size={16} color="#fff" />
+                                                <Text style={styles.actionButtonText}>Reset Password</Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                    </View>
+                                </>
+                            )}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Master Order History Modal */}
+            <Modal
+                animationType="fade"
+                transparent={true}
+                visible={showOrderHistoryModal}
+                onRequestClose={() => setShowOrderHistoryModal(false)}
+            >
+                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', flexDirection: 'row', justifyContent: 'flex-end' }}>
+                    <TouchableOpacity style={{ flex: 1 }} onPress={() => setShowOrderHistoryModal(false)} />
+                    <View style={{ width: 500, backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
+                            <View>
+                                <Text style={[styles.pageTitle, !isDark && styles.textDark]}>{TRANSLATIONS.sectionHistory || 'Order History'}</Text>
+                                <Text style={{ color: '#64748b', marginTop: 4 }}>{selectedMaster?.full_name}</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setShowOrderHistoryModal(false)}>
+                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>✕</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView showsVerticalScrollIndicator={false}>
+                            {masterOrderHistory.length === 0 ? (
+                                <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 60 }}>
+                                    <Ionicons name="document-text-outline" size={48} color="#64748b" />
+                                    <Text style={{ color: '#64748b', marginTop: 12 }}>{TRANSLATIONS.noOrderHistory || 'No order history'}</Text>
+                                </View>
+                            ) : (
+                                masterOrderHistory.map((order, idx) => {
+                                    const statusColor = STATUS_COLORS[order.status] || '#64748b';
+                                    return (
+                                        <TouchableOpacity
+                                            key={order.id || idx}
+                                            style={[styles.card, !isDark && styles.cardLight, { marginBottom: 10 }]}
+                                            onPress={() => {
+                                                setShowOrderHistoryModal(false);
+                                                setOrderDetails(order);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{getServiceLabel(order.service_type, language)}</Text>
+                                                    <Text style={styles.itemSubtitle}>{order.area || 'N/A'}</Text>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginTop: 4 }}>
+                                                        {order.created_at ? new Date(order.created_at).toLocaleDateString() : 'N/A'}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ alignItems: 'flex-end' }}>
+                                                    <Text style={{ color: '#22c55e', fontWeight: '700', fontSize: 14 }}>
+                                                        {order.final_price || order.initial_price || '-'} сом
+                                                    </Text>
+                                                    <View style={[styles.statusBadge, { backgroundColor: statusColor, marginTop: 6 }]}>
+                                                        <Text style={styles.statusText}>{getOrderStatusLabel(order.status, language)}</Text>
+                                                    </View>
+                                                </View>
+                                            </View>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: isDark ? '#334155' : '#e2e8f0' }}>
+                                                <Ionicons name="chevron-forward" size={14} color="#64748b" />
+                                                <Text style={{ color: '#64748b', fontSize: 11, marginLeft: 4 }}>Tap to view details</Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                    );
+                                })
+                            )}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Add User Modal (Master/Dispatcher) */}
+            <Modal
+                animationType="fade"
+                transparent={true}
+                visible={showAddUserModal}
+                onRequestClose={() => setShowAddUserModal(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, { width: 450 }, !isDark && styles.modalContentLight]}>
+                        <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>
+                            {addUserRole === 'master' ? (TRANSLATIONS.addMaster || 'Add New Master') : (TRANSLATIONS.addDispatcher || 'Add New Dispatcher')}
+                        </Text>
+                        <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 15 }}>
+                            Create a new {addUserRole} account
+                        </Text>
+
+                        <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
+                            <View style={{ gap: 12 }}>
+                                {/* Email */}
+                                <View>
+                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Email *</Text>
+                                    <TextInput
+                                        style={[styles.input, !isDark && styles.inputLight]}
+                                        placeholder="email@example.com"
+                                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                        keyboardType="email-address"
+                                        autoCapitalize="none"
+                                        value={newUserData.email}
+                                        onChangeText={(text) => setNewUserData({ ...newUserData, email: text })}
+                                    />
+                                </View>
+
+                                {/* Password */}
+                                <View>
+                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Password *</Text>
+                                    <TextInput
+                                        style={[styles.input, !isDark && styles.inputLight]}
+                                        placeholder="Minimum 6 characters"
+                                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                        secureTextEntry
+                                        value={newUserData.password}
+                                        onChangeText={(text) => setNewUserData({ ...newUserData, password: text })}
+                                    />
+                                </View>
+
+                                {/* Full Name */}
+                                <View>
+                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Full Name *</Text>
+                                    <TextInput
+                                        style={[styles.input, !isDark && styles.inputLight]}
+                                        placeholder="John Doe"
+                                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                        value={newUserData.full_name}
+                                        onChangeText={(text) => setNewUserData({ ...newUserData, full_name: text })}
+                                    />
+                                </View>
+
+                                {/* Phone */}
+                                <View>
+                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Phone</Text>
+                                    <TextInput
+                                        style={[styles.input, !isDark && styles.inputLight]}
+                                        placeholder="+996..."
+                                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                        keyboardType="phone-pad"
+                                        value={newUserData.phone}
+                                        onChangeText={(text) => setNewUserData({ ...newUserData, phone: text })}
+                                    />
+                                </View>
+
+                                {/* Master-specific fields */}
+                                {addUserRole === 'master' && (
+                                    <>
+                                        <View>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Service Area</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                placeholder="e.g. Bishkek, Leninsky district"
+                                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                                value={newUserData.service_area}
+                                                onChangeText={(text) => setNewUserData({ ...newUserData, service_area: text })}
+                                            />
+                                        </View>
+                                        <View>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Experience (years)</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                placeholder="0"
+                                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                                keyboardType="numeric"
+                                                value={newUserData.experience_years}
+                                                onChangeText={(text) => setNewUserData({ ...newUserData, experience_years: text })}
+                                            />
+                                        </View>
+                                    </>
+                                )}
+                            </View>
+                        </ScrollView>
+
+                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+                            <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: '#334155' }]}
+                                onPress={() => {
+                                    setShowAddUserModal(false);
+                                    setNewUserData({ email: '', password: '', full_name: '', phone: '', service_area: '', experience_years: '' });
+                                }}
+                            >
+                                <Text style={styles.actionButtonText}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: addUserRole === 'master' ? '#22c55e' : '#3b82f6' }]}
+                                onPress={handleCreateUser}
+                                disabled={actionLoading || !newUserData.email || !newUserData.password || !newUserData.full_name}
+                            >
+                                <Text style={styles.actionButtonText}>
+                                    {actionLoading ? 'Creating...' : `Create ${addUserRole === 'master' ? 'Master' : 'Dispatcher'}`}
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Password Reset Modal */}
+            <Modal
+                animationType="fade"
+                transparent={true}
+                visible={showPasswordResetModal}
+                onRequestClose={() => {
+                    setShowPasswordResetModal(false);
+                    setPasswordResetTarget(null);
+                    setNewPassword('');
+                    setConfirmPassword('');
+                }}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, { width: 400 }, !isDark && styles.modalContentLight]}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                            <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#f59e0b20', alignItems: 'center', justifyContent: 'center' }}>
+                                <Ionicons name="key" size={22} color="#f59e0b" />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>Reset Password</Text>
+                                <Text style={{ color: isDark ? '#64748b' : '#334155', fontSize: 12 }}>
+                                    {passwordResetTarget?.full_name}
+                                </Text>
+                            </View>
+                        </View>
+
+                        <View style={{ backgroundColor: '#f59e0b15', padding: 12, borderRadius: 8, marginBottom: 16, borderLeftWidth: 3, borderLeftColor: '#f59e0b' }}>
+                            <Text style={{ color: '#f59e0b', fontSize: 12 }}>
+                                ⚠️ This action will immediately change the user's password. They will need to use the new password to login.
+                            </Text>
+                        </View>
+
+                        <View style={{ gap: 12 }}>
+                            <View>
+                                <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>New Password *</Text>
+                                <TextInput
+                                    style={[styles.input, !isDark && styles.inputLight]}
+                                    placeholder="Minimum 6 characters"
+                                    placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                    secureTextEntry
+                                    value={newPassword}
+                                    onChangeText={setNewPassword}
+                                />
+                            </View>
+                            <View>
+                                <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Confirm Password *</Text>
+                                <TextInput
+                                    style={[styles.input, !isDark && styles.inputLight, confirmPassword && newPassword !== confirmPassword && { borderColor: '#ef4444' }]}
+                                    placeholder="Re-enter password"
+                                    placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                    secureTextEntry
+                                    value={confirmPassword}
+                                    onChangeText={setConfirmPassword}
+                                />
+                                {confirmPassword && newPassword !== confirmPassword && (
+                                    <Text style={{ color: '#ef4444', fontSize: 11, marginTop: 4 }}>Passwords do not match</Text>
+                                )}
+                            </View>
+                        </View>
+
+                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
+                            <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: '#334155' }]}
+                                onPress={() => {
+                                    setShowPasswordResetModal(false);
+                                    setPasswordResetTarget(null);
+                                    setNewPassword('');
+                                    setConfirmPassword('');
+                                }}
+                            >
+                                <Text style={styles.actionButtonText}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: '#f59e0b' }]}
+                                onPress={handleResetPassword}
+                                disabled={actionLoading || !newPassword || newPassword.length < 6 || newPassword !== confirmPassword}
+                            >
+                                <Text style={styles.actionButtonText}>
+                                    {actionLoading ? 'Resetting...' : 'Reset Password'}
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+        </LinearGradient >
     );
 }
 
@@ -1647,6 +2802,26 @@ const styles = StyleSheet.create({
     },
     scrollContent: {
         flex: 1,
+    },
+    // Tab Buttons (People toggle)
+    tabBtn: {
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+    },
+    tabBtnActive: {
+        backgroundColor: '#3b82f6',
+    },
+    tabBtnLight: {
+        backgroundColor: 'transparent',
+    },
+    tabBtnText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#94a3b8',
+    },
+    tabBtnTextActive: {
+        color: '#fff',
+        fontWeight: '600',
     },
     listViewContainer: {
         flex: 1,
@@ -1791,23 +2966,56 @@ const styles = StyleSheet.create({
     // Modals
     modalOverlay: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.7)',
         justifyContent: 'center',
         alignItems: 'center',
+        backgroundColor: 'rgba(0,0,0,0.7)',
+        ...Platform.select({
+            web: {
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                width: '100vw',
+                height: '100vh',
+                zIndex: 1000,
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+            },
+            default: {
+                ...StyleSheet.absoluteFillObject,
+            }
+        })
     },
     modalContent: {
         backgroundColor: '#1e293b',
         width: 400,
+        maxWidth: '90%',
         borderRadius: 20,
         padding: 24,
         borderWidth: 1,
         borderColor: '#334155',
+        ...Platform.select({
+            web: {
+                alignSelf: 'center',
+                margin: 'auto',
+                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+            }
+        })
+    },
+    modalContentLight: {
+        backgroundColor: '#ffffff',
+        borderColor: '#e2e8f0',
     },
     modalTitle: {
         fontSize: 18,
         fontWeight: '700',
         color: '#fff',
         marginBottom: 20,
+    },
+    modalTitleLight: {
+        color: '#0f172a',
     },
     input: {
         backgroundColor: '#0f172a',
@@ -1817,6 +3025,11 @@ const styles = StyleSheet.create({
         color: '#fff',
         padding: 12,
         marginBottom: 16,
+    },
+    inputLight: {
+        backgroundColor: '#ffffff',
+        borderColor: '#e2e8f0',
+        color: '#0f172a',
     },
     cancelBtn: {
         flex: 1,
@@ -2067,6 +3280,489 @@ const styles = StyleSheet.create({
     },
     valueText: {
         color: '#fff',
+        fontSize: 15,
+        fontWeight: '600',
+    },
+
+    // ============================================
+    // SETTINGS PAGE STYLES
+    // ============================================
+    settingsSection: {
+        marginBottom: 8,
+    },
+    settingsSectionLight: {
+        backgroundColor: 'transparent',
+    },
+    settingsSectionHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        marginBottom: 20,
+        flexWrap: 'wrap',
+        gap: 16,
+    },
+    settingsSectionTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 14,
+    },
+    settingsSectionIcon: {
+        width: 44,
+        height: 44,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    settingsSectionTitle: {
+        fontSize: 20,
+        fontWeight: '700',
+        color: '#fff',
+    },
+    settingsSectionSubtitle: {
+        fontSize: 13,
+        color: '#64748b',
+        marginTop: 2,
+    },
+    settingsActionRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    settingsBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 10,
+    },
+    settingsBtnPrimary: {
+        backgroundColor: '#22c55e',
+    },
+    settingsBtnSecondary: {
+        backgroundColor: '#334155',
+    },
+    settingsBtnSecondaryLight: {
+        backgroundColor: '#e2e8f0',
+    },
+    settingsBtnOutline: {
+        backgroundColor: 'transparent',
+        borderWidth: 1,
+        borderColor: '#3b82f6',
+    },
+    settingsBtnOutlineLight: {
+        backgroundColor: 'transparent',
+        borderColor: '#3b82f6',
+    },
+    settingsBtnText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#94a3b8',
+    },
+    settingsCard: {
+        backgroundColor: '#1e293b',
+        borderRadius: 16,
+        padding: 24,
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    settingsCardLight: {
+        backgroundColor: '#fff',
+        borderColor: '#e2e8f0',
+    },
+    settingsGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 24,
+    },
+    settingsGridItem: {
+        width: '48%',
+        minWidth: 280,
+    },
+    settingsFieldHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 4,
+    },
+    settingsFieldLabel: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    settingsFieldHint: {
+        fontSize: 12,
+        color: '#64748b',
+        marginBottom: 12,
+    },
+    settingsFieldValue: {
+        fontSize: 24,
+        fontWeight: '700',
+        color: '#fff',
+    },
+    settingsFieldUnit: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#64748b',
+    },
+    settingsInputWrapper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    settingsInput: {
+        flex: 1,
+        backgroundColor: '#0f172a',
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: '#334155',
+        color: '#fff',
+        padding: 14,
+        fontSize: 16,
+        fontWeight: '600',
+    },
+    settingsInputLight: {
+        backgroundColor: '#f8fafc',
+        borderColor: '#e2e8f0',
+        color: '#0f172a',
+    },
+    settingsInputSuffix: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#64748b',
+        minWidth: 40,
+    },
+    settingsDivider: {
+        height: 1,
+        backgroundColor: '#334155',
+        marginVertical: 32,
+    },
+    settingsDividerLight: {
+        backgroundColor: '#e2e8f0',
+    },
+    settingsEmptyState: {
+        width: '100%',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 60,
+        backgroundColor: '#1e293b',
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: '#334155',
+        borderStyle: 'dashed',
+    },
+    settingsEmptyStateLight: {
+        backgroundColor: '#f8fafc',
+        borderColor: '#cbd5e1',
+    },
+    settingsEmptyText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#94a3b8',
+        marginTop: 16,
+    },
+    settingsEmptyHint: {
+        fontSize: 13,
+        color: '#64748b',
+        marginTop: 4,
+    },
+
+    // Service Types Grid (New Design)
+    serviceTypesGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 16,
+    },
+    serviceTypeCard: {
+        width: 'calc(25% - 12px)',
+        minWidth: 220,
+        backgroundColor: '#1e293b',
+        borderRadius: 16,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    serviceTypeCardLight: {
+        backgroundColor: '#fff',
+        borderColor: '#e2e8f0',
+    },
+    serviceTypeHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        marginBottom: 16,
+    },
+    serviceTypeIcon: {
+        width: 52,
+        height: 52,
+        borderRadius: 14,
+        backgroundColor: '#334155',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    serviceTypeIconLight: {
+        backgroundColor: '#f1f5f9',
+    },
+    serviceTypeStatusBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 20,
+    },
+    serviceTypeStatusDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+    },
+    serviceTypeStatusText: {
+        fontSize: 11,
+        fontWeight: '700',
+        textTransform: 'uppercase',
+    },
+    serviceTypeContent: {
+        marginBottom: 16,
+    },
+    serviceTypeName: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#fff',
+        marginBottom: 4,
+    },
+    serviceTypeSubName: {
+        fontSize: 13,
+        color: '#94a3b8',
+        marginBottom: 6,
+    },
+    serviceTypeCode: {
+        fontSize: 11,
+        color: '#64748b',
+        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    },
+    serviceTypeActions: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        gap: 8,
+        paddingTop: 12,
+        borderTopWidth: 1,
+        borderTopColor: '#334155',
+    },
+    serviceTypeActionBtn: {
+        width: 36,
+        height: 36,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    serviceTypeActionBtnLight: {
+        backgroundColor: '#f1f5f9',
+    },
+    serviceTypeEditBtn: {
+        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    },
+    serviceTypeDeleteBtn: {
+        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    },
+
+    // ============================================
+    // SIDEBAR DRAWER STYLES (Service Type Form)
+    // ============================================
+    sidebarDrawerOverlay: {
+        flex: 1,
+        flexDirection: 'row',
+        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    },
+    sidebarDrawerBackdrop: {
+        flex: 1,
+    },
+    sidebarDrawerContent: {
+        width: 420,
+        backgroundColor: '#0f172a',
+        height: '100%',
+        borderLeftWidth: 1,
+        borderLeftColor: '#1e293b',
+        shadowColor: '#000',
+        shadowOffset: { width: -4, height: 0 },
+        shadowOpacity: 0.3,
+        shadowRadius: 12,
+        elevation: 10,
+    },
+    sidebarDrawerContentLight: {
+        backgroundColor: '#fff',
+        borderLeftColor: '#e2e8f0',
+    },
+    sidebarDrawerHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: 20,
+        borderBottomWidth: 1,
+        borderBottomColor: '#1e293b',
+    },
+    sidebarDrawerHeaderLight: {
+        borderBottomColor: '#f1f5f9',
+    },
+    sidebarDrawerIconWrapper: {
+        width: 44,
+        height: 44,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    sidebarDrawerTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#fff',
+    },
+    sidebarDrawerSubtitle: {
+        fontSize: 13,
+        color: '#64748b',
+        marginTop: 2,
+    },
+    sidebarDrawerCloseBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(71, 85, 105, 0.3)',
+    },
+    sidebarDrawerCloseBtnLight: {
+        backgroundColor: '#f1f5f9',
+    },
+    sidebarDrawerBody: {
+        flex: 1,
+        padding: 20,
+    },
+    sidebarFormGroup: {
+        marginBottom: 0,
+    },
+    sidebarFormLabel: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#fff',
+        marginBottom: 8,
+    },
+    sidebarFormInput: {
+        backgroundColor: '#1e293b',
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: '#334155',
+        color: '#fff',
+        padding: 14,
+        fontSize: 15,
+    },
+    sidebarFormInputLight: {
+        backgroundColor: '#f8fafc',
+        borderColor: '#e2e8f0',
+        color: '#0f172a',
+    },
+    sidebarFormInputDisabled: {
+        opacity: 0.5,
+        backgroundColor: '#0f172a',
+    },
+    sidebarFormSection: {
+        backgroundColor: '#1e293b',
+        borderRadius: 12,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: '#334155',
+        gap: 16,
+    },
+    sidebarFormSectionLight: {
+        backgroundColor: '#f8fafc',
+        borderColor: '#e2e8f0',
+    },
+    sidebarFormSectionTitle: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#64748b',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+        marginBottom: 4,
+    },
+    sidebarFormToggle: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: '#1e293b',
+        borderRadius: 12,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    sidebarFormToggleLight: {
+        backgroundColor: '#f8fafc',
+        borderColor: '#e2e8f0',
+    },
+    sidebarFormToggleIcon: {
+        width: 44,
+        height: 44,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    sidebarFormToggleLabel: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    sidebarFormToggleHint: {
+        fontSize: 12,
+        color: '#64748b',
+        marginTop: 2,
+    },
+    sidebarFormSwitch: {
+        width: 52,
+        height: 28,
+        borderRadius: 14,
+        backgroundColor: '#334155',
+        padding: 2,
+        justifyContent: 'center',
+    },
+    sidebarFormSwitchActive: {
+        backgroundColor: '#22c55e',
+    },
+    sidebarFormSwitchThumb: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        backgroundColor: '#64748b',
+    },
+    sidebarFormSwitchThumbActive: {
+        backgroundColor: '#fff',
+        marginLeft: 24,
+    },
+    sidebarDrawerFooter: {
+        flexDirection: 'row',
+        gap: 12,
+        padding: 20,
+        borderTopWidth: 1,
+        borderTopColor: '#1e293b',
+    },
+    sidebarDrawerFooterLight: {
+        borderTopColor: '#f1f5f9',
+    },
+    sidebarDrawerBtn: {
+        flex: 1,
+        paddingVertical: 14,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    sidebarDrawerBtnPrimary: {
+        backgroundColor: '#22c55e',
+    },
+    sidebarDrawerBtnSecondary: {
+        backgroundColor: '#1e293b',
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    sidebarDrawerBtnSecondaryLight: {
+        backgroundColor: '#f1f5f9',
+        borderColor: '#e2e8f0',
+    },
+    sidebarDrawerBtnText: {
         fontSize: 15,
         fontWeight: '600',
     },

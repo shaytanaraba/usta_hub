@@ -154,6 +154,7 @@ class OrdersService {
       NOT_VERIFIED: 'Your account is not verified',
       INACTIVE: 'Your account is inactive',
       BALANCE_BLOCKED: 'Your balance is blocked by admin',
+      NEGATIVE_BALANCE: 'Your balance is zero or negative. Please top up to continue.',
       INSUFFICIENT_BALANCE: 'Insufficient prepaid balance',
       IMMEDIATE_LIMIT_REACHED: 'You have reached your immediate orders limit',
       TOO_MANY_PENDING: 'Too many orders pending confirmation',
@@ -609,6 +610,40 @@ class OrdersService {
       return data;
     } catch (error) {
       console.error(`${LOG_PREFIX} getAllOrders failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Get master's order history (admin) - All orders regardless of status
+   */
+  getMasterOrderHistory = async (masterId, limit = 50) => {
+    console.log(`${LOG_PREFIX} Fetching order history for master: ${masterId}`);
+
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+          id,
+          service_type,
+          status,
+          area,
+          initial_price,
+          final_price,
+          created_at,
+          confirmed_at,
+          canceled_at
+        `)
+        .eq('master_id', masterId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (error) throw error;
+
+      console.log(`${LOG_PREFIX} Found ${data.length} orders in history for master`);
+      return data;
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getMasterOrderHistory failed:`, error);
       return [];
     }
   }
@@ -1433,6 +1468,34 @@ class OrdersService {
     }
   }
 
+  /**
+   * Get complete order history for dispatcher (for admin view)
+   * Shows all orders created by this dispatcher
+   */
+  getDispatcherOrderHistory = async (dispatcherId, limit = 100) => {
+    console.log(`${LOG_PREFIX} Fetching complete order history for dispatcher: ${dispatcherId}`);
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+          id, service_type, status, urgency, area,
+          initial_price, final_price,
+          created_at, claimed_at, completed_at, confirmed_at,
+          client:client_id(full_name),
+          master:master_id(full_name)
+        `)
+        .eq('dispatcher_id', dispatcherId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getDispatcherOrderHistory failed:`, error);
+      return [];
+    }
+  }
+
   // ============================================
   // PLATFORM SETTINGS
   // ============================================
@@ -1472,6 +1535,176 @@ class OrdersService {
         min_balance: 1000,
         order_expiry_hours: 24
       };
+    }
+  }
+
+  // ============================================
+  // ADMIN-ONLY FUNCTIONS (Missing DB Wrappers)
+  // ============================================
+
+  /**
+   * Reopen order (admin) - Reopen canceled/expired orders for re-assignment
+   * Uses reopen_order RPC function from COMPLETE_SETUP_V2.sql
+   */
+  reopenOrderAdmin = async (orderId, reason = 'Reopened by admin') => {
+    console.log(`${LOG_PREFIX} Admin reopening order: ${orderId}`);
+
+    try {
+      const { data, error } = await supabase.rpc('reopen_order', {
+        order_uuid: orderId,
+        reason: reason
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} reopenOrderAdmin RPC error:`, error);
+        throw error;
+      }
+
+      if (!data.success) {
+        return { success: false, message: data.message || data.error };
+      }
+
+      console.log(`${LOG_PREFIX} Order reopened successfully:`, data);
+      return { success: true, message: 'Order reopened', orderId: data.order_id, previousStatus: data.previous_status };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} reopenOrderAdmin failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Expire old orders (admin/scheduler) - Manually trigger order expiry
+   * Uses expire_old_orders RPC function from COMPLETE_SETUP_V2.sql
+   */
+  expireOldOrders = async () => {
+    console.log(`${LOG_PREFIX} Triggering order expiry...`);
+
+    try {
+      const { data, error } = await supabase.rpc('expire_old_orders');
+
+      if (error) {
+        console.error(`${LOG_PREFIX} expireOldOrders RPC error:`, error);
+        throw error;
+      }
+
+      console.log(`${LOG_PREFIX} Expired ${data} orders`);
+      return { success: true, message: `Expired ${data} orders`, expiredCount: data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} expireOldOrders failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Force assign master to order (admin) - Bypasses normal claiming flow
+   * Uses force_assign_master RPC function from COMPLETE_SETUP_V2.sql
+   */
+  forceAssignMasterAdmin = async (orderId, masterId, reason = 'Admin assignment') => {
+    console.log(`${LOG_PREFIX} Admin force assigning master ${masterId} to order ${orderId}`);
+
+    try {
+      const { data, error } = await supabase.rpc('force_assign_master', {
+        p_order_id: orderId,
+        p_master_id: masterId,
+        p_reason: reason
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} forceAssignMasterAdmin RPC error:`, error);
+        throw error;
+      }
+
+      if (!data.success) {
+        return { success: false, message: data.error || 'Assignment failed' };
+      }
+
+      console.log(`${LOG_PREFIX} Master force assigned:`, data);
+      return { success: true, message: `Assigned to ${data.master_name}`, orderId: data.order_id, masterName: data.master_name };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} forceAssignMasterAdmin failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Verify payment proof (admin/dispatcher) - Verify transfer payment proof
+   * Uses verify_payment_proof RPC function from COMPLETE_SETUP_V2.sql
+   */
+  verifyPaymentProof = async (orderId, isValid, notes = null) => {
+    console.log(`${LOG_PREFIX} Verifying payment proof for order ${orderId}: ${isValid}`);
+
+    try {
+      const { data, error } = await supabase.rpc('verify_payment_proof', {
+        order_uuid: orderId,
+        is_valid: isValid,
+        notes: notes
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} verifyPaymentProof RPC error:`, error);
+        throw error;
+      }
+
+      if (!data.success) {
+        return { success: false, message: data.error || 'Verification failed' };
+      }
+
+      console.log(`${LOG_PREFIX} Payment proof verified:`, data);
+      return { success: true, message: isValid ? 'Payment proof verified' : 'Payment proof rejected', verified: data.verified };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} verifyPaymentProof failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Get order volume by area (admin) - Analytics function
+   * Uses get_order_volume_by_area RPC function from COMPLETE_SETUP_V2.sql
+   */
+  getOrderVolumeByArea = async (startDate = null, endDate = null) => {
+    console.log(`${LOG_PREFIX} Fetching order volume by area...`);
+
+    try {
+      const params = {};
+      if (startDate) params.p_start_date = new Date(startDate).toISOString();
+      if (endDate) params.p_end_date = new Date(endDate).toISOString();
+
+      const { data, error } = await supabase.rpc('get_order_volume_by_area', params);
+
+      if (error) {
+        console.error(`${LOG_PREFIX} getOrderVolumeByArea RPC error:`, error);
+        throw error;
+      }
+
+      console.log(`${LOG_PREFIX} Order volume data:`, data?.length || 0, 'records');
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getOrderVolumeByArea failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Update platform settings (admin only)
+   */
+  updatePlatformSettings = async (settings) => {
+    console.log(`${LOG_PREFIX} Updating platform settings:`, settings);
+
+    try {
+      const { data, error } = await supabase
+        .from('platform_settings')
+        .update(settings)
+        .eq('id', 1)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      console.log(`${LOG_PREFIX} Settings updated successfully`);
+      return { success: true, message: 'Settings updated', settings: data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} updatePlatformSettings failed:`, error);
+      return { success: false, message: error.message };
     }
   }
 }

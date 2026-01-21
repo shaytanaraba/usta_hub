@@ -336,6 +336,51 @@ class EarningsService {
             return [];
         }
     }
+
+    // ============================================
+    // ADMIN BALANCE MANAGEMENT (Missing DB Wrappers)
+    // ============================================
+
+    /**
+     * Add balance to master account (admin only)
+     * Uses add_master_balance RPC function from COMPLETE_SETUP_V2.sql
+     * @param {string} masterId - Master UUID
+     * @param {number} amount - Amount to add (positive) or deduct (negative)
+     * @param {string} transactionType - 'top_up', 'adjustment', 'refund', 'waiver'
+     * @param {string} notes - Optional notes for the transaction
+     */
+    async addMasterBalance(masterId, amount, transactionType = 'top_up', notes = null) {
+        console.log(`${LOG_PREFIX} Adding balance to master ${masterId}: ${amount} (${transactionType})`);
+
+        try {
+            const { data, error } = await supabase.rpc('add_master_balance', {
+                p_master_id: masterId,
+                p_amount: amount,
+                p_transaction_type: transactionType,
+                p_notes: notes
+            });
+
+            if (error) {
+                console.error(`${LOG_PREFIX} addMasterBalance RPC error:`, error);
+                throw error;
+            }
+
+            if (!data.success) {
+                return { success: false, message: data.message || 'Failed to add balance' };
+            }
+
+            console.log(`${LOG_PREFIX} Balance updated:`, data);
+            return {
+                success: true,
+                message: `Balance updated from ${data.balance_before} to ${data.balance_after}`,
+                balanceBefore: data.balance_before,
+                balanceAfter: data.balance_after
+            };
+        } catch (error) {
+            console.error(`${LOG_PREFIX} addMasterBalance failed:`, error);
+            return { success: false, message: error.message };
+        }
+    }
 }
 
 const earningsService = new EarningsService();

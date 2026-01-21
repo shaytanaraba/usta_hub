@@ -560,6 +560,16 @@ const DashboardContent = ({ navigation }) => {
     }, [availableServices, language]);
 
     const handleClaim = async (orderId) => {
+        // Find the order to estimate commission
+        const order = availableOrders.find(o => o.id === orderId);
+        const estimatedCommission = (order?.guaranteed_payout || 500) * 0.20; // 20% platform rate
+        const projectedBalance = (financials?.prepaidBalance || 0) - estimatedCommission;
+
+        // Show warning if balance would go negative after commission
+        if (projectedBalance < 0 && financials?.prepaidBalance > 0) {
+            showToast?.(`Warning: After completing this job, your balance may go negative. Remember to top up!`, 'warning');
+        }
+
         setActionLoading(true);
         const result = await ordersService.claimOrder(orderId);
         if (result.success) {

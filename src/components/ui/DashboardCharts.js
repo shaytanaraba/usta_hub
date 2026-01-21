@@ -30,7 +30,7 @@ export const StatusChart = ({ data, isDark = true }) => {
                     labels: chartLabels,
                     datasets: [{ data: chartValues }]
                 }}
-                width={Platform.OS === 'web' ? 400 : SCREEN_WIDTH - 60}
+                width={Dimensions.get('window').width > 768 ? 600 : SCREEN_WIDTH - 48}
                 height={220}
                 yAxisLabel=""
                 chartConfig={{
@@ -39,7 +39,7 @@ export const StatusChart = ({ data, isDark = true }) => {
                     backgroundGradientTo: isDark ? '#1e293b' : '#ffffff',
                     color: (opacity = 1) => `rgba(99, 102, 241, ${opacity})`, // Indigo
                     labelColor: () => isDark ? '#94a3b8' : '#64748b',
-                    barPercentage: 0.7,
+                    barPercentage: 0.8,
                     decimalPlaces: 0,
                     propsForBackgroundLines: {
                         stroke: isDark ? '#334155' : '#f1f5f9',
@@ -52,7 +52,7 @@ export const StatusChart = ({ data, isDark = true }) => {
                     borderRadius: 16,
                     paddingRight: 0,
                 }}
-                showValuesOnTopOfBars={false}
+                showValuesOnTopOfBars={true}
                 fromZero
             />
         </View>
@@ -81,20 +81,27 @@ export const CommissionWidget = ({ collected, outstanding, isDark = true }) => {
             </View>
 
             <View style={styles.rowContent}>
-                <ProgressChart
-                    data={data}
-                    width={140}
-                    height={140}
-                    strokeWidth={16}
-                    radius={55}
-                    chartConfig={{
-                        backgroundGradientFrom: isDark ? "#1e293b" : "#ffffff",
-                        backgroundGradientTo: isDark ? "#1e293b" : "#ffffff",
-                        color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`, // Green
-                        labelColor: () => isDark ? '#fff' : '#0f172a',
-                    }}
-                    hideLegend={true}
-                />
+                {/* Chart Container for absolute positioning context */}
+                <View style={{ width: 140, height: 140, alignItems: 'center', justifyContent: 'center' }}>
+                    <ProgressChart
+                        data={data}
+                        width={140}
+                        height={140}
+                        strokeWidth={16}
+                        radius={55}
+                        chartConfig={{
+                            backgroundGradientFrom: isDark ? "#1e293b" : "#ffffff",
+                            backgroundGradientTo: isDark ? "#1e293b" : "#ffffff",
+                            color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`, // Green
+                            labelColor: () => isDark ? '#fff' : '#0f172a',
+                        }}
+                        hideLegend={true}
+                    />
+                    <View style={styles.percentageAbsolute}>
+                        <Text style={[styles.bigPercentage, !isDark && styles.textDark]}>{(percentage * 100).toFixed(0)}%</Text>
+                        <Text style={styles.percentageLabel}>Collected</Text>
+                    </View>
+                </View>
 
                 <View style={styles.statsCol}>
                     <View style={styles.statItem}>
@@ -108,10 +115,6 @@ export const CommissionWidget = ({ collected, outstanding, isDark = true }) => {
                         <Text style={[styles.statValue, { color: '#f59e0b' }]}>
                             {outstanding.toLocaleString()}
                         </Text>
-                    </View>
-                    <View style={styles.percentageAbsolute}>
-                        <Text style={[styles.bigPercentage, !isDark && styles.textDark]}>{(percentage * 100).toFixed(0)}%</Text>
-                        <Text style={styles.percentageLabel}>Collected</Text>
                     </View>
                 </View>
             </View>
@@ -129,6 +132,7 @@ const styles = StyleSheet.create({
         marginBottom: 16,
         flex: 1,
         minHeight: 300,
+        minWidth: 300, // Response
     },
     cardLight: {
         backgroundColor: '#ffffff',
@@ -174,11 +178,12 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        position: 'relative',
+        flexWrap: 'wrap', // Allow wrapping on small screens
+        gap: 20,
     },
     statsCol: {
         flex: 1,
-        paddingLeft: 20,
+        minWidth: 120,
         gap: 16,
     },
     statItem: {},
@@ -192,20 +197,20 @@ const styles = StyleSheet.create({
         fontSize: 20,
         fontWeight: '700',
     },
-    // Overlay percentage inside donut (CSS hack for layout)
+    // Overlay percentage inside donut (Centered via Flexbox in parent now)
     percentageAbsolute: {
         position: 'absolute',
-        left: 35, // Approx center of donut
-        top: 45,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
         alignItems: 'center',
+        justifyContent: 'center',
     },
     bigPercentage: {
         fontSize: 24,
         fontWeight: 'bold',
         color: 'white',
-    },
-    textDark: {
-        color: '#0f172a',
     },
     percentageLabel: {
         fontSize: 10,

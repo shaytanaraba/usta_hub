@@ -26,16 +26,21 @@ export const StatCard = ({ value, label, color, onPress, isDark = true }) => {
 
 const styles = StyleSheet.create({
     card: {
-        backgroundColor: '#1e293b', // Lighter navy card
+        backgroundColor: '#1e293b',
         borderRadius: 16,
         padding: 24,
         minHeight: 140,
+        minWidth: 200, // Ensure cards wrap on smaller screens
         justifyContent: 'space-between',
         flex: 1,
-        margin: 8,
-        // Subtle border
+        // Remove margin: 8 and let gap handle spacing in grid
         borderWidth: 1,
         borderColor: '#334155',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.1,
+        shadowRadius: 6,
+        elevation: 3,
     },
     cardLight: {
         backgroundColor: '#ffffff',
@@ -50,11 +55,11 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     value: {
-        fontSize: 36,
+        fontSize: 32, // Slightly smaller for better fit
         fontWeight: '700',
         color: '#ffffff',
         marginBottom: 8,
-        letterSpacing: -1,
+        letterSpacing: -0.5,
     },
     textDark: {
         color: '#0f172a',
@@ -69,10 +74,11 @@ const styles = StyleSheet.create({
         height: 4,
         borderRadius: 2,
         marginTop: 16,
-        width: '40%', // As seen in screenshot
+        width: '100%', // Full width accent
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.5,
         shadowRadius: 4,
         elevation: 3,
+        opacity: 0.8,
     },
 });

@@ -793,6 +793,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [showRecentAddr, setShowRecentAddr] = useState(false);
     const [idempotencyKey, setIdempotencyKey] = useState(generateIdempotencyKey());
     const [showDistrictDropdown, setShowDistrictDropdown] = useState(false);
+    const [platformSettings, setPlatformSettings] = useState(null); // Dynamic platform settings
 
     // ============================================
     // DATA LOADING
@@ -803,6 +804,7 @@ export default function DispatcherDashboard({ navigation, route }) {
         loadDraft();
         loadRecentAddresses();
         loadServiceTypes();
+        loadPlatformSettings(); // Fetch platform settings for callout fee default
     }, []);
 
     // Reload service types when language changes
@@ -879,6 +881,17 @@ export default function DispatcherDashboard({ navigation, route }) {
         } catch (error) {
             console.error(`${LOG_PREFIX} loadServiceTypes error:`, error);
             // Keep fallback SERVICE_TYPES
+        }
+    };
+
+    const loadPlatformSettings = async () => {
+        try {
+            const settings = await ordersService.getPlatformSettings();
+            if (settings) {
+                setPlatformSettings(settings);
+            }
+        } catch (error) {
+            console.error(`${LOG_PREFIX} loadPlatformSettings error:`, error);
         }
     };
 
@@ -1861,7 +1874,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].calloutFee}</Text>
                                     <TextInput
                                         style={[styles.input, !isDark && styles.inputLight]}
-                                        placeholder="200"
+                                        placeholder={platformSettings ? String(platformSettings.base_price) : "..."}
                                         keyboardType="numeric"
                                         value={newOrder.calloutFee}
                                         onChangeText={t => setNewOrder({ ...newOrder, calloutFee: t })}

@@ -261,8 +261,9 @@ class AuthService {
 
       if (updates.full_name) profileUpdates.full_name = updates.full_name;
       if (updates.phone) profileUpdates.phone = updates.phone;
+      if (updates.email) profileUpdates.email = updates.email;
       if (updates.service_area) profileUpdates.service_area = updates.service_area;
-      if (updates.experience_years) profileUpdates.experience_years = updates.experience_years;
+      if (updates.experience_years !== undefined) profileUpdates.experience_years = parseInt(updates.experience_years) || 0;
       if (updates.specializations) profileUpdates.specializations = updates.specializations;
       if (updates.max_active_jobs !== undefined) profileUpdates.max_active_jobs = updates.max_active_jobs;
 
@@ -277,6 +278,132 @@ class AuthService {
       return { success: true, message: 'Profile updated', user: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} updateProfile error:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Create new user (admin only) - Creates user in auth + profile
+   * Used to add new masters or dispatchers
+   */
+  async createUser(userData) {
+    console.log(`${LOG_PREFIX} Creating new user: ${userData.email} (${userData.role})`);
+
+    try {
+      if (!userData.email || !userData.password || !userData.role) {
+        throw new Error('Email, password, and role are required');
+      }
+
+      if (!['master', 'dispatcher'].includes(userData.role)) {
+        throw new Error('Role must be master or dispatcher');
+      }
+
+      // Create auth user via Supabase
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: userData.email.trim().toLowerCase(),
+        password: userData.password,
+        options: {
+          data: {
+            full_name: userData.full_name || '',
+            phone: userData.phone || '',
+            role: userData.role
+          }
+        }
+      });
+
+      if (authError) {
+        console.error(`${LOG_PREFIX} Auth signup error:`, authError);
+        throw authError;
+      }
+
+      if (!authData.user) {
+        throw new Error('Failed to create user');
+      }
+
+      // Update profile with additional details (trigger should have created basic profile)
+      const profileUpdates = {
+        full_name: userData.full_name || '',
+        phone: userData.phone || '',
+        role: userData.role,
+        is_active: true,
+        is_verified: userData.role === 'dispatcher', // Dispatchers auto-verified
+      };
+
+      if (userData.role === 'master') {
+        profileUpdates.service_area = userData.service_area || '';
+        profileUpdates.experience_years = parseInt(userData.experience_years) || 0;
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .update(profileUpdates)
+        .eq('id', authData.user.id)
+        .select()
+        .single();
+
+      if (profileError) {
+        console.error(`${LOG_PREFIX} Profile update error:`, profileError);
+        // User created but profile update failed - still return success with warning
+        return {
+          success: true,
+          message: 'User created but profile update failed. Refresh to see changes.',
+          user: { id: authData.user.id, email: userData.email, role: userData.role }
+        };
+      }
+
+      console.log(`${LOG_PREFIX} User created successfully: ${profile.full_name}`);
+      return {
+        success: true,
+        message: `${userData.role === 'master' ? 'Master' : 'Dispatcher'} created successfully`,
+        user: profile
+      };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} createUser error:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Reset user password (admin only) - Securely resets password for masters/dispatchers
+   * Uses admin_reset_user_password RPC function from PATCH_ADMIN_PASSWORD_RESET.sql
+   */
+  async resetUserPassword(userId, newPassword) {
+    console.log(`${LOG_PREFIX} Resetting password for user: ${userId}`);
+
+    try {
+      if (!newPassword || newPassword.length < 6) {
+        return { success: false, message: 'Password must be at least 6 characters' };
+      }
+
+      const { data, error } = await supabase.rpc('admin_reset_user_password', {
+        p_target_user_id: userId,
+        p_new_password: newPassword
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} resetUserPassword RPC error:`, error);
+        throw error;
+      }
+
+      if (!data.success) {
+        const errorMessages = {
+          'USER_NOT_FOUND': 'User not found',
+          'CANNOT_RESET_ADMIN_PASSWORD': 'Cannot reset admin passwords',
+          'PASSWORD_TOO_SHORT': 'Password must be at least 6 characters'
+        };
+        return {
+          success: false,
+          message: errorMessages[data.error] || data.error || 'Password reset failed'
+        };
+      }
+
+      console.log(`${LOG_PREFIX} Password reset successful for ${data.target_role}`);
+      return {
+        success: true,
+        message: 'Password reset successfully. User can now login with the new password.'
+      };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} resetUserPassword failed:`, error);
       return { success: false, message: error.message };
     }
   }
@@ -388,6 +515,115 @@ class AuthService {
       };
     } catch (error) {
       console.error(`${LOG_PREFIX} reassignDispatcherOrders error:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  // ============================================
+  // ADMIN METRICS FUNCTIONS (Missing DB Wrappers)
+  // ============================================
+
+  /**
+   * Get master active workload (admin) - Returns active job counts for masters
+   * Uses get_master_active_workload RPC function from COMPLETE_SETUP_V2.sql
+   */
+  async getMasterWorkload(masterId = null) {
+    console.log(`${LOG_PREFIX} Fetching master workload...`);
+
+    try {
+      const { data, error } = await supabase.rpc('get_master_active_workload', {
+        p_master_id: masterId
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} getMasterWorkload RPC error:`, error);
+        throw error;
+      }
+
+      console.log(`${LOG_PREFIX} Master workload data:`, data?.length || 0, 'records');
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getMasterWorkload failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Get master performance metrics (admin) - Rating, completion rate, jobs count
+   * Uses get_master_performance RPC function from COMPLETE_SETUP_V2.sql
+   */
+  async getMasterPerformance(masterId = null) {
+    console.log(`${LOG_PREFIX} Fetching master performance...`);
+
+    try {
+      const { data, error } = await supabase.rpc('get_master_performance', {
+        p_master_id: masterId
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} getMasterPerformance RPC error:`, error);
+        throw error;
+      }
+
+      console.log(`${LOG_PREFIX} Master performance data:`, data?.length || 0, 'records');
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getMasterPerformance failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Get dispatcher metrics (admin) - Total orders, confirmed, disputed counts
+   * Uses get_dispatcher_metrics RPC function from COMPLETE_SETUP_V2.sql
+   */
+  async getDispatcherMetrics(dispatcherId = null) {
+    console.log(`${LOG_PREFIX} Fetching dispatcher metrics...`);
+
+    try {
+      const { data, error } = await supabase.rpc('get_dispatcher_metrics', {
+        p_dispatcher_id: dispatcherId
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} getDispatcherMetrics RPC error:`, error);
+        throw error;
+      }
+
+      console.log(`${LOG_PREFIX} Dispatcher metrics:`, data?.length || 0, 'records');
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getDispatcherMetrics failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Set initial deposit for new master (admin only)
+   * Uses set_master_initial_deposit RPC function from COMPLETE_SETUP_V2.sql
+   */
+  async setMasterInitialDeposit(masterId, depositAmount) {
+    console.log(`${LOG_PREFIX} Setting initial deposit for master ${masterId}: ${depositAmount}`);
+
+    try {
+      const { data, error } = await supabase.rpc('set_master_initial_deposit', {
+        p_master_id: masterId,
+        p_deposit: depositAmount
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} setMasterInitialDeposit RPC error:`, error);
+        throw error;
+      }
+
+      if (!data.success) {
+        return { success: false, message: data.message || 'Failed to set deposit' };
+      }
+
+      console.log(`${LOG_PREFIX} Initial deposit set:`, data);
+      return { success: true, message: `Deposit of ${depositAmount} set`, deposit: data.deposit };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} setMasterInitialDeposit failed:`, error);
       return { success: false, message: error.message };
     }
   }
