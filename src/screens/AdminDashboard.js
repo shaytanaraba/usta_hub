@@ -52,7 +52,31 @@ const STATUS_COLORS = {
     placed: '#3b82f6', claimed: '#f59e0b', started: '#8b5cf6',
     completed: '#f97316', confirmed: '#22c55e',
     canceled_by_master: '#ef4444', canceled_by_client: '#ef4444', reopened: '#3b82f6',
+    expired: '#6b7280',
 };
+
+// Urgency filter options
+const URGENCY_OPTIONS = [
+    { id: 'all', label: 'filterAllUrgency' },
+    { id: 'emergency', label: 'urgencyEmergency' },
+    { id: 'urgent', label: 'urgencyUrgent' },
+    { id: 'planned', label: 'urgencyPlanned' },
+];
+
+// Sort options
+const SORT_OPTIONS = [
+    { id: 'newest', label: 'filterNewestFirst' },
+    { id: 'oldest', label: 'filterOldestFirst' },
+];
+
+// Attention filter options for Needs Attention section
+const ATTENTION_FILTER_OPTIONS = [
+    { id: 'All', label: 'issueAllIssues' },
+    { id: 'Stuck', label: 'issueStuck' },
+    { id: 'Disputed', label: 'issueDisputed' },
+    { id: 'Payment', label: 'issueUnpaid' },
+    { id: 'Canceled', label: 'issueCanceled' },
+];
 
 const SERVICE_TYPES = [
     { id: 'plumbing', label: 'Plumbing' }, { id: 'electrician', label: 'Electrician' },
@@ -148,6 +172,13 @@ export default function AdminDashboard({ navigation }) {
     const [showFilters, setShowFilters] = useState(false);
     const [statusFilter, setStatusFilter] = useState('all');
     const [serviceFilter, setServiceFilter] = useState('all');
+    const [filterUrgency, setFilterUrgency] = useState('all');
+    const [filterSort, setFilterSort] = useState('newest');
+
+    // Needs Attention Section State
+    const [showNeedsAttention, setShowNeedsAttention] = useState(true);
+    const [filterAttentionType, setFilterAttentionType] = useState('All');
+    const [sortOrder, setSortOrder] = useState('newest');
 
     const [pickerModal, setPickerModal] = useState({ visible: false, options: [], value: '', onChange: null, title: '' });
     const [serviceTypes, setServiceTypes] = useState([]);
@@ -846,6 +877,10 @@ export default function AdminDashboard({ navigation }) {
     );
 
     const renderOverview = () => {
+        // Calculate balance stats from masters
+        const totalMasterBalances = masters.reduce((sum, m) => sum + (m.prepaid_balance || 0), 0);
+        const lowBalanceCount = masters.filter(m => (m.prepaid_balance || 0) < 500).length;
+
         return (
             <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
                 {renderHeader('Overview')}
@@ -885,6 +920,25 @@ export default function AdminDashboard({ navigation }) {
                         value={stats.confirmedOrders || 0}
                         color="#22c55e"
                         onPress={() => handleStatClick('confirmed')}
+                        isDark={isDark}
+                    />
+                </View>
+
+                {/* Balance Stats Row */}
+                <View style={[styles.statsGrid, { marginTop: 8 }]}>
+                    <StatCard
+                        label="Total Balances"
+                        value={`${totalMasterBalances.toLocaleString()} сом`}
+                        color="#22c55e"
+                        subtitle={`${masters.length} masters`}
+                        isDark={isDark}
+                    />
+                    <StatCard
+                        label="Low Balance"
+                        value={lowBalanceCount}
+                        color="#ef4444"
+                        subtitle="Below 500 сом"
+                        onPress={() => { setActiveTab('people'); setPeopleView('masters'); }}
                         isDark={isDark}
                     />
                 </View>
@@ -1075,10 +1129,16 @@ export default function AdminDashboard({ navigation }) {
 
         const currentStatusLabel = statusOptions.find(o => o.id === statusFilter)?.label || statusFilter;
         const currentServiceLabel = serviceOptions.find(o => o.id === serviceFilter)?.label || serviceFilter;
+        const currentUrgencyLabel = URGENCY_OPTIONS.find(o => o.id === filterUrgency)?.label || filterUrgency;
+        const currentSortLabel = SORT_OPTIONS.find(o => o.id === filterSort)?.label || filterSort;
+
+        // Get screen width for responsive layout
+        const screenWidth = Dimensions.get('window').width;
+        const isSmallScreen = screenWidth < 600;
 
         return (
             <View style={styles.filtersContainer}>
-                <View style={styles.filterControlsRow}>
+                <View style={[styles.filterControlsRow, { flexWrap: 'wrap', gap: 8 }]}>
                     <TouchableOpacity
                         style={[styles.viewToggleBtn, !isDark && styles.viewToggleBtnLight, viewMode === 'compact' && styles.viewToggleBtnActive]}
                         onPress={() => setViewMode(prev => prev === 'cards' ? 'compact' : 'cards')}>
@@ -1092,101 +1152,247 @@ export default function AdminDashboard({ navigation }) {
                             {showFilters ? (TRANSLATIONS.hideFilters || 'Hide Filters') : (TRANSLATIONS.showFilters || 'Show Filters')}
                         </Text>
                     </TouchableOpacity>
+
+                    {/* Filters appear INLINE with the toggle button */}
+                    {showFilters && (
+                        <>
+                            {/* Status Filter */}
+                            <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.filterDropdownLight]} onPress={() => setPickerModal({
+                                visible: true,
+                                title: TRANSLATIONS.filterStatus || 'Status',
+                                options: statusOptions,
+                                value: statusFilter,
+                                onChange: setStatusFilter
+                            })}>
+                                <Text style={[styles.filterDropdownText, !isDark && styles.filterDropdownTextLight]}>{currentStatusLabel}</Text>
+                                <Ionicons name="chevron-down" size={12} color="#64748b" />
+                            </TouchableOpacity>
+
+                            {/* Urgency Filter */}
+                            <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.filterDropdownLight]} onPress={() => setPickerModal({
+                                visible: true,
+                                title: TRANSLATIONS.filterUrgency || 'Urgency',
+                                options: URGENCY_OPTIONS.map(o => ({ ...o, label: TRANSLATIONS[o.label] || o.label })),
+                                value: filterUrgency,
+                                onChange: setFilterUrgency
+                            })}>
+                                <Text style={[styles.filterDropdownText, !isDark && styles.filterDropdownTextLight]}>{TRANSLATIONS[currentUrgencyLabel] || currentUrgencyLabel}</Text>
+                                <Ionicons name="chevron-down" size={12} color="#64748b" />
+                            </TouchableOpacity>
+
+                            {/* Service Type Filter */}
+                            <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.filterDropdownLight]} onPress={() => setPickerModal({
+                                visible: true,
+                                title: TRANSLATIONS.filterService || 'Service',
+                                options: serviceOptions,
+                                value: serviceFilter,
+                                onChange: setServiceFilter
+                            })}>
+                                <Text style={[styles.filterDropdownText, !isDark && styles.filterDropdownTextLight]}>{currentServiceLabel}</Text>
+                                <Ionicons name="chevron-down" size={12} color="#64748b" />
+                            </TouchableOpacity>
+
+                            {/* Sort Filter */}
+                            <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.filterDropdownLight]} onPress={() => setPickerModal({
+                                visible: true,
+                                title: TRANSLATIONS.filterSort || 'Sort',
+                                options: SORT_OPTIONS.map(o => ({ ...o, label: TRANSLATIONS[o.label] || o.label })),
+                                value: filterSort,
+                                onChange: setFilterSort
+                            })}>
+                                <Text style={[styles.filterDropdownText, !isDark && styles.filterDropdownTextLight]}>{TRANSLATIONS[currentSortLabel] || currentSortLabel}</Text>
+                                <Ionicons name="chevron-down" size={12} color="#64748b" />
+                            </TouchableOpacity>
+
+                            {/* Clear Filters Button */}
+                            <TouchableOpacity style={styles.clearFiltersBtn} onPress={() => {
+                                setStatusFilter('all');
+                                setFilterUrgency('all');
+                                setServiceFilter('all');
+                                setFilterSort('newest');
+                            }}>
+                                <Text style={styles.clearFiltersBtnText}>{TRANSLATIONS.clear || 'Clear'}</Text>
+                            </TouchableOpacity>
+                        </>
+                    )}
+
                 </View>
-
-                {showFilters && (
-                    <View style={styles.filterDropdownRow}>
-                        {/* Status Filter */}
-                        <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.filterDropdownLight]} onPress={() => setPickerModal({
-                            visible: true,
-                            title: TRANSLATIONS.filterStatus || 'Status',
-                            options: statusOptions,
-                            value: statusFilter,
-                            onChange: setStatusFilter
-                        })}>
-                            <Text style={[styles.filterDropdownText, !isDark && styles.filterDropdownTextLight]}>{currentStatusLabel}</Text>
-                            <Ionicons name="chevron-down" size={12} color="#64748b" />
-                        </TouchableOpacity>
-
-                        {/* Service Type Filter */}
-                        <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.filterDropdownLight]} onPress={() => setPickerModal({
-                            visible: true,
-                            title: TRANSLATIONS.filterService || 'Service',
-                            options: serviceOptions,
-                            value: serviceFilter,
-                            onChange: setServiceFilter
-                        })}>
-                            <Text style={[styles.filterDropdownText, !isDark && styles.filterDropdownTextLight]}>{currentServiceLabel}</Text>
-                            <Ionicons name="chevron-down" size={12} color="#64748b" />
-                        </TouchableOpacity>
-                    </View>
-                )}
             </View>
         );
     };
 
     const renderOrders = () => {
-        // --- Order Renderers ---
+        // --- Needs Attention Orders ---
+        const needsActionOrders = orders.filter(o =>
+            o.is_disputed ||
+            o.status === 'completed' || // Awaiting payment
+            (o.status?.includes('canceled')) ||
+            (['claimed', 'started'].includes(o.status) &&
+                new Date() - new Date(o.updated_at) > 24 * 60 * 60 * 1000) // Stuck > 24h
+        );
+
+        // --- Needs Attention Section ---
+        const renderNeedsAttention = () => {
+            if (needsActionOrders.length === 0) return null;
+
+            // Filter Needs Attention
+            const filteredAttention = needsActionOrders.filter(o => {
+                if (filterAttentionType === 'All') return true;
+                if (filterAttentionType === 'Stuck' && !o.is_disputed && o.status !== 'completed' && !o.status?.includes('canceled')) return true;
+                if (filterAttentionType === 'Disputed' && o.is_disputed) return true;
+                if (filterAttentionType === 'Payment' && o.status === 'completed') return true;
+                if (filterAttentionType === 'Canceled' && o.status?.includes('canceled')) return true;
+                return false;
+            });
+
+            // Sort
+            const sortedNeedsAction = [...filteredAttention].sort((a, b) => {
+                const dateA = new Date(a.created_at).getTime();
+                const dateB = new Date(b.created_at).getTime();
+                return sortOrder === 'newest' ? dateB - dateA : dateA - dateB;
+            });
+
+            if (sortedNeedsAction.length === 0 && filterAttentionType !== 'All') return (
+                <View style={styles.attentionContainer}>
+                    <View style={styles.attentionHeaderRow}>
+                        <TouchableOpacity style={styles.attentionHeader} onPress={() => setShowNeedsAttention(!showNeedsAttention)}>
+                            <Text style={[styles.attentionTitle, !isDark && { color: '#ef4444' }]}>! {TRANSLATIONS.needsAttention || 'Needs Attention'} ({needsActionOrders.length})</Text>
+                        </TouchableOpacity>
+                    </View>
+                    <Text style={{ color: '#94a3b8', textAlign: 'center', padding: 10 }}>{TRANSLATIONS.msgNoMatch || 'No matching orders'}</Text>
+                </View>
+            );
+
+            return (
+                <View style={styles.attentionContainer}>
+                    <View style={styles.attentionHeaderRow}>
+                        <TouchableOpacity style={styles.attentionHeader} onPress={() => setShowNeedsAttention(!showNeedsAttention)}>
+                            <Text style={[styles.attentionTitle, !isDark && { color: '#ef4444' }]}>! {TRANSLATIONS.needsAttention || 'Needs Attention'} ({needsActionOrders.length})</Text>
+                            <Text style={[styles.attentionChevron, !isDark && { color: '#64748b' }]}>{showNeedsAttention ? '▲' : '▼'}</Text>
+                        </TouchableOpacity>
+
+                        <View style={{ flexDirection: 'row', gap: 8 }}>
+                            {/* Attention Filter */}
+                            {showNeedsAttention && (
+                                <TouchableOpacity style={[styles.miniFilterBtn, !isDark && styles.btnLight]} onPress={() => setPickerModal({
+                                    visible: true,
+                                    title: TRANSLATIONS.filterIssueType || 'Issue Type',
+                                    options: ATTENTION_FILTER_OPTIONS.map(o => ({ ...o, label: TRANSLATIONS[o.label] || o.label })),
+                                    value: filterAttentionType,
+                                    onChange: setFilterAttentionType
+                                })}>
+                                    <Text style={styles.miniFilterText}>{TRANSLATIONS[ATTENTION_FILTER_OPTIONS.find(o => o.id === filterAttentionType)?.label] || filterAttentionType}</Text>
+                                    <Text style={styles.miniFilterArrow}>▾</Text>
+                                </TouchableOpacity>
+                            )}
+
+                            {/* Sort Button */}
+                            {showNeedsAttention && (
+                                <TouchableOpacity style={styles.cleanSortBtn} onPress={() => setSortOrder(prev => prev === 'newest' ? 'oldest' : 'newest')}>
+                                    <Text style={styles.cleanSortText}>{sortOrder === 'newest' ? (TRANSLATIONS.btnSortNewest || '↓ Newest') : (TRANSLATIONS.btnSortOldest || '↑ Oldest')}</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    </View>
+                    {showNeedsAttention && (
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.attentionScroll}>
+                            {sortedNeedsAction.map(o => (
+                                <TouchableOpacity key={o.id} style={[styles.attentionCard, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(o)}>
+                                    <Text style={styles.attentionBadge}>
+                                        {o.is_disputed ? (TRANSLATIONS.badgeDispute || 'Dispute') :
+                                            o.status === 'completed' ? (TRANSLATIONS.badgeUnpaid || 'Unpaid') :
+                                                o.status?.includes('canceled') ? (TRANSLATIONS.badgeCanceled || 'Canceled') :
+                                                    (TRANSLATIONS.badgeStuck || 'Stuck')}
+                                    </Text>
+                                    <Text style={[styles.attentionService, !isDark && styles.textDark]}>{getServiceLabel(o.service_type, language)}</Text>
+                                    <Text style={[styles.attentionAddr, !isDark && { color: '#64748b' }]} numberOfLines={1}>{o.full_address}</Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    )}
+                </View>
+            );
+        };
+
+        // --- Order Card Renderer (Enhanced) ---
         const renderCard = ({ item }) => (
-            <TouchableOpacity style={[styles.orderCard, !isDark && styles.orderCardLight]} onPress={() => setDetailsOrder(item)}>
+            <TouchableOpacity style={[styles.orderCard, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(item)}>
                 <View style={styles.cardHeader}>
                     <Text style={[styles.cardService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, language)}</Text>
                     <View style={[styles.cardStatus, { backgroundColor: STATUS_COLORS[item.status] || '#64748b' }]}>
                         <Text style={styles.cardStatusText}>{getOrderStatusLabel(item.status, language)}</Text>
                     </View>
                 </View>
-                <Text style={styles.cardAddr} numberOfLines={2}>{item.full_address}</Text>
+                <Text style={[styles.cardAddr, !isDark && { color: '#64748b' }]} numberOfLines={2}>{item.full_address}</Text>
                 <View style={styles.cardFooter}>
-                    <Text style={styles.cardClient}>{item.client?.full_name || 'N/A'}</Text>
+                    <Text style={[styles.cardClient, !isDark && styles.textDark]}>{item.client?.full_name || 'N/A'}</Text>
                     <Text style={styles.cardTime}>{getTimeAgo(item.created_at, language)}</Text>
                 </View>
+                {/* Urgency Badge */}
+                {item.urgency && item.urgency !== 'planned' && (
+                    <View style={[styles.cardUrgencyBadge, item.urgency === 'emergency' && styles.cardUrgencyEmergency]}>
+                        <Text style={styles.cardUrgencyText}>{TRANSLATIONS[`urgency${item.urgency.charAt(0).toUpperCase() + item.urgency.slice(1)}`] || item.urgency.toUpperCase()}</Text>
+                    </View>
+                )}
+                {/* Pay Button for completed orders */}
+                {item.status === 'completed' && item.final_price && (
+                    <TouchableOpacity style={styles.cardPayBtn} onPress={(e) => { e.stopPropagation?.(); setDetailsOrder(item); setShowPaymentModal(true); }}>
+                        <Text style={styles.cardPayText}>{TRANSLATIONS.btnPay || 'Pay'} {item.final_price}c</Text>
+                    </TouchableOpacity>
+                )}
             </TouchableOpacity>
         );
 
+        // --- Compact Row Renderer (Enhanced - status on LEFT) ---
         const renderCompactRow = ({ item }) => (
-            <TouchableOpacity style={[styles.compactRow, !isDark && styles.compactRowLight]} onPress={() => setDetailsOrder(item)}>
-                <View style={styles.compactLeft}>
-                    <View style={[styles.statusDot, { backgroundColor: STATUS_COLORS[item.status] || '#64748b' }]} />
-                    <View style={styles.compactMain}>
-                        <View style={styles.compactTopRow}>
-                            <Text style={styles.compactId}>#{item.id?.slice(-6)}</Text>
-                            <Text style={[styles.compactService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, language)}</Text>
-                        </View>
-                        <Text style={styles.compactAddr} numberOfLines={1}>{item.full_address}</Text>
-                        <View style={styles.compactBottomRow}>
-                            <Text style={styles.compactClient}>{item.client?.full_name || 'N/A'}</Text>
-                            <Text style={styles.compactClient}>•</Text>
-                            <Text style={styles.compactClient}>{getTimeAgo(item.created_at, language)}</Text>
-                        </View>
+            <TouchableOpacity style={[styles.compactRow, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(item)}>
+                {/* Status indicator on LEFT */}
+                <View style={[styles.compactStatusBadge, { backgroundColor: STATUS_COLORS[item.status] || '#64748b' }]}>
+                    <Text style={styles.compactStatusText}>{getOrderStatusLabel(item.status, language)}</Text>
+                </View>
+                {/* Main info */}
+                <View style={styles.compactMain}>
+                    <View style={styles.compactTopRow}>
+                        <Text style={[styles.compactId, !isDark && { color: '#64748b' }]}>#{item.id?.slice(-6)}</Text>
+                        <Text style={[styles.compactService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, language)}</Text>
+                        {item.urgency && item.urgency !== 'planned' && (
+                            <Text style={[styles.compactUrgency, item.urgency === 'emergency' && styles.compactUrgencyEmergency]}>
+                                {TRANSLATIONS[`urgency${item.urgency.charAt(0).toUpperCase() + item.urgency.slice(1)}`] || item.urgency.toUpperCase()}
+                            </Text>
+                        )}
+                    </View>
+                    <Text style={[styles.compactAddr, !isDark && { color: '#64748b' }]} numberOfLines={1}>{item.full_address}</Text>
+                    <View style={styles.compactBottomRow}>
+                        <Text style={[styles.compactClient, !isDark && styles.textDark]}>{item.client?.full_name || 'N/A'}</Text>
+                        {item.master && <Text style={styles.compactMaster}>→ {item.master.full_name}</Text>}
+                        {item.final_price && <Text style={styles.compactPrice}>{item.final_price}c</Text>}
                     </View>
                 </View>
+                {/* Right side */}
                 <View style={styles.compactRight}>
-                    <View style={[styles.compactStatusBadge, { backgroundColor: STATUS_COLORS[item.status] || '#64748b' }]}>
-                        <Text style={styles.compactStatusText}>{getOrderStatusLabel(item.status, language)}</Text>
-                    </View>
-                    <Text style={styles.compactChevron}>›</Text>
+                    <Text style={styles.compactTime}>{getTimeAgo(item.created_at, language)}</Text>
+                    <Text style={[styles.compactChevron, !isDark && { color: '#64748b' }]}>›</Text>
                 </View>
             </TouchableOpacity>
         );
 
-        // --- Filter Logic ---
-        // --- Filter Logic ---
+        // --- Filter Logic (Enhanced with urgency and sort) ---
         const filtered = orders.filter(o => {
             // Service Filter
             if (serviceFilter !== 'all' && o.service_type !== serviceFilter) return false;
 
+            // Urgency Filter
+            if (filterUrgency !== 'all' && o.urgency !== filterUrgency) return false;
+
             // Status Filter
             if (statusFilter !== 'all') {
                 if (statusFilter === 'active') {
-                    // Active logic: placed, claimed, started
                     if (!['placed', 'claimed', 'started'].includes(o.status)) return false;
                 } else if (statusFilter === 'completed') {
                     if (o.status !== 'completed') return false;
                 } else if (statusFilter === 'canceled') {
-                    // Catch-all cancelled
                     if (!o.status?.includes('canceled')) return false;
                 } else {
-                    // Exact match for other statuses like 'placed', 'claimed'
                     if (o.status !== statusFilter) return false;
                 }
             }
@@ -1201,13 +1407,23 @@ export default function AdminDashboard({ navigation }) {
             return true;
         });
 
+        // Sort
+        const sorted = [...filtered].sort((a, b) => {
+            const dateA = new Date(a.created_at).getTime();
+            const dateB = new Date(b.created_at).getTime();
+            return filterSort === 'newest' ? dateB - dateA : dateA - dateB;
+        });
+
         // Pagination
-        const paginated = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-        const totalPages = Math.ceil(filtered.length / itemsPerPage);
+        const paginated = sorted.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+        const totalPages = Math.ceil(sorted.length / itemsPerPage);
 
         return (
             <View style={{ flex: 1, paddingHorizontal: 16 }}>
                 {renderHeader('Orders')}
+
+                {/* Needs Attention Section */}
+                {renderNeedsAttention()}
 
                 {/* Search */}
                 <View style={styles.searchRow}>
@@ -1240,7 +1456,7 @@ export default function AdminDashboard({ navigation }) {
                     renderItem={viewMode === 'cards' ? renderCard : renderCompactRow}
                     ListEmptyComponent={
                         <View style={{ alignItems: 'center', marginTop: 40 }}>
-                            <Text style={{ color: '#64748b' }}>No orders found</Text>
+                            <Text style={{ color: '#64748b' }}>{TRANSLATIONS.emptyList || 'No orders found'}</Text>
                         </View>
                     }
                     ListFooterComponent={
@@ -1263,18 +1479,6 @@ export default function AdminDashboard({ navigation }) {
 
         return (
             <View style={{ flex: 1 }}>
-                {/* Add Master Button Row */}
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 12 }}>
-                    <TouchableOpacity
-                        style={[styles.actionButton, { backgroundColor: '#22c55e', paddingHorizontal: 16, paddingVertical: 10 }]}
-                        onPress={() => { setAddUserRole('master'); setShowAddUserModal(true); }}
-                    >
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                            <Ionicons name="person-add" size={16} color="#fff" />
-                            <Text style={styles.actionButtonText}>{TRANSLATIONS.addMaster || 'Add Master'}</Text>
-                        </View>
-                    </TouchableOpacity>
-                </View>
                 {renderSearchBar()}
                 <FlatList
                     data={paginated}
@@ -1353,18 +1557,6 @@ export default function AdminDashboard({ navigation }) {
 
         return (
             <View style={{ flex: 1 }}>
-                {/* Add Dispatcher Button Row */}
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 12 }}>
-                    <TouchableOpacity
-                        style={[styles.actionButton, { backgroundColor: '#3b82f6', paddingHorizontal: 16, paddingVertical: 10 }]}
-                        onPress={() => { setAddUserRole('dispatcher'); setShowAddUserModal(true); }}
-                    >
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                            <Ionicons name="person-add" size={16} color="#fff" />
-                            <Text style={styles.actionButtonText}>{TRANSLATIONS.addDispatcher || 'Add Dispatcher'}</Text>
-                        </View>
-                    </TouchableOpacity>
-                </View>
                 {renderSearchBar()}
                 <FlatList
                     data={paginated}
@@ -1669,34 +1861,28 @@ export default function AdminDashboard({ navigation }) {
                         </TouchableOpacity>
                     </View>
 
-                    {/* Service Types Grid */}
-                    <View style={styles.serviceTypesGrid}>
+                    {/* Service Types List (Responsive - works on all screen sizes) */}
+                    <View style={styles.serviceTypesList}>
                         {serviceTypes.map((type) => (
-                            <View key={type.id} style={[styles.serviceTypeCard, !isDark && styles.serviceTypeCardLight]}>
-
-
-                                <View style={styles.serviceTypeContent}>
-                                    <Text style={[styles.serviceTypeName, !isDark && styles.textDark]} numberOfLines={1}>
+                            <View key={type.id} style={[styles.serviceTypeRow, !isDark && styles.serviceTypeRowLight]}>
+                                <View style={styles.serviceTypeRowInfo}>
+                                    <Text style={[styles.serviceTypeRowName, !isDark && styles.textDark]} numberOfLines={1}>
                                         {type.name_en}
                                     </Text>
-                                    <Text style={styles.serviceTypeSubName} numberOfLines={1}>
-                                        {type.name_ru || type.name_kg || '—'}
-                                    </Text>
-                                    <Text style={styles.serviceTypeCode}>
-                                        Code: {type.code || type.id}
+                                    <Text style={styles.serviceTypeRowMeta} numberOfLines={1}>
+                                        {type.name_ru || type.name_kg || '—'} • Code: {type.code || type.id}
                                     </Text>
                                 </View>
-
-                                <View style={styles.serviceTypeActions}>
+                                <View style={styles.serviceTypeRowActions}>
                                     <TouchableOpacity
                                         onPress={() => setServiceTypeModal({ visible: true, type })}
-                                        style={[styles.serviceTypeActionBtn, styles.serviceTypeEditBtn, !isDark && styles.serviceTypeActionBtnLight]}
+                                        style={[styles.serviceTypeRowBtn, styles.serviceTypeEditBtn, !isDark && styles.serviceTypeActionBtnLight]}
                                     >
                                         <Ionicons name="pencil" size={16} color="#3b82f6" />
                                     </TouchableOpacity>
                                     <TouchableOpacity
                                         onPress={() => handleDeleteServiceType(type.id)}
-                                        style={[styles.serviceTypeActionBtn, styles.serviceTypeDeleteBtn]}
+                                        style={[styles.serviceTypeRowBtn, styles.serviceTypeDeleteBtn]}
                                     >
                                         <Ionicons name="trash" size={16} color="#ef4444" />
                                     </TouchableOpacity>
@@ -1871,7 +2057,9 @@ export default function AdminDashboard({ navigation }) {
         <View style={{ flex: 1, paddingHorizontal: 16 }}>
             {renderHeader(TRANSLATIONS.tabPeople || 'People Management')}
 
-            <View style={{ alignItems: 'center', marginBottom: 20 }}>
+            {/* Header Row: Tabs on left, Add button on right */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+                {/* Tab Toggle (left-aligned) */}
                 <View style={{ flexDirection: 'row', backgroundColor: isDark ? '#0f172a' : '#e2e8f0', padding: 4, borderRadius: 100, borderWidth: 1, borderColor: isDark ? '#334155' : '#cbd5e1' }}>
                     <TouchableOpacity
                         style={[styles.tabBtn, peopleView === 'masters' && styles.tabBtnActive, !isDark && peopleView !== 'masters' && styles.tabBtnLight, { borderRadius: 100, paddingHorizontal: 20 }]}
@@ -1884,6 +2072,17 @@ export default function AdminDashboard({ navigation }) {
                         <Text style={[styles.tabBtnText, peopleView === 'staff' && styles.tabBtnTextActive, !isDark && peopleView !== 'staff' && styles.textDark]}>{TRANSLATIONS.peopleDispatchers || 'Dispatchers'}</Text>
                     </TouchableOpacity>
                 </View>
+
+                {/* Add Button (right side) */}
+                <TouchableOpacity
+                    style={[styles.actionButton, { backgroundColor: peopleView === 'masters' ? '#22c55e' : '#3b82f6', paddingHorizontal: 16, paddingVertical: 10, marginTop: 0 }]}
+                    onPress={() => { setAddUserRole(peopleView === 'masters' ? 'master' : 'dispatcher'); setShowAddUserModal(true); }}
+                >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <Ionicons name="person-add" size={16} color="#fff" />
+                        <Text style={styles.actionButtonText}>{peopleView === 'masters' ? (TRANSLATIONS.addMaster || 'Add Master') : (TRANSLATIONS.addDispatcher || 'Add Dispatcher')}</Text>
+                    </View>
+                </TouchableOpacity>
             </View>
 
             {peopleView === 'masters' ? renderMasters() : renderStaff()}
@@ -3120,7 +3319,7 @@ const styles = StyleSheet.create({
     viewToggleBtnText: { fontSize: 20, color: '#94a3b8' },
 
     // Order Card Styles (Dispatcher-style)
-    orderCard: { width: (SCREEN_WIDTH - 80) / 2, backgroundColor: 'rgba(30,41,59,0.9)', borderRadius: 12, padding: 14, marginBottom: 12, marginRight: 12 },
+    orderCard: { flex: 1, maxWidth: '48%', backgroundColor: 'rgba(30,41,59,0.9)', borderRadius: 12, padding: 14, marginBottom: 12, marginHorizontal: 4 },
     cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
     cardService: { fontSize: 14, fontWeight: '700', color: '#fff', textTransform: 'capitalize' },
     cardStatus: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
@@ -3144,6 +3343,10 @@ const styles = StyleSheet.create({
     compactRight: { flexDirection: 'row', alignItems: 'center' },
     compactTime: { fontSize: 11, color: '#64748b', marginRight: 8 },
     compactChevron: { fontSize: 18, color: '#64748b' },
+    compactUrgency: { fontSize: 9, fontWeight: '700', color: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.2)', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3 },
+    compactUrgencyEmergency: { color: '#ef4444', backgroundColor: 'rgba(239,68,68,0.2)' },
+    compactMaster: { fontSize: 11, color: '#22c55e' },
+    compactPrice: { fontSize: 11, fontWeight: '700', color: '#22c55e' },
 
     // Filter Styles (Dispatcher-style)
     filtersContainer: { marginBottom: 16 },
@@ -3157,6 +3360,43 @@ const styles = StyleSheet.create({
     filterDropdown: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, height: 40, borderRadius: 12, backgroundColor: 'rgba(71,85,105,0.3)', borderWidth: 1, borderColor: 'rgba(71,85,105,0.5)' },
     filterDropdownText: { fontSize: 13, fontWeight: '600', color: '#fff', marginRight: 8 },
     filterDropdownArrow: { fontSize: 12, color: '#64748b' },
+
+    // Clear Filters Button
+    clearFiltersBtn: { paddingHorizontal: 14, height: 40, borderRadius: 12, backgroundColor: 'rgba(239,68,68,0.2)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' },
+    clearFiltersBtnText: { fontSize: 13, fontWeight: '600', color: '#ef4444' },
+
+    // Needs Attention Section Styles
+    attentionContainer: { marginBottom: 16, backgroundColor: 'rgba(239,68,68,0.1)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)', padding: 12 },
+    attentionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+    attentionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    attentionTitle: { fontSize: 13, fontWeight: '700', color: '#ef4444' },
+    attentionChevron: { fontSize: 12, color: '#ef4444' },
+    attentionScroll: { marginTop: 8 },
+    attentionCard: { width: 140, backgroundColor: 'rgba(30,41,59,0.9)', borderRadius: 10, padding: 10, marginRight: 8 },
+    attentionBadge: { fontSize: 9, fontWeight: '700', color: '#fff', backgroundColor: '#ef4444', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start', marginBottom: 6 },
+    attentionService: { fontSize: 13, fontWeight: '700', color: '#fff', textTransform: 'capitalize' },
+    attentionAddr: { fontSize: 11, color: '#94a3b8', marginTop: 2 },
+
+    // Mini Filter Button (for Needs Attention)
+    miniFilterBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(71,85,105,0.3)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+    miniFilterText: { fontSize: 11, color: '#94a3b8', marginRight: 4 },
+    miniFilterArrow: { fontSize: 10, color: '#94a3b8' },
+
+    // Clean Sort Button
+    cleanSortBtn: { paddingHorizontal: 4 },
+    cleanSortText: { fontSize: 13, color: '#3b82f6', fontWeight: '500' },
+
+    // Card Urgency Badge
+    cardUrgencyBadge: { marginTop: 8, paddingHorizontal: 8, paddingVertical: 4, backgroundColor: 'rgba(245,158,11,0.2)', borderRadius: 4, alignSelf: 'flex-start' },
+    cardUrgencyEmergency: { backgroundColor: 'rgba(239,68,68,0.2)' },
+    cardUrgencyText: { fontSize: 10, fontWeight: '700', color: '#f59e0b' },
+
+    // Card Pay Button
+    cardPayBtn: { backgroundColor: '#22c55e', borderRadius: 8, paddingVertical: 8, alignItems: 'center', marginTop: 8 },
+    cardPayText: { fontSize: 12, fontWeight: '700', color: '#fff' },
+
+    // Light Mode Card Style
+    cardLight: { backgroundColor: '#ffffff', borderColor: '#e2e8f0', borderWidth: 1, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2 },
 
     // Picker Modal Styles
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', paddingHorizontal: 20, zIndex: 9999 },
@@ -3472,6 +3712,49 @@ const styles = StyleSheet.create({
         flexWrap: 'wrap',
         gap: 16,
     },
+    // Service Types List (Responsive alternative to grid)
+    serviceTypesList: {
+        gap: 8,
+    },
+    serviceTypeRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: '#1e293b',
+        borderRadius: 12,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    serviceTypeRowLight: {
+        backgroundColor: '#fff',
+        borderColor: '#e2e8f0',
+    },
+    serviceTypeRowInfo: {
+        flex: 1,
+        marginRight: 16,
+    },
+    serviceTypeRowName: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#fff',
+        marginBottom: 2,
+    },
+    serviceTypeRowMeta: {
+        fontSize: 12,
+        color: '#64748b',
+    },
+    serviceTypeRowActions: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    serviceTypeRowBtn: {
+        width: 36,
+        height: 36,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
     serviceTypeCard: {
         width: 'calc(25% - 12px)',
         minWidth: 220,
@@ -3577,6 +3860,7 @@ const styles = StyleSheet.create({
     },
     sidebarDrawerContent: {
         width: 420,
+        maxWidth: '100%', // Prevent overflow on small screens
         backgroundColor: '#0f172a',
         height: '100%',
         borderLeftWidth: 1,
