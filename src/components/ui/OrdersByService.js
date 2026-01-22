@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 
-export const OrdersByService = ({ data, isDark = true }) => {
+export const OrdersByService = ({ data, isDark = true, translations = {} }) => {
     // data: [{name: 'Appliance Repair', count: 26, percentage: 30}, ...]
 
     // Safety check
@@ -11,7 +11,7 @@ export const OrdersByService = ({ data, isDark = true }) => {
 
     return (
         <View style={[styles.card, !isDark && styles.cardLight]}>
-            <Text style={[styles.title, !isDark && styles.textDark]}>Orders by Service</Text>
+            <Text style={[styles.title, !isDark && styles.textDark]}>{translations.ordersByService || 'Orders by Service'}</Text>
             <View style={styles.list}>
                 {data.map((item) => (
                     <View key={item.name} style={styles.row}>

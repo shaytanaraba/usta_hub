@@ -124,16 +124,31 @@ const getServiceLabel = (type, lang) => {
     return labels[type]?.[lang] || labels[type]?.['en'] || type;
 };
 
-const getOrderStatusLabel = (status, lang) => {
+const getOrderStatusLabel = (status, lang, translations) => {
     if (!status) return '';
-    // Mapping or simple format
+    // Use translation keys if available
+    const statusTranslationMap = {
+        'placed': translations?.statusPlaced,
+        'claimed': translations?.statusClaimed,
+        'started': translations?.statusStarted,
+        'completed': translations?.statusCompleted,
+        'confirmed': translations?.statusConfirmed,
+        'canceled_by_master': translations?.statusCanceledByMaster,
+        'canceled_by_client': translations?.statusCanceledByClient,
+        'reopened': translations?.statusReopened,
+        'expired': translations?.statusExpired,
+    };
+    const translated = statusTranslationMap[status];
+    if (translated) return translated.toUpperCase();
+    // Fallback to formatted status
     return status.replace(/_/g, ' ').toUpperCase();
 };
 // -----------------------------------------------
 
 export default function AdminDashboard({ navigation }) {
     const { showToast } = useToast();
-    const { t: TRANSLATIONS, language, setLanguage } = useLocalization();
+    const { translations, language, setLanguage } = useLocalization();
+    const TRANSLATIONS = translations[language] || translations['en'] || {};
 
     // UI State
     const [activeTab, setActiveTab] = useState('overview');
@@ -752,10 +767,10 @@ export default function AdminDashboard({ navigation }) {
 
     // Menu items for admin sidebar
     const MENU_ITEMS = [
-        { key: 'overview', label: TRANSLATIONS.tabOverview || 'Overview', icon: 'bar-chart' },
-        { key: 'orders', label: TRANSLATIONS.tabOrders || 'Orders', icon: 'list' },
-        { key: 'people', label: TRANSLATIONS.tabPeople || 'People', icon: 'people' },
-        { key: 'settings', label: TRANSLATIONS.tabSettings || 'Settings', icon: 'settings' },
+        { key: 'overview', label: TRANSLATIONS.overview || 'Overview', icon: 'bar-chart' },
+        { key: 'orders', label: TRANSLATIONS.orders || 'Orders', icon: 'list' },
+        { key: 'people', label: TRANSLATIONS.people || 'People', icon: 'people' },
+        { key: 'settings', label: TRANSLATIONS.settings || 'Settings', icon: 'settings' },
     ];
 
     // Hamburger Sidebar (Modal-based like Dispatcher)
@@ -883,40 +898,41 @@ export default function AdminDashboard({ navigation }) {
 
         return (
             <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
-                {renderHeader('Overview')}
+                {renderHeader(TRANSLATIONS.overview || 'Overview')}
 
                 {/* Date Filter */}
                 <DateRangeFilter
                     value={dashboardFilter}
                     onChange={setDashboardFilter}
                     isDark={isDark}
+                    translations={TRANSLATIONS}
                 />
 
                 {/* Stats Grid */}
                 <View style={styles.statsGrid}>
                     <StatCard
-                        label="Total Orders"
+                        label={TRANSLATIONS.totalOrders || 'Total Orders'}
                         value={stats.totalOrders || 0}
                         color="#3b82f6"
                         onPress={() => handleStatClick('total')}
                         isDark={isDark}
                     />
                     <StatCard
-                        label="Active Jobs"
+                        label={TRANSLATIONS.activeJobs || 'Active Jobs'}
                         value={stats.activeJobs || 0}
                         color="#8b5cf6"
                         onPress={() => handleStatClick('active')}
                         isDark={isDark}
                     />
                     <StatCard
-                        label="Pending"
+                        label={TRANSLATIONS.pending || 'Pending'}
                         value={stats.placedOrders || 0}
                         color="#f59e0b"
                         onPress={() => handleStatClick('pending')}
                         isDark={isDark}
                     />
                     <StatCard
-                        label="Confirmed"
+                        label={TRANSLATIONS.confirmed || 'Confirmed'}
                         value={stats.confirmedOrders || 0}
                         color="#22c55e"
                         onPress={() => handleStatClick('confirmed')}
@@ -927,17 +943,17 @@ export default function AdminDashboard({ navigation }) {
                 {/* Balance Stats Row */}
                 <View style={[styles.statsGrid, { marginTop: 8 }]}>
                     <StatCard
-                        label="Total Balances"
+                        label={TRANSLATIONS.totalBalances || 'Total Balances'}
                         value={`${totalMasterBalances.toLocaleString()} сом`}
                         color="#22c55e"
-                        subtitle={`${masters.length} masters`}
+                        subtitle={`${masters.length} ${TRANSLATIONS.mastersCount || 'masters'}`}
                         isDark={isDark}
                     />
                     <StatCard
-                        label="Low Balance"
+                        label={TRANSLATIONS.lowBalance || 'Low Balance'}
                         value={lowBalanceCount}
                         color="#ef4444"
-                        subtitle="Below 500 сом"
+                        subtitle={TRANSLATIONS.below500 || 'Below 500 сом'}
                         onPress={() => { setActiveTab('people'); setPeopleView('masters'); }}
                         isDark={isDark}
                     />
@@ -947,8 +963,8 @@ export default function AdminDashboard({ navigation }) {
                 <View style={styles.chartsRow}>
                     {/* Revenue Trend */}
                     <View style={[styles.chartCard, !isDark && styles.chartCardLight, { flex: 2, marginRight: 16, minWidth: 350 }]}>
-                        <Text style={[styles.chartTitle, !isDark && styles.textDark]}>Revenue Trend</Text>
-                        <Text style={styles.chartSubtitle}>Selected Period</Text>
+                        <Text style={[styles.chartTitle, !isDark && styles.textDark]}>{TRANSLATIONS.revenueTrendTitle || 'Revenue Trend'}</Text>
+                        <Text style={styles.chartSubtitle}>{TRANSLATIONS.selectedPeriod || 'Selected Period'}</Text>
 
                         <View style={{ alignItems: 'center' }}>
                             <BarChart
@@ -990,7 +1006,7 @@ export default function AdminDashboard({ navigation }) {
 
                     {/* Orders by Service */}
                     <View style={{ flex: 1, minWidth: 320 }}>
-                        <OrdersByService data={stats.serviceBreakdown || {}} isDark={isDark} />
+                        <OrdersByService data={stats.serviceBreakdown || {}} isDark={isDark} translations={TRANSLATIONS} />
                     </View>
                 </View>
 
@@ -998,7 +1014,7 @@ export default function AdminDashboard({ navigation }) {
                 <View style={styles.chartsRow}>
                     {/* Order Status Bar Chart */}
                     <View style={{ flex: 1, marginRight: 16, minWidth: 300 }}>
-                        <StatusChart data={stats.statusBreakdown || {}} isDark={isDark} />
+                        <StatusChart data={stats.statusBreakdown || {}} isDark={isDark} translations={TRANSLATIONS} />
                     </View>
 
                     {/* Commission Donut */}
@@ -1007,6 +1023,7 @@ export default function AdminDashboard({ navigation }) {
                             collected={commissionStats.totalCollected || 0}
                             outstanding={commissionStats.totalOutstanding || 0}
                             isDark={isDark}
+                            translations={TRANSLATIONS}
                         />
                     </View>
                 </View>
@@ -1320,7 +1337,7 @@ export default function AdminDashboard({ navigation }) {
                 <View style={styles.cardHeader}>
                     <Text style={[styles.cardService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, language)}</Text>
                     <View style={[styles.cardStatus, { backgroundColor: STATUS_COLORS[item.status] || '#64748b' }]}>
-                        <Text style={styles.cardStatusText}>{getOrderStatusLabel(item.status, language)}</Text>
+                        <Text style={styles.cardStatusText}>{getOrderStatusLabel(item.status, language, TRANSLATIONS)}</Text>
                     </View>
                 </View>
                 <Text style={[styles.cardAddr, !isDark && { color: '#64748b' }]} numberOfLines={2}>{item.full_address}</Text>
@@ -1348,7 +1365,7 @@ export default function AdminDashboard({ navigation }) {
             <TouchableOpacity style={[styles.compactRow, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(item)}>
                 {/* Status indicator on LEFT */}
                 <View style={[styles.compactStatusBadge, { backgroundColor: STATUS_COLORS[item.status] || '#64748b' }]}>
-                    <Text style={styles.compactStatusText}>{getOrderStatusLabel(item.status, language)}</Text>
+                    <Text style={styles.compactStatusText}>{getOrderStatusLabel(item.status, language, TRANSLATIONS)}</Text>
                 </View>
                 {/* Main info */}
                 <View style={styles.compactMain}>
@@ -1420,7 +1437,7 @@ export default function AdminDashboard({ navigation }) {
 
         return (
             <View style={{ flex: 1, paddingHorizontal: 16 }}>
-                {renderHeader('Orders')}
+                {renderHeader(TRANSLATIONS.orders || 'Orders')}
 
                 {/* Needs Attention Section */}
                 {renderNeedsAttention()}
@@ -1431,7 +1448,7 @@ export default function AdminDashboard({ navigation }) {
                         <Ionicons name="search" size={16} color="#64748b" style={{ marginRight: 8 }} />
                         <TextInput
                             style={[styles.searchInput, !isDark && styles.searchInputTextLight]}
-                            placeholder="Search orders..."
+                            placeholder={TRANSLATIONS.searchOrders || 'Search orders...'}
                             placeholderTextColor="#64748b"
                             value={searchQuery}
                             onChangeText={setSearchQuery}
@@ -1484,7 +1501,7 @@ export default function AdminDashboard({ navigation }) {
                     data={paginated}
                     keyExtractor={item => String(item.id)}
                     contentContainerStyle={{ gap: 8, paddingBottom: 20 }}
-                    ListEmptyComponent={<Text style={{ color: '#64748b', textAlign: 'center', marginTop: 20 }}>No masters found</Text>}
+                    ListEmptyComponent={<Text style={{ color: '#64748b', textAlign: 'center', marginTop: 20 }}>{TRANSLATIONS.noMastersFound || 'No masters found'}</Text>}
                     renderItem={({ item }) => (
                         <View style={[styles.listItemCard, !isDark && styles.listItemCardLight]}>
                             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1512,14 +1529,14 @@ export default function AdminDashboard({ navigation }) {
                                             onPress={() => { setSelectedMaster(item); setShowBalanceModal(true); }}
                                             style={[styles.miniActionBtn, { backgroundColor: 'rgba(59,130,246,0.1)', borderWidth: 1, borderColor: 'rgba(59,130,246,0.2)' }]}
                                         >
-                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#3b82f6' }}>TOP UP</Text>
+                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#3b82f6' }}>{TRANSLATIONS.topUp || 'TOP UP'}</Text>
                                         </TouchableOpacity>
 
                                         <TouchableOpacity
                                             onPress={() => setDetailsPerson({ ...item, type: 'master' })}
                                             style={[styles.miniActionBtn, { backgroundColor: isDark ? '#334155' : '#e2e8f0', borderWidth: 1, borderColor: isDark ? '#475569' : '#cbd5e1' }]}
                                         >
-                                            <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? '#94a3b8' : '#475569' }}>EDIT</Text>
+                                            <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? '#94a3b8' : '#475569' }}>{TRANSLATIONS.btnEdit || 'EDIT'}</Text>
                                         </TouchableOpacity>
 
                                         <TouchableOpacity
@@ -1527,7 +1544,7 @@ export default function AdminDashboard({ navigation }) {
                                             style={[styles.miniActionBtn, { backgroundColor: item.is_verified ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)', borderWidth: 1, borderColor: item.is_verified ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.2)' }]}
                                         >
                                             <Text style={{ fontSize: 10, fontWeight: '600', color: item.is_verified ? '#ef4444' : '#22c55e' }}>
-                                                {item.is_verified ? 'UNVERIFY' : 'VERIFY'}
+                                                {item.is_verified ? (TRANSLATIONS.unverify || 'UNVERIFY') : (TRANSLATIONS.verify || 'VERIFY')}
                                             </Text>
                                         </TouchableOpacity>
                                     </View>
@@ -1562,7 +1579,7 @@ export default function AdminDashboard({ navigation }) {
                     data={paginated}
                     keyExtractor={item => String(item.id)}
                     contentContainerStyle={{ gap: 8, paddingBottom: 20 }}
-                    ListEmptyComponent={<Text style={{ color: '#64748b', textAlign: 'center', marginTop: 20 }}>No dispatchers found</Text>}
+                    ListEmptyComponent={<Text style={{ color: '#64748b', textAlign: 'center', marginTop: 20 }}>{TRANSLATIONS.noDispatchersFound || 'No dispatchers found'}</Text>}
                     renderItem={({ item }) => (
                         <View style={[styles.listItemCard, !isDark && styles.listItemCardLight]}>
                             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1581,7 +1598,7 @@ export default function AdminDashboard({ navigation }) {
                                 <View style={{ alignItems: 'flex-end' }}>
                                     <View style={{ marginBottom: 6, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: item.is_active ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderRadius: 4, borderWidth: 1, borderColor: item.is_active ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)' }}>
                                         <Text style={{ fontSize: 11, color: item.is_active ? '#22c55e' : '#ef4444', fontWeight: '600' }}>
-                                            {item.is_active ? 'Active' : 'Inactive'}
+                                            {item.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
                                         </Text>
                                     </View>
                                     <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -1596,7 +1613,7 @@ export default function AdminDashboard({ navigation }) {
                                             style={[styles.miniActionBtn, { backgroundColor: item.is_active ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)', borderWidth: 1, borderColor: item.is_active ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.2)' }]}
                                         >
                                             <Text style={{ fontSize: 10, fontWeight: '600', color: item.is_active ? '#ef4444' : '#22c55e' }}>
-                                                {item.is_active ? 'DEACTIVATE' : 'ACTIVATE'}
+                                                {item.is_active ? (TRANSLATIONS.deactivate || 'DEACTIVATE') : (TRANSLATIONS.activate || 'ACTIVATE')}
                                             </Text>
                                         </TouchableOpacity>
                                     </View>
@@ -1636,7 +1653,7 @@ export default function AdminDashboard({ navigation }) {
                                     {TRANSLATIONS.configurationTitle || 'Configuration'}
                                 </Text>
                                 <Text style={styles.settingsSectionSubtitle}>
-                                    Platform-wide settings and parameters
+                                    {TRANSLATIONS.configurationSubtitle || 'Platform-wide settings and parameters'}
                                 </Text>
                             </View>
                         </View>
@@ -1650,7 +1667,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.settingsBtn, styles.settingsBtnSecondary, !isDark && styles.settingsBtnSecondaryLight]}
                                     >
                                         <Ionicons name="close" size={16} color={isDark ? '#94a3b8' : '#64748b'} />
-                                        <Text style={[styles.settingsBtnText, !isDark && { color: '#64748b' }]}>Cancel</Text>
+                                        <Text style={[styles.settingsBtnText, !isDark && { color: '#64748b' }]}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                                     </TouchableOpacity>
                                     <TouchableOpacity
                                         onPress={async () => {
@@ -1680,7 +1697,7 @@ export default function AdminDashboard({ navigation }) {
                                         ) : (
                                             <>
                                                 <Ionicons name="checkmark" size={16} color="#fff" />
-                                                <Text style={[styles.settingsBtnText, { color: '#fff' }]}>Save Changes</Text>
+                                                <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.saveChanges || 'Save Changes'}</Text>
                                             </>
                                         )}
                                     </TouchableOpacity>
@@ -1701,7 +1718,7 @@ export default function AdminDashboard({ navigation }) {
                                     style={[styles.settingsBtn, styles.settingsBtnOutline, !isDark && styles.settingsBtnOutlineLight]}
                                 >
                                     <Ionicons name="pencil" size={16} color="#3b82f6" />
-                                    <Text style={[styles.settingsBtnText, { color: '#3b82f6' }]}>Edit Settings</Text>
+                                    <Text style={[styles.settingsBtnText, { color: '#3b82f6' }]}>{TRANSLATIONS.editSettings || 'Edit Settings'}</Text>
                                 </TouchableOpacity>
                             )}
                         </View>
@@ -1712,8 +1729,8 @@ export default function AdminDashboard({ navigation }) {
                         <View style={styles.settingsGrid}>
                             {/* Row 1 */}
                             <View style={styles.settingsGridItem}>
-                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>Base Payout</Text>
-                                <Text style={styles.settingsFieldHint}>Standard Call-out Fee</Text>
+                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.basePayout || 'Base Payout'}</Text>
+                                <Text style={styles.settingsFieldHint}>{TRANSLATIONS.standardCallout || 'Standard Call-out Fee'}</Text>
                                 {isEditing ? (
                                     <View style={styles.settingsInputWrapper}>
                                         <TextInput
@@ -1734,8 +1751,8 @@ export default function AdminDashboard({ navigation }) {
                             </View>
 
                             <View style={styles.settingsGridItem}>
-                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>Commission Rate</Text>
-                                <Text style={styles.settingsFieldHint}>Platform commission percentage</Text>
+                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.commissionRate || 'Commission Rate'}</Text>
+                                <Text style={styles.settingsFieldHint}>{TRANSLATIONS.platformCommission || 'Platform commission percentage'}</Text>
                                 {isEditing ? (
                                     <View style={styles.settingsInputWrapper}>
                                         <TextInput
@@ -1757,8 +1774,8 @@ export default function AdminDashboard({ navigation }) {
 
                             {/* Row 2 */}
                             <View style={styles.settingsGridItem}>
-                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>Price Deviation</Text>
-                                <Text style={styles.settingsFieldHint}>Threshold for price alerts</Text>
+                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.priceDeviation || 'Price Deviation'}</Text>
+                                <Text style={styles.settingsFieldHint}>{TRANSLATIONS.thresholdAlerts || 'Threshold for price alerts'}</Text>
                                 {isEditing ? (
                                     <View style={styles.settingsInputWrapper}>
                                         <TextInput
@@ -1779,8 +1796,8 @@ export default function AdminDashboard({ navigation }) {
                             </View>
 
                             <View style={styles.settingsGridItem}>
-                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>Auto-Claim Timeout</Text>
-                                <Text style={styles.settingsFieldHint}>Minutes before order expires</Text>
+                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.autoClaimTimeout || 'Auto-Claim Timeout'}</Text>
+                                <Text style={styles.settingsFieldHint}>{TRANSLATIONS.minutesExpire || 'Minutes before order expires'}</Text>
                                 {isEditing ? (
                                     <View style={styles.settingsInputWrapper}>
                                         <TextInput
@@ -1802,8 +1819,8 @@ export default function AdminDashboard({ navigation }) {
 
                             {/* Row 3 */}
                             <View style={styles.settingsGridItem}>
-                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>Order Expiry</Text>
-                                <Text style={styles.settingsFieldHint}>Hours until unclaimed orders expire</Text>
+                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.orderExpiry || 'Order Expiry'}</Text>
+                                <Text style={styles.settingsFieldHint}>{TRANSLATIONS.hoursExpire || 'Hours until unclaimed orders expire'}</Text>
                                 {isEditing ? (
                                     <View style={styles.settingsInputWrapper}>
                                         <TextInput
@@ -1846,7 +1863,7 @@ export default function AdminDashboard({ navigation }) {
                                     {TRANSLATIONS.serviceTypesTitle || 'Service Types'}
                                 </Text>
                                 <Text style={styles.settingsSectionSubtitle}>
-                                    Manage available service categories
+                                    {TRANSLATIONS.serviceTypesSubtitle || 'Manage available service categories'}
                                 </Text>
                             </View>
                         </View>
@@ -1857,7 +1874,7 @@ export default function AdminDashboard({ navigation }) {
                             style={[styles.settingsBtn, styles.settingsBtnPrimary]}
                         >
                             <Ionicons name="add" size={18} color="#fff" />
-                            <Text style={[styles.settingsBtnText, { color: '#fff' }]}>Add Service Type</Text>
+                            <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.addServiceType || 'Add Service Type'}</Text>
                         </TouchableOpacity>
                     </View>
 
@@ -1867,10 +1884,10 @@ export default function AdminDashboard({ navigation }) {
                             <View key={type.id} style={[styles.serviceTypeRow, !isDark && styles.serviceTypeRowLight]}>
                                 <View style={styles.serviceTypeRowInfo}>
                                     <Text style={[styles.serviceTypeRowName, !isDark && styles.textDark]} numberOfLines={1}>
-                                        {type.name_en}
+                                        {type[`name_${language}`] || type.name_en || type.id}
                                     </Text>
                                     <Text style={styles.serviceTypeRowMeta} numberOfLines={1}>
-                                        {type.name_ru || type.name_kg || '—'} • Code: {type.code || type.id}
+                                        {language !== 'ru' && type.name_ru ? type.name_ru : (language !== 'en' && type.name_en ? type.name_en : type.name_kg)} • {TRANSLATIONS.code || 'Code:'} {type.code || type.id}
                                     </Text>
                                 </View>
                                 <View style={styles.serviceTypeRowActions}>
@@ -1894,8 +1911,8 @@ export default function AdminDashboard({ navigation }) {
                         {serviceTypes.length === 0 && (
                             <View style={[styles.settingsEmptyState, !isDark && styles.settingsEmptyStateLight]}>
                                 <Ionicons name="construct-outline" size={48} color="#64748b" />
-                                <Text style={styles.settingsEmptyText}>No service types configured</Text>
-                                <Text style={styles.settingsEmptyHint}>Add your first service type to get started</Text>
+                                <Text style={styles.settingsEmptyText}>{TRANSLATIONS.noServiceTypes || 'No service types configured'}</Text>
+                                <Text style={styles.settingsEmptyHint}>{TRANSLATIONS.addFirstService || 'Add your first service type to get started'}</Text>
                             </View>
                         )}
                     </View>
@@ -1939,10 +1956,10 @@ export default function AdminDashboard({ navigation }) {
                             </View>
                             <View>
                                 <Text style={[styles.sidebarDrawerTitle, !isDark && styles.textDark]}>
-                                    {serviceTypeModal.type ? 'Edit Service Type' : 'Add Service Type'}
+                                    {serviceTypeModal.type ? (TRANSLATIONS.editServiceType || 'Edit Service Type') : (TRANSLATIONS.addServiceType || 'Add Service Type')}
                                 </Text>
                                 <Text style={styles.sidebarDrawerSubtitle}>
-                                    {serviceTypeModal.type ? 'Modify existing service' : 'Create a new service category'}
+                                    {serviceTypeModal.type ? (TRANSLATIONS.modifyExistingService || 'Modify existing service') : (TRANSLATIONS.createNewCategory || 'Create a new service category')}
                                 </Text>
                             </View>
                         </View>
@@ -1960,7 +1977,7 @@ export default function AdminDashboard({ navigation }) {
                             {/* Code Field */}
                             <View style={styles.sidebarFormGroup}>
                                 <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
-                                    Code (Unique ID) {serviceTypeModal.type && <Text style={{ color: '#64748b' }}>• Read-only</Text>}
+                                    {TRANSLATIONS.codeUnique || 'Code (Unique ID)'} {serviceTypeModal.type && <Text style={{ color: '#64748b' }}>• {TRANSLATIONS.codeReadOnly || 'Read-only'}</Text>}
                                 </Text>
                                 <TextInput
                                     style={[
@@ -1979,12 +1996,12 @@ export default function AdminDashboard({ navigation }) {
                             {/* Names Section */}
                             <View style={[styles.sidebarFormSection, !isDark && styles.sidebarFormSectionLight]}>
                                 <Text style={styles.sidebarFormSectionTitle}>
-                                    <Ionicons name="globe-outline" size={14} color="#64748b" /> Localized Names
+                                    <Ionicons name="globe-outline" size={14} color="#64748b" /> {TRANSLATIONS.localizedNames || 'Localized Names'}
                                 </Text>
 
                                 <View style={styles.sidebarFormGroup}>
                                     <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
-                                        English Name
+                                        {TRANSLATIONS.englishName || 'English Name'}
                                     </Text>
                                     <TextInput
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
@@ -1997,7 +2014,7 @@ export default function AdminDashboard({ navigation }) {
 
                                 <View style={styles.sidebarFormGroup}>
                                     <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
-                                        Russian Name
+                                        {TRANSLATIONS.russianName || 'Russian Name'}
                                     </Text>
                                     <TextInput
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
@@ -2010,7 +2027,7 @@ export default function AdminDashboard({ navigation }) {
 
                                 <View style={styles.sidebarFormGroup}>
                                     <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
-                                        Kyrgyz Name
+                                        {TRANSLATIONS.kyrgyzName || 'Kyrgyz Name'}
                                     </Text>
                                     <TextInput
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
@@ -2032,7 +2049,7 @@ export default function AdminDashboard({ navigation }) {
                             style={[styles.sidebarDrawerBtn, styles.sidebarDrawerBtnSecondary, !isDark && styles.sidebarDrawerBtnSecondaryLight]}
                             onPress={() => setServiceTypeModal({ visible: false, type: null })}
                         >
-                            <Text style={[styles.sidebarDrawerBtnText, { color: isDark ? '#94a3b8' : '#64748b' }]}>Cancel</Text>
+                            <Text style={[styles.sidebarDrawerBtnText, { color: isDark ? '#94a3b8' : '#64748b' }]}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={[styles.sidebarDrawerBtn, styles.sidebarDrawerBtnPrimary]}
@@ -2043,7 +2060,7 @@ export default function AdminDashboard({ navigation }) {
                                 <ActivityIndicator color="#fff" size="small" />
                             ) : (
                                 <Text style={[styles.sidebarDrawerBtnText, { color: '#fff' }]}>
-                                    {serviceTypeModal.type ? 'Update Service' : 'Create Service'}
+                                    {serviceTypeModal.type ? (TRANSLATIONS.updateService || 'Update Service') : (TRANSLATIONS.createService || 'Create Service')}
                                 </Text>
                             )}
                         </TouchableOpacity>
@@ -2096,29 +2113,29 @@ export default function AdminDashboard({ navigation }) {
                 <TouchableOpacity onPress={() => setActiveTab('orders')} style={{ marginRight: 10 }}>
                     <Text style={{ color: '#94a3b8', fontSize: 20 }}>←</Text>
                 </TouchableOpacity>
-                <Text style={[styles.pageTitle, !isDark && styles.textDark]}>Create New Order</Text>
+                <Text style={[styles.pageTitle, !isDark && styles.textDark]}>{TRANSLATIONS.createNewOrder || 'Create New Order'}</Text>
             </View>
             <ScrollView style={{ flex: 1, marginTop: 20 }} showsVerticalScrollIndicator={false}>
                 {/* Client */}
-                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>Client Phone *</Text>
+                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.clientPhoneRequired || 'Client Phone *'}</Text>
                 <TextInput style={[styles.input, !isDark && styles.inputLight, { marginBottom: 15 }]} placeholder="+996..." placeholderTextColor="#64748b"
                     value={newOrder.clientPhone} onChangeText={t => setNewOrder({ ...newOrder, clientPhone: t })} keyboardType="phone-pad" />
 
-                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>Client Name</Text>
+                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.clientName || 'Client Name'}</Text>
                 <TextInput style={[styles.input, !isDark && styles.inputLight, { marginBottom: 15 }]} placeholder="Name" placeholderTextColor="#64748b"
                     value={newOrder.clientName} onChangeText={t => setNewOrder({ ...newOrder, clientName: t })} />
 
                 {/* Location */}
-                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>District *</Text>
+                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.districtRequired || 'District *'}</Text>
                 <TextInput style={[styles.input, !isDark && styles.inputLight, { marginBottom: 15 }]} placeholder="e.g. Leninsky" placeholderTextColor="#64748b"
                     value={newOrder.area} onChangeText={t => setNewOrder({ ...newOrder, area: t })} />
 
-                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>Full Address *</Text>
+                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.fullAddressRequired || 'Full Address *'}</Text>
                 <TextInput style={[styles.input, !isDark && styles.inputLight, { marginBottom: 15 }]} placeholder="Street, House, Apt" placeholderTextColor="#64748b"
                     value={newOrder.fullAddress} onChangeText={t => setNewOrder({ ...newOrder, fullAddress: t })} />
 
                 {/* Service */}
-                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>Service Type</Text>
+                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.serviceType || 'Service Type'}</Text>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15 }}>
                     {SERVICE_TYPES.map(s => (
                         <TouchableOpacity key={s.id}
@@ -2132,9 +2149,9 @@ export default function AdminDashboard({ navigation }) {
                     ))}
                 </View>
 
-                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>Problem Description *</Text>
+                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.problemRequired || 'Problem Description *'}</Text>
                 <TextInput style={[styles.input, !isDark && styles.inputLight, { height: 80, textAlignVertical: 'top', marginBottom: 15 }]}
-                    placeholder="Describe the issue..." placeholderTextColor="#64748b" multiline numberOfLines={3}
+                    placeholder={TRANSLATIONS.describeIssue || 'Describe the issue...'} placeholderTextColor="#64748b" multiline numberOfLines={3}
                     value={newOrder.problemDescription} onChangeText={t => setNewOrder({ ...newOrder, problemDescription: t })} />
 
                 {/* Confirm */}
@@ -2142,14 +2159,14 @@ export default function AdminDashboard({ navigation }) {
                     <View style={{ width: 20, height: 20, borderRadius: 4, borderWidth: 1, borderColor: isDark ? '#fff' : '#0f172a', marginRight: 10, alignItems: 'center', justifyContent: 'center' }}>
                         {confirmChecked && <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 12 }}>✓</Text>}
                     </View>
-                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>Confirm Details</Text>
+                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{TRANSLATIONS.confirmDetails || 'Confirm Details'}</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                     style={[styles.actionButton, { opacity: confirmChecked ? 1 : 0.5 }]}
                     disabled={!confirmChecked}
                     onPress={handleCreateOrder}>
-                    {actionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.actionButtonText}>Create Order</Text>}
+                    {actionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.actionButtonText}>{TRANSLATIONS.createOrder || 'Create Order'}</Text>}
                 </TouchableOpacity>
                 <View style={{ height: 50 }} />
             </ScrollView>
@@ -2178,7 +2195,7 @@ export default function AdminDashboard({ navigation }) {
                         <ScrollView showsVerticalScrollIndicator={false}>
                             {/* Client Info */}
                             <View style={[styles.card, !isDark && styles.cardLight]}>
-                                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 10 }}>CLIENT</Text>
+                                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 10 }}>{TRANSLATIONS.client || 'CLIENT'}</Text>
                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                                     <View style={[styles.avatarCircle, { backgroundColor: '#3b82f6' }]}>
                                         <Text style={{ color: '#fff' }}>{detailsOrder.client?.full_name?.charAt(0) || 'C'}</Text>
@@ -2192,14 +2209,14 @@ export default function AdminDashboard({ navigation }) {
 
                             {/* Location */}
                             <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 10 }]}>
-                                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>ADDRESS</Text>
+                                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.addressSection || 'ADDRESS'}</Text>
                                 <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 16 }}>{detailsOrder.full_address}</Text>
                                 <Text style={{ color: isDark ? '#64748b' : '#94a3b8' }}>{detailsOrder.area}</Text>
                             </View>
 
                             {/* Problem */}
                             <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 10 }]}>
-                                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>PROBLEM</Text>
+                                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.problemSection || 'PROBLEM'}</Text>
                                 {isEditing ? (
                                     <TextInput style={[styles.input, !isDark && styles.inputLight, { height: 80 }]} multiline value={editForm.problem_description}
                                         onChangeText={t => setEditForm({ ...editForm, problem_description: t })} />
@@ -2213,10 +2230,10 @@ export default function AdminDashboard({ navigation }) {
                                 {isEditing ? (
                                     <>
                                         <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: '#22c55e' }]} onPress={handleSaveEdit}>
-                                            <Text style={styles.actionButtonText}>Save Changes</Text>
+                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.saveChanges || 'Save Changes'}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: '#ef4444' }]} onPress={() => setIsEditing(false)}>
-                                            <Text style={styles.actionButtonText}>Cancel</Text>
+                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                                         </TouchableOpacity>
                                     </>
                                 ) : (
@@ -2224,7 +2241,7 @@ export default function AdminDashboard({ navigation }) {
                                         setEditForm({ ...detailsOrder });
                                         setIsEditing(true);
                                     }}>
-                                        <Text style={styles.actionButtonText}>Edit Details</Text>
+                                        <Text style={styles.actionButtonText}>{TRANSLATIONS.editDetails || 'Edit Details'}</Text>
                                     </TouchableOpacity>
                                 )}
                             </View>
@@ -2240,7 +2257,7 @@ export default function AdminDashboard({ navigation }) {
                                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                         <Ionicons name="refresh" size={16} color="#fff" />
                                         <Text style={styles.actionButtonText}>
-                                            {actionLoading ? 'Processing...' : 'Reopen Order'}
+                                            {actionLoading ? (TRANSLATIONS.processing || 'Processing...') : (TRANSLATIONS.reopenOrder || 'Reopen Order')}
                                         </Text>
                                     </View>
                                 </TouchableOpacity>
@@ -2259,7 +2276,7 @@ export default function AdminDashboard({ navigation }) {
                                 >
                                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                         <Ionicons name="person-add" size={16} color="#fff" />
-                                        <Text style={styles.actionButtonText}>Force Assign Master</Text>
+                                        <Text style={styles.actionButtonText}>{TRANSLATIONS.forceAssignMaster || 'Force Assign Master'}</Text>
                                     </View>
                                 </TouchableOpacity>
                             )}
@@ -2267,21 +2284,21 @@ export default function AdminDashboard({ navigation }) {
                             {/* Verify Payment Proof (for completed orders with pending transfer proof) */}
                             {detailsOrder.status === 'completed' && detailsOrder.payment_method === 'transfer' && detailsOrder.payment_proof_url && (
                                 <View style={{ marginTop: 12 }}>
-                                    <Text style={{ color: '#94a3b8', fontSize: 12, marginBottom: 8 }}>PAYMENT PROOF VERIFICATION</Text>
+                                    <Text style={{ color: '#94a3b8', fontSize: 12, marginBottom: 8 }}>{TRANSLATIONS.paymentProofVerification || 'PAYMENT PROOF VERIFICATION'}</Text>
                                     <View style={{ flexDirection: 'row', gap: 10 }}>
                                         <TouchableOpacity
                                             style={[styles.actionButton, { flex: 1, backgroundColor: '#22c55e' }]}
                                             onPress={() => handleVerifyPaymentProof(detailsOrder.id, true)}
                                             disabled={actionLoading}
                                         >
-                                            <Text style={styles.actionButtonText}>✓ Approve</Text>
+                                            <Text style={styles.actionButtonText}>✓ {TRANSLATIONS.approve || 'Approve'}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={[styles.actionButton, { flex: 1, backgroundColor: '#ef4444' }]}
                                             onPress={() => handleVerifyPaymentProof(detailsOrder.id, false)}
                                             disabled={actionLoading}
                                         >
-                                            <Text style={styles.actionButtonText}>✗ Reject</Text>
+                                            <Text style={styles.actionButtonText}>✗ {TRANSLATIONS.reject || 'Reject'}</Text>
                                         </TouchableOpacity>
                                     </View>
                                 </View>
@@ -2341,14 +2358,14 @@ export default function AdminDashboard({ navigation }) {
             >
                 <View style={styles.modalOverlay}>
                     <View style={[styles.modalContent, !isDark && styles.modalContentLight]}>
-                        <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>Record Commission Payment</Text>
+                        <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>{TRANSLATIONS.recordCommissionPayment || 'Record Commission Payment'}</Text>
                         <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 15 }}>
-                            Master: {selectedMaster?.full_name}
+                            {TRANSLATIONS.master || 'Master'}: {selectedMaster?.full_name}
                         </Text>
 
                         <TextInput
                             style={[styles.input, !isDark && styles.inputLight]}
-                            placeholder="Amount (сом)"
+                            placeholder={TRANSLATIONS.amountSom || 'Amount (сом)'}
                             placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                             keyboardType="numeric"
                             value={paymentData.amount}
@@ -2360,14 +2377,14 @@ export default function AdminDashboard({ navigation }) {
                                 style={[styles.actionButton, { backgroundColor: '#334155' }]}
                                 onPress={() => setShowPaymentModal(false)}
                             >
-                                <Text style={styles.actionButtonText}>Cancel</Text>
+                                <Text style={styles.actionButtonText}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.actionButton}
                                 onPress={handleRecordPayment}
                                 disabled={actionLoading}
                             >
-                                <Text style={styles.actionButtonText}>{actionLoading ? 'Saving...' : 'Confirm Payment'}</Text>
+                                <Text style={styles.actionButtonText}>{actionLoading ? (TRANSLATIONS.saving || 'Saving...') : (TRANSLATIONS.confirmPayment || 'Confirm Payment')}</Text>
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -2389,9 +2406,9 @@ export default function AdminDashboard({ navigation }) {
             >
                 <View style={styles.modalOverlay}>
                     <View style={[styles.modalContent, { maxHeight: 500 }]}>
-                        <Text style={styles.modalTitle}>Force Assign Master</Text>
+                        <Text style={styles.modalTitle}>{TRANSLATIONS.forceAssignMaster || 'Force Assign Master'}</Text>
                         <Text style={{ color: '#94a3b8', marginBottom: 15 }}>
-                            Select a master to assign this order to:
+                            {TRANSLATIONS.selectMasterAssign || 'Select a master to assign this order to:'}
                         </Text>
                         <ScrollView style={{ maxHeight: 300 }}>
                             {availableMasters.length === 0 ? (
@@ -2423,7 +2440,7 @@ export default function AdminDashboard({ navigation }) {
                             style={[styles.actionButton, { backgroundColor: '#334155', marginTop: 16 }]}
                             onPress={() => setShowAssignModal(false)}
                         >
-                            <Text style={styles.actionButtonText}>Cancel</Text>
+                            <Text style={styles.actionButtonText}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -2438,9 +2455,9 @@ export default function AdminDashboard({ navigation }) {
             >
                 <View style={styles.modalOverlay}>
                     <View style={[styles.modalContent, !isDark && styles.modalContentLight]}>
-                        <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>Add Master Balance</Text>
+                        <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>{TRANSLATIONS.addMasterBalance || 'Add Master Balance'}</Text>
                         <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 15 }}>
-                            Master: {selectedMaster?.full_name}
+                            {TRANSLATIONS.master || 'Master'}: {selectedMaster?.full_name}
                         </Text>
 
                         <TextInput
@@ -2454,7 +2471,7 @@ export default function AdminDashboard({ navigation }) {
 
                         <TextInput
                             style={[styles.input, { height: 60 }, !isDark && styles.inputLight]}
-                            placeholder="Notes (optional)"
+                            placeholder={TRANSLATIONS.notesOptional || 'Notes (optional)'}
                             placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                             multiline
                             value={balanceData.notes}
@@ -2466,14 +2483,14 @@ export default function AdminDashboard({ navigation }) {
                                 style={[styles.actionButton, { backgroundColor: '#334155' }]}
                                 onPress={() => setShowBalanceModal(false)}
                             >
-                                <Text style={styles.actionButtonText}>Cancel</Text>
+                                <Text style={styles.actionButtonText}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.actionButton}
                                 onPress={() => handleAddMasterBalance(selectedMaster?.id, balanceData.amount, balanceData.type, balanceData.notes)}
                                 disabled={actionLoading || !balanceData.amount}
                             >
-                                <Text style={styles.actionButtonText}>{actionLoading ? 'Saving...' : 'Add Balance'}</Text>
+                                <Text style={styles.actionButtonText}>{actionLoading ? (TRANSLATIONS.saving || 'Saving...') : (TRANSLATIONS.addBalance || 'Add Balance')}</Text>
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -2494,7 +2511,7 @@ export default function AdminDashboard({ navigation }) {
                                     <Text style={[styles.pageTitle, !isDark && styles.textDark]}>{detailsPerson?.full_name}</Text>
                                     <View style={[styles.statusBadge, { backgroundColor: detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? '#22c55e' : '#64748b') : (detailsPerson?.is_active ? '#3b82f6' : '#64748b'), alignSelf: 'flex-start', marginTop: 4 }]}>
                                         <Text style={styles.statusText}>
-                                            {detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? 'VERIFIED' : 'UNVERIFIED') : (detailsPerson?.is_active ? 'ACTIVE' : 'INACTIVE')}
+                                            {detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? (TRANSLATIONS.verified || 'VERIFIED') : (TRANSLATIONS.unverified || 'UNVERIFIED')) : (detailsPerson?.is_active ? (TRANSLATIONS.active || 'ACTIVE').toUpperCase() : (TRANSLATIONS.inactive || 'INACTIVE').toUpperCase())}
                                         </Text>
                                     </View>
                                 </View>
@@ -2508,17 +2525,17 @@ export default function AdminDashboard({ navigation }) {
                             {/* Contact Info - Editable when isEditingPerson */}
                             <View style={[styles.card, !isDark && styles.cardLight]}>
                                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                                    <Text style={{ color: '#94a3b8', fontSize: 12 }}>CONTACT INFO</Text>
+                                    <Text style={{ color: '#94a3b8', fontSize: 12 }}>{TRANSLATIONS.contactInfo || 'CONTACT INFO'}</Text>
                                     {!isEditingPerson && (
                                         <TouchableOpacity onPress={() => { setIsEditingPerson(true); setEditPersonData({ ...detailsPerson }); }}>
-                                            <Text style={{ color: '#3b82f6', fontSize: 12 }}>Edit</Text>
+                                            <Text style={{ color: '#3b82f6', fontSize: 12 }}>{TRANSLATIONS.edit || 'Edit'}</Text>
                                         </TouchableOpacity>
                                     )}
                                 </View>
                                 {isEditingPerson ? (
                                     <View style={{ gap: 12 }}>
                                         <View>
-                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Full Name</Text>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.fullName || 'Full Name'}</Text>
                                             <TextInput
                                                 style={[styles.input, !isDark && styles.inputLight]}
                                                 value={editPersonData.full_name || ''}
@@ -2527,7 +2544,7 @@ export default function AdminDashboard({ navigation }) {
                                             />
                                         </View>
                                         <View>
-                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Phone</Text>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.phone || 'Phone'}</Text>
                                             <TextInput
                                                 style={[styles.input, !isDark && styles.inputLight]}
                                                 value={editPersonData.phone || ''}
@@ -2536,7 +2553,7 @@ export default function AdminDashboard({ navigation }) {
                                             />
                                         </View>
                                         <View>
-                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Email</Text>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.email || 'Email'}</Text>
                                             <TextInput
                                                 style={[styles.input, !isDark && styles.inputLight]}
                                                 value={editPersonData.email || ''}
@@ -2547,7 +2564,7 @@ export default function AdminDashboard({ navigation }) {
                                         {detailsPerson?.type === 'master' && (
                                             <>
                                                 <View>
-                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Service Area</Text>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.serviceArea || 'Service Area'}</Text>
                                                     <TextInput
                                                         style={[styles.input, !isDark && styles.inputLight]}
                                                         value={editPersonData.service_area || ''}
@@ -2556,7 +2573,7 @@ export default function AdminDashboard({ navigation }) {
                                                     />
                                                 </View>
                                                 <View>
-                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Experience (years)</Text>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.experienceYears || 'Experience (years)'}</Text>
                                                     <TextInput
                                                         style={[styles.input, !isDark && styles.inputLight]}
                                                         value={String(editPersonData.experience_years || '')}
@@ -2573,13 +2590,13 @@ export default function AdminDashboard({ navigation }) {
                                                 onPress={handleSavePersonProfile}
                                                 disabled={actionLoading}
                                             >
-                                                <Text style={styles.actionButtonText}>{actionLoading ? 'Saving...' : 'Save Changes'}</Text>
+                                                <Text style={styles.actionButtonText}>{actionLoading ? (TRANSLATIONS.saving || 'Saving...') : (TRANSLATIONS.saveChanges || 'Save Changes')}</Text>
                                             </TouchableOpacity>
                                             <TouchableOpacity
                                                 style={[styles.actionButton, { backgroundColor: isDark ? '#334155' : '#e2e8f0', flex: 1 }]}
                                                 onPress={() => setIsEditingPerson(false)}
                                             >
-                                                <Text style={[styles.actionButtonText, !isDark && { color: '#475569' }]}>Cancel</Text>
+                                                <Text style={[styles.actionButtonText, !isDark && { color: '#475569' }]}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                                             </TouchableOpacity>
                                         </View>
                                     </View>
@@ -2601,24 +2618,24 @@ export default function AdminDashboard({ navigation }) {
                             {detailsPerson?.type === 'master' && (
                                 <>
                                     <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
-                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>FINANCIALS</Text>
+                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>{TRANSLATIONS.financials || 'FINANCIALS'}</Text>
                                         <View style={{ gap: 8 }}>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                                <Text style={{ color: '#64748b' }}>Balance:</Text>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.balance || 'Balance:'}</Text>
                                                 <Text style={{ color: (detailsPerson?.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '700' }}>{detailsPerson?.prepaid_balance || 0} сом</Text>
                                             </View>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                                <Text style={{ color: '#64748b' }}>Initial Deposit:</Text>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.initialDeposit || 'Initial Deposit:'}</Text>
                                                 <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.initial_deposit || 0} сом</Text>
                                             </View>
                                         </View>
                                     </View>
 
                                     <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
-                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>PERFORMANCE</Text>
+                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>{TRANSLATIONS.performance || 'PERFORMANCE'}</Text>
                                         <View style={{ gap: 8 }}>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                                <Text style={{ color: '#64748b' }}>Completed Jobs:</Text>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.completedJobs || 'Completed Jobs:'}</Text>
                                                 <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.completed_jobs || 0}</Text>
                                             </View>
                                         </View>
@@ -2630,19 +2647,19 @@ export default function AdminDashboard({ navigation }) {
                                             style={[styles.actionButton, { backgroundColor: '#8b5cf6' }]}
                                             onPress={() => { setSelectedMaster(detailsPerson); setShowOrderHistoryModal(true); setDetailsPerson(null); }}
                                         >
-                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.sectionHistory || 'View Order History'}</Text>
+                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.viewOrderHistory || 'View Order History'}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={[styles.actionButton, { backgroundColor: '#3b82f6' }]}
                                             onPress={() => { setSelectedMaster(detailsPerson); setShowBalanceModal(true); setDetailsPerson(null); }}
                                         >
-                                            <Text style={styles.actionButtonText}>Top Up Balance</Text>
+                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.topUpBalance || 'Top Up Balance'}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={[styles.actionButton, { backgroundColor: detailsPerson?.is_verified ? '#ef4444' : '#22c55e' }]}
                                             onPress={() => { handleVerifyMaster(detailsPerson?.id, detailsPerson?.is_verified); setDetailsPerson(null); }}
                                         >
-                                            <Text style={styles.actionButtonText}>{detailsPerson?.is_verified ? 'Unverify Master' : 'Verify Master'}</Text>
+                                            <Text style={styles.actionButtonText}>{detailsPerson?.is_verified ? (TRANSLATIONS.unverifyMaster || 'Unverify Master') : (TRANSLATIONS.verifyMaster || 'Verify Master')}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={[styles.actionButton, { backgroundColor: '#f59e0b' }]}
@@ -2650,7 +2667,7 @@ export default function AdminDashboard({ navigation }) {
                                         >
                                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                                 <Ionicons name="key" size={16} color="#fff" />
-                                                <Text style={styles.actionButtonText}>Reset Password</Text>
+                                                <Text style={styles.actionButtonText}>{TRANSLATIONS.resetPassword || 'Reset Password'}</Text>
                                             </View>
                                         </TouchableOpacity>
                                     </View>
@@ -2661,14 +2678,14 @@ export default function AdminDashboard({ navigation }) {
                             {detailsPerson?.type === 'dispatcher' && (
                                 <>
                                     <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
-                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>STATS</Text>
+                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>{TRANSLATIONS.stats || 'STATS'}</Text>
                                         <View style={{ gap: 8 }}>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                                <Text style={{ color: '#64748b' }}>Status:</Text>
-                                                <Text style={{ color: detailsPerson?.is_active ? '#22c55e' : '#ef4444', fontWeight: '600' }}>{detailsPerson?.is_active ? 'Active' : 'Inactive'}</Text>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.status || 'Status:'}</Text>
+                                                <Text style={{ color: detailsPerson?.is_active ? '#22c55e' : '#ef4444', fontWeight: '600' }}>{detailsPerson?.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}</Text>
                                             </View>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                                <Text style={{ color: '#64748b' }}>Created:</Text>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.created || 'Created:'}</Text>
                                                 <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.created_at ? new Date(detailsPerson.created_at).toLocaleDateString() : 'N/A'}</Text>
                                             </View>
                                         </View>
@@ -2680,13 +2697,13 @@ export default function AdminDashboard({ navigation }) {
                                             style={[styles.actionButton, { backgroundColor: '#8b5cf6' }]}
                                             onPress={() => { setSelectedMaster(detailsPerson); setShowOrderHistoryModal(true); setDetailsPerson(null); }}
                                         >
-                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.sectionHistory || 'View Order History'}</Text>
+                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.viewOrderHistory || 'View Order History'}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={[styles.actionButton, { backgroundColor: detailsPerson?.is_active ? '#ef4444' : '#22c55e' }]}
                                             onPress={() => { handleToggleDispatcher(detailsPerson?.id, detailsPerson?.is_active); setDetailsPerson(null); }}
                                         >
-                                            <Text style={styles.actionButtonText}>{detailsPerson?.is_active ? 'Deactivate' : 'Activate'}</Text>
+                                            <Text style={styles.actionButtonText}>{detailsPerson?.is_active ? (TRANSLATIONS.deactivate || 'Deactivate') : (TRANSLATIONS.activate || 'Activate')}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={[styles.actionButton, { backgroundColor: '#f59e0b' }]}
@@ -2694,7 +2711,7 @@ export default function AdminDashboard({ navigation }) {
                                         >
                                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                                 <Ionicons name="key" size={16} color="#fff" />
-                                                <Text style={styles.actionButtonText}>Reset Password</Text>
+                                                <Text style={styles.actionButtonText}>{TRANSLATIONS.resetPassword || 'Reset Password'}</Text>
                                             </View>
                                         </TouchableOpacity>
                                     </View>
@@ -2763,7 +2780,7 @@ export default function AdminDashboard({ navigation }) {
                                             </View>
                                             <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: isDark ? '#334155' : '#e2e8f0' }}>
                                                 <Ionicons name="chevron-forward" size={14} color="#64748b" />
-                                                <Text style={{ color: '#64748b', fontSize: 11, marginLeft: 4 }}>Tap to view details</Text>
+                                                <Text style={{ color: '#64748b', fontSize: 11, marginLeft: 4 }}>{TRANSLATIONS.tapViewDetails || 'Tap to view details'}</Text>
                                             </View>
                                         </TouchableOpacity>
                                     );
@@ -2787,7 +2804,7 @@ export default function AdminDashboard({ navigation }) {
                             {addUserRole === 'master' ? (TRANSLATIONS.addMaster || 'Add New Master') : (TRANSLATIONS.addDispatcher || 'Add New Dispatcher')}
                         </Text>
                         <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 15 }}>
-                            Create a new {addUserRole} account
+                            {addUserRole === 'master' ? (TRANSLATIONS.createNewMasterAccount || 'Create a new master account') : (TRANSLATIONS.createNewDispatcherAccount || 'Create a new dispatcher account')}
                         </Text>
 
                         <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
@@ -2881,7 +2898,7 @@ export default function AdminDashboard({ navigation }) {
                                     setNewUserData({ email: '', password: '', full_name: '', phone: '', service_area: '', experience_years: '' });
                                 }}
                             >
-                                <Text style={styles.actionButtonText}>Cancel</Text>
+                                <Text style={styles.actionButtonText}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: addUserRole === 'master' ? '#22c55e' : '#3b82f6' }]}
@@ -2889,7 +2906,7 @@ export default function AdminDashboard({ navigation }) {
                                 disabled={actionLoading || !newUserData.email || !newUserData.password || !newUserData.full_name}
                             >
                                 <Text style={styles.actionButtonText}>
-                                    {actionLoading ? 'Creating...' : `Create ${addUserRole === 'master' ? 'Master' : 'Dispatcher'}`}
+                                    {actionLoading ? (TRANSLATIONS.creating || 'Creating...') : (addUserRole === 'master' ? (TRANSLATIONS.createMaster || 'Create Master') : (TRANSLATIONS.createDispatcher || 'Create Dispatcher'))}
                                 </Text>
                             </TouchableOpacity>
                         </View>
@@ -2916,7 +2933,7 @@ export default function AdminDashboard({ navigation }) {
                                 <Ionicons name="key" size={22} color="#f59e0b" />
                             </View>
                             <View style={{ flex: 1 }}>
-                                <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>Reset Password</Text>
+                                <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>{TRANSLATIONS.resetPassword || 'Reset Password'}</Text>
                                 <Text style={{ color: isDark ? '#64748b' : '#334155', fontSize: 12 }}>
                                     {passwordResetTarget?.full_name}
                                 </Text>
@@ -2925,16 +2942,16 @@ export default function AdminDashboard({ navigation }) {
 
                         <View style={{ backgroundColor: '#f59e0b15', padding: 12, borderRadius: 8, marginBottom: 16, borderLeftWidth: 3, borderLeftColor: '#f59e0b' }}>
                             <Text style={{ color: '#f59e0b', fontSize: 12 }}>
-                                ⚠️ This action will immediately change the user's password. They will need to use the new password to login.
+                                ⚠️ {TRANSLATIONS.resetPasswordWarning || "This action will immediately change the user's password. They will need to use the new password to login."}
                             </Text>
                         </View>
 
                         <View style={{ gap: 12 }}>
                             <View>
-                                <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>New Password *</Text>
+                                <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.newPassword || 'New Password *'}</Text>
                                 <TextInput
                                     style={[styles.input, !isDark && styles.inputLight]}
-                                    placeholder="Minimum 6 characters"
+                                    placeholder={TRANSLATIONS.minCharacters || 'Minimum 6 characters'}
                                     placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                     secureTextEntry
                                     value={newPassword}
@@ -2942,17 +2959,17 @@ export default function AdminDashboard({ navigation }) {
                                 />
                             </View>
                             <View>
-                                <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Confirm Password *</Text>
+                                <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.confirmPasswordLabel || 'Confirm Password *'}</Text>
                                 <TextInput
                                     style={[styles.input, !isDark && styles.inputLight, confirmPassword && newPassword !== confirmPassword && { borderColor: '#ef4444' }]}
-                                    placeholder="Re-enter password"
+                                    placeholder={TRANSLATIONS.reenterPassword || 'Re-enter password'}
                                     placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                     secureTextEntry
                                     value={confirmPassword}
                                     onChangeText={setConfirmPassword}
                                 />
                                 {confirmPassword && newPassword !== confirmPassword && (
-                                    <Text style={{ color: '#ef4444', fontSize: 11, marginTop: 4 }}>Passwords do not match</Text>
+                                    <Text style={{ color: '#ef4444', fontSize: 11, marginTop: 4 }}>{TRANSLATIONS.passwordsNotMatch || 'Passwords do not match'}</Text>
                                 )}
                             </View>
                         </View>
@@ -2967,7 +2984,7 @@ export default function AdminDashboard({ navigation }) {
                                     setConfirmPassword('');
                                 }}
                             >
-                                <Text style={styles.actionButtonText}>Cancel</Text>
+                                <Text style={styles.actionButtonText}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: '#f59e0b' }]}
@@ -2975,7 +2992,7 @@ export default function AdminDashboard({ navigation }) {
                                 disabled={actionLoading || !newPassword || newPassword.length < 6 || newPassword !== confirmPassword}
                             >
                                 <Text style={styles.actionButtonText}>
-                                    {actionLoading ? 'Resetting...' : 'Reset Password'}
+                                    {actionLoading ? (TRANSLATIONS.resetting || 'Resetting...') : (TRANSLATIONS.resetPassword || 'Reset Password')}
                                 </Text>
                             </TouchableOpacity>
                         </View>
@@ -3338,8 +3355,8 @@ const styles = StyleSheet.create({
     compactAddr: { fontSize: 12, color: '#94a3b8', marginTop: 2 },
     compactBottomRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
     compactClient: { fontSize: 12, color: '#64748b' },
-    compactStatusBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
-    compactStatusText: { fontSize: 10, fontWeight: '700', color: '#fff', textTransform: 'uppercase' },
+    compactStatusBadge: { minWidth: 130, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+    compactStatusText: { fontSize: 9, fontWeight: '700', color: '#fff', textTransform: 'uppercase', textAlign: 'center' },
     compactRight: { flexDirection: 'row', alignItems: 'center' },
     compactTime: { fontSize: 11, color: '#64748b', marginRight: 8 },
     compactChevron: { fontSize: 18, color: '#64748b' },

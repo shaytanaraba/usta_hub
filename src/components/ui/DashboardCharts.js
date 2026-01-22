@@ -7,7 +7,7 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 // ============================================
 // STATUS CHART (Bar Chart)
 // ============================================
-export const StatusChart = ({ data, isDark = true }) => {
+export const StatusChart = ({ data, isDark = true, translations = {} }) => {
     // data: [{status: 'placed', count: 10}, ...]
 
     // Convert array to map
@@ -19,12 +19,19 @@ export const StatusChart = ({ data, isDark = true }) => {
     }
 
     const statuses = ['placed', 'claimed', 'started', 'completed', 'confirmed', 'canceled'];
-    const chartLabels = ['New', 'Clm', 'WIP', 'Done', 'Paid', 'Can'];
+    const chartLabels = [
+        translations.chartNew || 'New',
+        translations.chartClaimed || 'Clm',
+        translations.chartWIP || 'WIP',
+        translations.chartDone || 'Done',
+        translations.chartPaid || 'Paid',
+        translations.chartCanceled || 'Can'
+    ];
     const chartValues = statuses.map(s => dataMap[s] || 0);
 
     return (
         <View style={[styles.card, !isDark && styles.cardLight]}>
-            <Text style={[styles.title, !isDark && styles.textDark]}>Order Status</Text>
+            <Text style={[styles.title, !isDark && styles.textDark]}>{translations.orderStatus || 'Order Status'}</Text>
             <BarChart
                 data={{
                     labels: chartLabels,
@@ -62,21 +69,21 @@ export const StatusChart = ({ data, isDark = true }) => {
 // ============================================
 // COMMISSION WIDGET (Donut)
 // ============================================
-export const CommissionWidget = ({ collected, outstanding, isDark = true }) => {
+export const CommissionWidget = ({ collected, outstanding, isDark = true, translations = {} }) => {
     const total = (collected + outstanding) || 1;
     const percentage = collected / total;
 
     const data = {
-        labels: ["Collected"], // optional
+        labels: [translations.collected || "Collected"], // optional
         data: [percentage]
     };
 
     return (
         <View style={[styles.card, !isDark && styles.cardLight]}>
             <View style={styles.headerRow}>
-                <Text style={[styles.title, !isDark && styles.textDark]}>Commission Collection</Text>
+                <Text style={[styles.title, !isDark && styles.textDark]}>{translations.commissionCollection || 'Commission Collection'}</Text>
                 <View style={[styles.badge, !isDark && styles.badgeLight]}>
-                    <Text style={[styles.badgeText, !isDark && styles.badgeTextLight]}>All Time</Text>
+                    <Text style={[styles.badgeText, !isDark && styles.badgeTextLight]}>{translations.allTime || 'All Time'}</Text>
                 </View>
             </View>
 
@@ -99,19 +106,19 @@ export const CommissionWidget = ({ collected, outstanding, isDark = true }) => {
                     />
                     <View style={styles.percentageAbsolute}>
                         <Text style={[styles.bigPercentage, !isDark && styles.textDark]}>{(percentage * 100).toFixed(0)}%</Text>
-                        <Text style={styles.percentageLabel}>Collected</Text>
+                        <Text style={styles.percentageLabel}>{translations.collected || 'Collected'}</Text>
                     </View>
                 </View>
 
                 <View style={styles.statsCol}>
                     <View style={styles.statItem}>
-                        <Text style={styles.statLabel}>COLLECTED</Text>
+                        <Text style={styles.statLabel}>{(translations.collected || 'COLLECTED').toUpperCase()}</Text>
                         <Text style={[styles.statValue, { color: '#22c55e' }]}>
                             {collected.toLocaleString()}
                         </Text>
                     </View>
                     <View style={styles.statItem}>
-                        <Text style={styles.statLabel}>OUTSTANDING</Text>
+                        <Text style={styles.statLabel}>{(translations.outstanding || 'OUTSTANDING').toUpperCase()}</Text>
                         <Text style={[styles.statValue, { color: '#f59e0b' }]}>
                             {outstanding.toLocaleString()}
                         </Text>

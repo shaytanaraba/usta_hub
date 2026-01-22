@@ -7,16 +7,16 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
-export const DateRangeFilter = ({ value, onChange, isDark = true }) => {
+export const DateRangeFilter = ({ value, onChange, isDark = true, translations = {} }) => {
     const [showStartPicker, setShowStartPicker] = useState(false);
     const [showEndPicker, setShowEndPicker] = useState(false);
 
     const buttons = [
-        { type: 'all', label: 'All' },
-        { type: 'today', label: 'Today' },
-        { type: 'week', label: 'Week' },
-        { type: 'month', label: 'Month' },
-        { type: 'custom', label: 'Custom' },
+        { type: 'all', label: translations.filterAll || 'All' },
+        { type: 'today', label: translations.filterToday || 'Today' },
+        { type: 'week', label: translations.filterWeek || 'Week' },
+        { type: 'month', label: translations.filterMonth || 'Month' },
+        { type: 'custom', label: translations.filterCustom || 'Custom' },
     ];
 
     const handleTypeChange = (type) => {
@@ -36,6 +36,7 @@ export const DateRangeFilter = ({ value, onChange, isDark = true }) => {
             });
         }
     };
+
 
     return (
         <View style={styles.container}>
@@ -68,9 +69,9 @@ export const DateRangeFilter = ({ value, onChange, isDark = true }) => {
                         style={[styles.dateButton, !isDark && styles.dateButtonLight]}
                         onPress={() => setShowStartPicker(true)}
                     >
-                        <Text style={styles.dateLabel}>Start:</Text>
+                        <Text style={styles.dateLabel}>{translations.startDate || 'Start:'}</Text>
                         <Text style={[styles.dateValue, !isDark && styles.textDark]}>
-                            {value.start || 'Select date'}
+                            {value.start || translations.selectDate || 'Select date'}
                         </Text>
                     </TouchableOpacity>
 
@@ -80,9 +81,9 @@ export const DateRangeFilter = ({ value, onChange, isDark = true }) => {
                         style={[styles.dateButton, !isDark && styles.dateButtonLight]}
                         onPress={() => setShowEndPicker(true)}
                     >
-                        <Text style={styles.dateLabel}>End:</Text>
+                        <Text style={styles.dateLabel}>{translations.endDate || 'End:'}</Text>
                         <Text style={[styles.dateValue, !isDark && styles.textDark]}>
-                            {value.end || 'Select date'}
+                            {value.end || translations.selectDate || 'Select date'}
                         </Text>
                     </TouchableOpacity>
 
