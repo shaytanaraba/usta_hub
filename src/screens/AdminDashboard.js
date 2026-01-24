@@ -429,6 +429,9 @@ export default function AdminDashboard({ navigation }) {
     // --- Ported Actions ---
     const handleCreateOrder = async () => {
         if (!confirmChecked) { showToast?.('Please confirm details', 'error'); return; }
+        if (!newOrder.clientName?.trim()) {
+            showToast?.('Client name is required', 'error'); return;
+        }
         if (!newOrder.clientPhone || !newOrder.problemDescription || !newOrder.area || !newOrder.fullAddress) {
             showToast?.('Please fill required fields', 'error'); return;
         }
@@ -437,7 +440,8 @@ export default function AdminDashboard({ navigation }) {
         try {
             // Admin ID used as dispatcher ID for creation tracking
             const result = await ordersService.createOrderExtended({
-                clientId: user?.id, // Or handle as "Guest" if needed, but here using Admin as proxy
+                clientName: newOrder.clientName,
+                clientPhone: newOrder.clientPhone,
                 pricingType: newOrder.pricingType,
                 initialPrice: parseFloat(newOrder.initialPrice) || null,
                 calloutFee: parseFloat(newOrder.calloutFee) || null,
@@ -446,6 +450,8 @@ export default function AdminDashboard({ navigation }) {
                 problemDescription: newOrder.problemDescription,
                 area: newOrder.area,
                 fullAddress: newOrder.fullAddress,
+                preferredDate: newOrder.preferredDate ? newOrder.preferredDate.split('.').reverse().join('-') : null,
+                preferredTime: newOrder.preferredTime || null,
                 dispatcherNote: newOrder.dispatcherNote,
             }, user?.id);
 

@@ -648,7 +648,7 @@ const STORAGE_KEYS = { DRAFT: 'dispatcher_draft_order', RECENT_ADDR: 'dispatcher
 const INITIAL_ORDER_STATE = {
     clientName: '', clientPhone: '', pricingType: 'unknown', initialPrice: '', calloutFee: '',
     serviceType: 'repair', urgency: 'planned', problemDescription: '',
-    area: '', fullAddress: '', preferredDate: '', preferredTime: '', dispatcherNote: '',
+    area: '', fullAddress: '', orientir: '', preferredDate: '', preferredTime: '', dispatcherNote: '',
 };
 
 // Kyrgyzstan districts for autocomplete
@@ -744,6 +744,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [masters, setMasters] = useState([]);
     const [recentAddresses, setRecentAddresses] = useState([]);
     const [serviceTypes, setServiceTypes] = useState(SERVICE_TYPES);
+    const [districts, setDistricts] = useState([]);
 
     // UI States
     const [activeTab, setActiveTab] = useState('create');
@@ -793,6 +794,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [showRecentAddr, setShowRecentAddr] = useState(false);
     const [idempotencyKey, setIdempotencyKey] = useState(generateIdempotencyKey());
     const [showDistrictDropdown, setShowDistrictDropdown] = useState(false);
+    const [editDistrictDropdown, setEditDistrictDropdown] = useState(false);
     const [platformSettings, setPlatformSettings] = useState(null); // Dynamic platform settings
 
     // ============================================
@@ -804,12 +806,14 @@ export default function DispatcherDashboard({ navigation, route }) {
         loadDraft();
         loadRecentAddresses();
         loadServiceTypes();
+        loadDistricts();
         loadPlatformSettings(); // Fetch platform settings for callout fee default
     }, []);
 
-    // Reload service types when language changes
+    // Reload service types and districts when language changes
     useEffect(() => {
         loadServiceTypes();
+        loadDistricts();
     }, [language]);
 
     const loadData = async () => {
@@ -881,6 +885,22 @@ export default function DispatcherDashboard({ navigation, route }) {
         } catch (error) {
             console.error(`${LOG_PREFIX} loadServiceTypes error:`, error);
             // Keep fallback SERVICE_TYPES
+        }
+    };
+
+    const loadDistricts = async () => {
+        try {
+            const data = await ordersService.getDistricts();
+            if (data && data.length > 0) {
+                const labelField = language === 'ru' ? 'name_ru' : language === 'kg' ? 'name_kg' : 'name_en';
+                setDistricts(data.map(d => ({
+                    id: d.code,
+                    label: d[labelField] || d.name_en,
+                    region: d.region
+                })));
+            }
+        } catch (error) {
+            console.error(`${LOG_PREFIX} loadDistricts error:`, error);
         }
     };
 
@@ -994,6 +1014,9 @@ export default function DispatcherDashboard({ navigation, route }) {
 
     const handleCreateOrder = async () => {
         if (!confirmChecked) { showToast?.(TRANSLATIONS[language].toastConfirmDetails, 'error'); return; }
+        if (!newOrder.clientName?.trim()) {
+            showToast?.(TRANSLATIONS[language].toastClientNameRequired || 'Client name is required', 'error'); return;
+        }
         if (!newOrder.clientPhone || !newOrder.problemDescription || !newOrder.area || !newOrder.fullAddress) {
             showToast?.(TRANSLATIONS[language].toastFillRequired, 'error'); return;
         }
@@ -1002,7 +1025,8 @@ export default function DispatcherDashboard({ navigation, route }) {
         setActionLoading(true);
         try {
             const result = await ordersService.createOrderExtended({
-                clientId: user.id,
+                clientName: newOrder.clientName,
+                clientPhone: newOrder.clientPhone,
                 pricingType: newOrder.pricingType === 'fixed' ? 'fixed' : 'unknown',
                 initialPrice: newOrder.pricingType === 'fixed' ? parseFloat(newOrder.initialPrice) || null : null,
                 calloutFee: parseFloat(newOrder.calloutFee) || null,
@@ -1011,7 +1035,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                 problemDescription: newOrder.problemDescription,
                 area: newOrder.area,
                 fullAddress: newOrder.fullAddress,
-                fullAddress: newOrder.fullAddress,
+                orientir: newOrder.orientir || null,
                 preferredDate: newOrder.preferredDate ? newOrder.preferredDate.split('.').reverse().join('-') : null,
                 preferredTime: newOrder.preferredTime || null,
                 dispatcherNote: newOrder.dispatcherNote || null,
@@ -1122,16 +1146,31 @@ export default function DispatcherDashboard({ navigation, route }) {
     const handleSaveEdit = async () => {
         setActionLoading(true);
         try {
-            // Prepare updates - including client details
+            // Normalize phone before saving
+            const normalizedPhone = ordersService.normalizeKyrgyzPhone(editForm.client_phone);
+            if (editForm.client_phone && !normalizedPhone) {
+                showToast?.(TRANSLATIONS[language].errorPhoneFormat || 'Invalid phone format', 'error');
+                setActionLoading(false);
+                return;
+            }
+
+            // Prepare updates - including all editable fields
+            // Debug log to see what's being sent
+            console.log('[DispatcherDashboard] handleSaveEdit - editForm.callout_fee:', editForm.callout_fee, 'type:', typeof editForm.callout_fee);
+
             const updates = {
                 problem_description: editForm.problem_description,
                 dispatcher_note: editForm.dispatcher_note,
                 full_address: editForm.full_address,
-                client: { // We need to update client info too if changed
-                    full_name: editForm.client_name || detailsOrder.client?.full_name,
-                    phone: editForm.client_phone || detailsOrder.client?.phone
-                }
+                area: editForm.area,
+                orientir: editForm.orientir || null,
+                callout_fee: editForm.callout_fee, // Pass raw value, let service handle conversion
+                initial_price: editForm.initial_price, // Add initial_price
+                client_name: editForm.client_name,
+                client_phone: normalizedPhone || editForm.client_phone,
             };
+
+            console.log('[DispatcherDashboard] handleSaveEdit - full updates object:', JSON.stringify(updates));
 
             const result = await ordersService.updateOrderInline(detailsOrder.id, updates);
             if (result.success) {
@@ -1153,16 +1192,30 @@ export default function DispatcherDashboard({ navigation, route }) {
     };
 
     const handleCancel = (orderId) => {
-        Alert.alert(TRANSLATIONS[language].alertCancelTitle, TRANSLATIONS[language].alertCancelMsg, [
-            { text: TRANSLATIONS[language].cancel, style: 'cancel' },
-            {
-                text: 'Yes', style: 'destructive', onPress: async () => {
-                    const result = await ordersService.cancelByClient(orderId, user.id, 'client_request');
-                    if (result.success) { showToast?.(TRANSLATIONS[language].statusCanceled, 'success'); await loadData(); }
-                    else showToast?.(result.message, 'error');
-                }
+        const confirmCancel = async () => {
+            const result = await ordersService.cancelByClient(orderId, user.id, 'client_request');
+            if (result.success) {
+                showToast?.(TRANSLATIONS[language].statusCanceled, 'success');
+                await loadData();
+                setDetailsOrder(null); // Close the drawer/modal after success
             }
-        ]);
+            else showToast?.(result.message, 'error');
+        };
+
+        if (Platform.OS === 'web') {
+            if (window.confirm(TRANSLATIONS[language].alertCancelMsg || 'Are you sure you want to cancel this order?')) {
+                confirmCancel();
+            }
+        } else {
+            Alert.alert(
+                TRANSLATIONS[language].alertCancelTitle,
+                TRANSLATIONS[language].alertCancelMsg,
+                [
+                    { text: TRANSLATIONS[language].cancel, style: 'cancel' },
+                    { text: 'Yes', style: 'destructive', onPress: confirmCancel }
+                ]
+            );
+        }
     };
 
     const handleReopen = async (orderId) => {
@@ -1576,7 +1629,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                 </View>
                 <Text style={[styles.compactAddr, !isDark && styles.textSecondary]} numberOfLines={1}>{item.full_address}</Text>
                 <View style={styles.compactBottomRow}>
-                    <Text style={[styles.compactClient, !isDark && styles.textDark]}>{item.client?.full_name || 'N/A'}</Text>
+                    <Text style={[styles.compactClient, !isDark && styles.textDark]}>{item.client?.full_name || item.client_name || 'N/A'}</Text>
                     {item.master && <Text style={styles.compactMaster}>{TRANSLATIONS[language].labelMasterPrefix}{item.master.full_name}</Text>}
                     {item.final_price && <Text style={styles.compactPrice}>{item.final_price}c</Text>}
                 </View>
@@ -1599,7 +1652,7 @@ export default function DispatcherDashboard({ navigation, route }) {
             </View>
             <Text style={[styles.cardAddr, !isDark && styles.textSecondary]} numberOfLines={2}>{item.full_address}</Text>
             <View style={styles.cardFooter}>
-                <Text style={[styles.cardClient, !isDark && styles.textDark]}>{item.client?.full_name || 'N/A'}</Text>
+                <Text style={[styles.cardClient, !isDark && styles.textDark]}>{item.client?.full_name || item.client_name || 'N/A'}</Text>
                 <Text style={styles.cardTime}>{getTimeAgo(item.created_at, language)}</Text>
             </View>
             {item.status === 'completed' && (
@@ -1682,30 +1735,36 @@ export default function DispatcherDashboard({ navigation, route }) {
                             <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createLocation}</Text>
 
                             <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createDistrict} *</Text>
-                            {/* Autocomplete-style District Input */}
-                            <View style={{ zIndex: 10 }}>
-                                <TextInput
-                                    style={[styles.input, !isDark && styles.inputLight, { paddingRight: 40 }]}
-                                    placeholder={TRANSLATIONS[language].districtPlaceholder}
-                                    value={newOrder.area}
-                                    onChangeText={t => setNewOrder({ ...newOrder, area: t })}
-                                    placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                />
-                                {/* Dropdown Chevron */}
-                                <TouchableOpacity style={styles.inputChevron} onPress={() => setShowRecentAddr(!showRecentAddr)}>
-                                    <Text style={styles.inputChevronText}>{showRecentAddr ? '▲' : '▼'}</Text>
+                            {/* District Inline Dropdown */}
+                            <View style={{ zIndex: 100, position: 'relative' }}>
+                                <TouchableOpacity
+                                    style={[styles.input, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, !isDark && styles.inputLight]}
+                                    onPress={() => setShowDistrictDropdown(!showDistrictDropdown)}
+                                >
+                                    <Text style={[styles.pickerBtnText, !newOrder.area && styles.placeholderText, !isDark && styles.textDark]}>
+                                        {newOrder.area ? (districts.find(d => d.id === newOrder.area)?.label || newOrder.area) : (TRANSLATIONS[language].selectOption || 'Select')}
+                                    </Text>
+                                    <Text style={{ color: '#94a3b8', fontSize: 12 }}>{showDistrictDropdown ? '▲' : '▼'}</Text>
                                 </TouchableOpacity>
-                                {/* Recent Addresses Dropdown */}
-                                {showRecentAddr && recentAddresses.length > 0 && (
-                                    <View style={[styles.suggestionList, !isDark && styles.cardLight]}>
-                                        {recentAddresses.slice(0, 5).map((a, i) => (
-                                            <TouchableOpacity key={i} style={styles.suggestionItem} onPress={() => {
-                                                setNewOrder({ ...newOrder, area: a.area, fullAddress: a.fullAddress });
-                                                setShowRecentAddr(false);
-                                            }}>
-                                                <Text style={[styles.suggestionText, !isDark && styles.textDark]}>{a.area} - {a.fullAddress.substring(0, 25)}...</Text>
-                                            </TouchableOpacity>
-                                        ))}
+                                {showDistrictDropdown && (
+                                    <View style={[styles.inlineDropdown, !isDark && styles.cardLight]}>
+                                        <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                                            {districts.map(d => (
+                                                <TouchableOpacity
+                                                    key={d.id}
+                                                    style={[styles.dropdownItem, newOrder.area === d.id && styles.dropdownItemActive]}
+                                                    onPress={() => {
+                                                        setNewOrder({ ...newOrder, area: d.id });
+                                                        setShowDistrictDropdown(false);
+                                                    }}
+                                                >
+                                                    <Text style={[styles.dropdownItemText, !isDark && styles.textDark, newOrder.area === d.id && styles.dropdownItemTextActive]}>
+                                                        {d.label}
+                                                    </Text>
+                                                    {d.region === 'countryside' && <Text style={styles.regionBadge}>{TRANSLATIONS[language].labelCountryside || 'Outskirts'}</Text>}
+                                                </TouchableOpacity>
+                                            ))}
+                                        </ScrollView>
                                     </View>
                                 )}
                             </View>
@@ -1717,7 +1776,16 @@ export default function DispatcherDashboard({ navigation, route }) {
                                 onChangeText={t => setNewOrder({ ...newOrder, fullAddress: t })}
                                 placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                             />
+
+                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createOrientir || 'Landmark/Orientir'}</Text>
+                            <TextInput style={[styles.input, !isDark && styles.inputLight]}
+                                placeholder={TRANSLATIONS[language].orientirPlaceholder || "e.g. Near Beta Stores"}
+                                value={newOrder.orientir}
+                                onChangeText={t => setNewOrder({ ...newOrder, orientir: t })}
+                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                            />
                         </View>
+
 
                         {/* Service */}
                         <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
@@ -1949,46 +2017,8 @@ export default function DispatcherDashboard({ navigation, route }) {
     // Details Drawer
     const renderDetailsDrawer = () => {
         if (!detailsOrder) return null;
-        const handleSaveEdit = async () => {
-            setActionLoading(true);
-            try {
-                // Prepare updates - including client details
-                const updates = {
-                    problem_description: editForm.problem_description,
-                    dispatcher_note: editForm.dispatcher_note,
-                    full_address: editForm.full_address,
-                    client: { // We need to update client info too if changed
-                        full_name: editForm.client_name || detailsOrder.client?.full_name,
-                        phone: editForm.client_phone || detailsOrder.client?.phone
-                    }
-                };
-
-                // For now, assume updateOrderInline handles these. Real implementation might need separate calls or JSONB updates.
-                // We'll pass them as separate fields for now if the backend supports it, or just description/note.
-                // Based on standard implementation, we might need a specific endpoint for client details.
-                // Falling back to just order details if complex.
-
-                // Pass the prepared updates object which includes client details and other fields
-                const result = await ordersService.updateOrderInline(detailsOrder.id, updates);
-
-                if (result.success) {
-                    showToast?.('Order updated', 'success');
-                    setIsEditing(false);
-                    await loadData();
-                    // Update local state to reflect changes immediately
-                    setDetailsOrder(prev => ({
-                        ...prev,
-                        ...editForm,
-                        client: {
-                            ...prev.client,
-                            full_name: editForm.client_name,
-                            phone: editForm.client_phone
-                        }
-                    }));
-                } else { showToast?.('Update failed', 'error'); }
-            } catch (e) { showToast?.('Update error', 'error'); }
-            finally { setActionLoading(false); }
-        };
+        // NOTE: handleSaveEdit is defined earlier in the component (around line 1146)
+        // with proper fee handling, area, orientir, etc.
 
         return (
             <Modal visible={!!detailsOrder} transparent animationType="none">
@@ -2009,11 +2039,18 @@ export default function DispatcherDashboard({ navigation, route }) {
                                             // If canceling edit
                                             setIsEditing(false);
                                         } else {
-                                            // Start editing
+                                            // Start editing - explicitly copy all editable fields
                                             setEditForm({
                                                 ...detailsOrder,
-                                                client_name: detailsOrder.client?.full_name,
-                                                client_phone: detailsOrder.client?.phone
+                                                client_name: detailsOrder.client?.full_name || detailsOrder.client_name || '',
+                                                client_phone: detailsOrder.client?.phone || detailsOrder.client_phone || '',
+                                                area: detailsOrder.area || '',
+                                                full_address: detailsOrder.full_address || '',
+                                                orientir: detailsOrder.orientir || '',
+                                                problem_description: detailsOrder.problem_description || '',
+                                                initial_price: detailsOrder.initial_price ?? '',
+                                                callout_fee: detailsOrder.callout_fee ?? '',
+                                                dispatcher_note: detailsOrder.dispatcher_note || '',
                                             });
                                             setIsEditing(true);
                                         }
@@ -2064,18 +2101,63 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     <TextInput style={[styles.input, !isDark && styles.inputLight]} value={editForm.client_phone || ''}
                                         onChangeText={t => setEditForm({ ...editForm, client_phone: t })} keyboardType="phone-pad" placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
 
-                                    {/* Order Editing */}
+                                    {/* Location Editing */}
+                                    <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].createDistrict || 'District'}</Text>
+                                    <View style={{ zIndex: 100, position: 'relative' }}>
+                                        <TouchableOpacity
+                                            style={[styles.input, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, !isDark && styles.inputLight]}
+                                            onPress={() => setEditDistrictDropdown(!editDistrictDropdown)}
+                                        >
+                                            <Text style={[styles.pickerBtnText, !editForm.area && styles.placeholderText, !isDark && styles.textDark]}>
+                                                {editForm.area ? (districts.find(d => d.id === editForm.area)?.label || editForm.area) : (TRANSLATIONS[language].selectOption || 'Select')}
+                                            </Text>
+                                            <Text style={{ color: '#94a3b8', fontSize: 12 }}>{editDistrictDropdown ? '▲' : '▼'}</Text>
+                                        </TouchableOpacity>
+                                        {editDistrictDropdown && (
+                                            <View style={[styles.inlineDropdown, !isDark && styles.cardLight]}>
+                                                <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                                                    {districts.map(d => (
+                                                        <TouchableOpacity
+                                                            key={d.id}
+                                                            style={[styles.dropdownItem, editForm.area === d.id && styles.dropdownItemActive]}
+                                                            onPress={() => {
+                                                                setEditForm({ ...editForm, area: d.id });
+                                                                setEditDistrictDropdown(false);
+                                                            }}
+                                                        >
+                                                            <Text style={[styles.dropdownItemText, !isDark && styles.textDark, editForm.area === d.id && styles.dropdownItemTextActive]}>
+                                                                {d.label}
+                                                            </Text>
+                                                        </TouchableOpacity>
+                                                    ))}
+                                                </ScrollView>
+                                            </View>
+                                        )}
+                                    </View>
+
                                     <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].address}</Text>
                                     <TextInput style={[styles.input, !isDark && styles.inputLight]} value={editForm.full_address || ''}
                                         onChangeText={t => setEditForm({ ...editForm, full_address: t })} placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
+
+                                    <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].createOrientir || 'Landmarks'}</Text>
+                                    <TextInput style={[styles.input, !isDark && styles.inputLight]} value={editForm.orientir || ''}
+                                        onChangeText={t => setEditForm({ ...editForm, orientir: t })} placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                        placeholder={TRANSLATIONS[language].orientirPlaceholder || "e.g. Near Beta Stores"} />
 
                                     <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].description}</Text>
                                     <TextInput style={[styles.input, styles.textArea, !isDark && styles.inputLight]} value={editForm.problem_description || ''}
                                         onChangeText={t => setEditForm({ ...editForm, problem_description: t })} multiline placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
 
+                                    {/* Fee Editing - Initial Price only (callout_fee postponed) */}
+                                    <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].initialPrice || 'Initial Price'}</Text>
+                                    <TextInput style={[styles.input, !isDark && styles.inputLight]} value={String(editForm.initial_price ?? '')}
+                                        onChangeText={t => setEditForm({ ...editForm, initial_price: t })}
+                                        keyboardType="numeric" placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
+
                                     <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].sectionNote}</Text>
                                     <TextInput style={[styles.input, styles.textArea, !isDark && styles.inputLight]} value={editForm.dispatcher_note || ''}
                                         onChangeText={t => setEditForm({ ...editForm, dispatcher_note: t })} multiline placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
+
 
                                     <TouchableOpacity style={styles.saveEditBtn} onPress={handleSaveEdit} disabled={actionLoading}>
                                         {actionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveEditText}>{TRANSLATIONS[language].btnSaveChanges}</Text>}
@@ -2087,18 +2169,25 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     <View style={styles.drawerSection}>
                                         <Text style={styles.drawerSectionTitle}>{TRANSLATIONS[language].sectionClient}</Text>
                                         <View style={[styles.drawerCard, !isDark && styles.drawerCardLight]}>
-                                            <Text style={[styles.drawerCardTitle, !isDark && styles.textDark]}>{detailsOrder.client?.full_name || 'N/A'}</Text>
+                                            <Text style={[styles.drawerCardTitle, !isDark && styles.textDark]}>{detailsOrder.client?.full_name || detailsOrder.client_name || 'N/A'}</Text>
                                             <View style={styles.drawerRow}>
-                                                <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>{detailsOrder.client?.phone}</Text>
+                                                <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>{detailsOrder.client?.phone || detailsOrder.client_phone || 'N/A'}</Text>
                                                 <View style={styles.drawerRowBtns}>
-                                                    <TouchableOpacity onPress={() => copyToClipboard(detailsOrder.client?.phone)} style={styles.drawerIconBtn}><Text style={styles.drawerIconBtnText}>{TRANSLATIONS[language].btnCopy}</Text></TouchableOpacity>
-                                                    <TouchableOpacity onPress={() => Linking.openURL(`tel:${detailsOrder.client?.phone}`)} style={styles.drawerIconBtn}><Text style={styles.drawerIconBtnText}>{TRANSLATIONS[language].btnCall}</Text></TouchableOpacity>
+                                                    <TouchableOpacity onPress={() => copyToClipboard(detailsOrder.client?.phone || detailsOrder.client_phone)} style={styles.drawerIconBtn}><Text style={styles.drawerIconBtnText}>{TRANSLATIONS[language].btnCopy}</Text></TouchableOpacity>
+                                                    <TouchableOpacity onPress={() => Linking.openURL(`tel:${detailsOrder.client?.phone || detailsOrder.client_phone}`)} style={styles.drawerIconBtn}><Text style={styles.drawerIconBtnText}>{TRANSLATIONS[language].btnCall}</Text></TouchableOpacity>
                                                 </View>
                                             </View>
                                             <View style={styles.drawerRow}>
                                                 <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>{detailsOrder.full_address}</Text>
                                                 <TouchableOpacity onPress={() => copyToClipboard(detailsOrder.full_address)} style={styles.drawerIconBtn}><Text style={styles.drawerIconBtnText}>{TRANSLATIONS[language].btnCopy}</Text></TouchableOpacity>
                                             </View>
+                                            {detailsOrder.orientir && (
+                                                <View style={styles.drawerRow}>
+                                                    <Text style={[styles.drawerRowText, !isDark && styles.textSecondary, { fontStyle: 'italic' }]}>
+                                                        {TRANSLATIONS[language].labelOrientir || 'Landmark:'} {detailsOrder.orientir}
+                                                    </Text>
+                                                </View>
+                                            )}
                                         </View>
                                     </View>
                                     {/* Master */}
@@ -2156,7 +2245,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                             <Text style={styles.reopenText}>↻ {TRANSLATIONS[language].actionReopen}</Text>
                                         </TouchableOpacity>
                                     )}
-                                    {detailsOrder.status === 'placed' && (
+                                    {['placed', 'reopened', 'expired', 'canceled_by_master', 'canceled_by_client'].includes(detailsOrder.status) && (
                                         <TouchableOpacity style={styles.cancelBtn} onPress={() => { handleCancel(detailsOrder.id); setDetailsOrder(null); }}>
                                             <Text style={styles.cancelText}>{TRANSLATIONS[language].alertCancelTitle}</Text>
                                         </TouchableOpacity>
@@ -2604,6 +2693,15 @@ const styles = StyleSheet.create({
     suggestionList: { position: 'absolute', top: 50, left: 0, right: 0, backgroundColor: '#1e293b', borderWidth: 1, borderColor: 'rgba(71,85,105,0.5)', borderRadius: 8, zIndex: 100, maxHeight: 150 },
     suggestionItem: { padding: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(71,85,105,0.3)' },
     suggestionText: { color: '#fff', fontSize: 13 },
+
+    // Inline Dropdown (for districts etc)
+    inlineDropdown: { position: 'absolute', top: 52, left: 0, right: 0, backgroundColor: '#1e293b', borderWidth: 1, borderColor: 'rgba(71,85,105,0.5)', borderRadius: 8, zIndex: 1000, elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
+    dropdownItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(71,85,105,0.3)' },
+    dropdownItemActive: { backgroundColor: 'rgba(59,130,246,0.2)' },
+    dropdownItemText: { color: '#fff', fontSize: 14 },
+    dropdownItemTextActive: { color: '#3b82f6', fontWeight: '600' },
+    regionBadge: { fontSize: 10, color: '#94a3b8', backgroundColor: 'rgba(100,116,139,0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+
 
     // Needs Attention Header
     attentionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },

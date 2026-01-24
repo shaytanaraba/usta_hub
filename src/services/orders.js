@@ -525,12 +525,152 @@ class OrdersService {
   }
 
   /**
-   * Cancel order by client (dispatcher on behalf)
+   * Update order inline (dispatcher edit)
+   * Updates editable fields and creates audit log entry
    */
-  cancelByClient = async (orderId, dispatcherId, reason) => {
-    console.log(`${LOG_PREFIX} Canceling order by client: ${orderId}`);
+  updateOrderInline = async (orderId, updates) => {
+    console.log(`${LOG_PREFIX} Updating order inline: ${orderId}`, updates);
 
     try {
+      // Get current order for audit log (before update)
+      const { data: oldOrder, error: fetchError } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', orderId)
+        .single();
+
+      if (fetchError) throw fetchError;
+
+      // Prepare the update payload - only include non-client fields
+      // Handle callout_fee: convert string to number, empty/NaN to null
+      console.log(`${LOG_PREFIX} Raw callout_fee value:`, updates.callout_fee, 'type:', typeof updates.callout_fee);
+      console.log(`${LOG_PREFIX} Raw initial_price value:`, updates.initial_price, 'type:', typeof updates.initial_price);
+
+      const feeValue = updates.callout_fee !== '' && updates.callout_fee !== null && updates.callout_fee !== undefined
+        ? parseFloat(updates.callout_fee)
+        : null;
+
+      const priceValue = updates.initial_price !== '' && updates.initial_price !== null && updates.initial_price !== undefined
+        ? parseFloat(updates.initial_price)
+        : null;
+
+      const updatePayload = {
+        problem_description: updates.problem_description,
+        dispatcher_note: updates.dispatcher_note,
+        full_address: updates.full_address,
+        area: updates.area,
+        orientir: updates.orientir,
+        callout_fee: !isNaN(feeValue) && feeValue !== null ? feeValue : null,
+        initial_price: !isNaN(priceValue) && priceValue !== null ? priceValue : null,
+        client_name: updates.client_name,
+        client_phone: updates.client_phone,
+        updated_at: new Date().toISOString()
+      };
+
+      console.log(`${LOG_PREFIX} Final updatePayload:`, JSON.stringify(updatePayload));
+
+      // Use the database function which has SECURITY DEFINER
+      // This bypasses RLS and allows dispatcher to update fee fields
+      const { data: rpcResult, error: rpcError } = await supabase.rpc('update_order_inline', {
+        p_order_id: orderId,
+        p_updates: updatePayload
+      });
+
+      console.log(`${LOG_PREFIX} RPC result:`, rpcResult);
+
+      if (rpcError) {
+        console.error(`${LOG_PREFIX} RPC error:`, rpcError);
+        throw rpcError;
+      }
+
+      if (!rpcResult?.success) {
+        throw new Error(rpcResult?.error || 'Update failed');
+      }
+
+      // Fetch the updated order to return
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+          *,
+          client:client_id(full_name, phone)
+        `)
+        .eq('id', orderId)
+        .single();
+
+      if (error) throw error;
+
+      // Create audit log entry
+      try {
+        await supabase.from('order_audit_log').insert({
+          order_id: orderId,
+          action: 'order_updated',
+          old_data: oldOrder,
+          new_data: data,
+          performed_by: oldOrder.dispatcher_id,
+          notes: 'Order edited by dispatcher'
+        });
+      } catch (auditErr) {
+        console.warn(`${LOG_PREFIX} Audit log insert failed:`, auditErr);
+        // Don't fail the whole operation if audit fails
+      }
+
+      console.log(`${LOG_PREFIX} Order updated successfully: ${orderId}`);
+      return { success: true, message: 'Order updated', order: data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} updateOrderInline failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Cancel order by client (dispatcher on behalf)
+   * Allowed from: placed, claimed, started, reopened
+   */
+  cancelByClient = async (orderId, dispatcherId, reason) => {
+    console.log(`${LOG_PREFIX} cancelByClient called - orderId: ${orderId}, dispatcherId: ${dispatcherId}, reason: ${reason}`);
+
+    try {
+      // First check current status
+      console.log(`${LOG_PREFIX} Fetching order status...`);
+      const { data: orderCheck, error: checkError } = await supabase
+        .from('orders')
+        .select('status, dispatcher_id')
+        .eq('id', orderId)
+        .single();
+
+      console.log(`${LOG_PREFIX} Order check result:`, orderCheck, 'error:', checkError);
+
+      if (checkError || !orderCheck) {
+        console.log(`${LOG_PREFIX} Order not found or error`);
+        return { success: false, message: 'Order not found' };
+      }
+
+      console.log(`${LOG_PREFIX} Order status: ${orderCheck.status}, Order dispatcher: ${orderCheck.dispatcher_id}, Current dispatcher: ${dispatcherId}`);
+
+      if (orderCheck.dispatcher_id !== dispatcherId) {
+        console.log(`${LOG_PREFIX} Dispatcher mismatch - not authorized`);
+        return { success: false, message: 'Not authorized to cancel this order' };
+      }
+
+      // Check if status allows cancellation
+      // Allowed: placed, canceled (to update reason), reopened, expired
+      // Note: claimed and started are NOT allowed per user request
+      const allowedStatuses = [
+        ORDER_STATUS.PLACED,
+        ORDER_STATUS.CANCELED_BY_MASTER,
+        ORDER_STATUS.CANCELED_BY_CLIENT,
+        ORDER_STATUS.REOPENED,
+        ORDER_STATUS.EXPIRED
+      ];
+      console.log(`${LOG_PREFIX} Allowed statuses:`, allowedStatuses);
+      console.log(`${LOG_PREFIX} Current status '${orderCheck.status}' in allowed?`, allowedStatuses.includes(orderCheck.status));
+
+      if (!allowedStatuses.includes(orderCheck.status)) {
+        console.log(`${LOG_PREFIX} Status not in allowed list`);
+        return { success: false, message: `Cannot cancel order with status: ${orderCheck.status}` };
+      }
+
+      console.log(`${LOG_PREFIX} Proceeding with cancellation...`);
       const { data, error } = await supabase
         .from('orders')
         .update({
@@ -539,12 +679,13 @@ class OrdersService {
           cancellation_reason: reason
         })
         .eq('id', orderId)
-        .eq('dispatcher_id', dispatcherId)
-        .in('status', [ORDER_STATUS.PLACED, ORDER_STATUS.CLAIMED])
         .select()
         .single();
 
+      console.log(`${LOG_PREFIX} Cancel update result:`, data, 'error:', error);
+
       if (error) throw error;
+      console.log(`${LOG_PREFIX} Order canceled successfully!`);
       return { success: true, message: 'Order canceled', order: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} cancelByClient failed:`, error);
@@ -817,33 +958,163 @@ class OrdersService {
   // ============================================
 
   /**
+   * Get active districts for forms
+   */
+  getDistricts = async () => {
+    console.log(`${LOG_PREFIX} Fetching active districts...`);
+    try {
+      const { data, error } = await supabase
+        .from('districts')
+        .select('id, code, name_en, name_ru, name_kg, region, sort_order')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true });
+
+      if (error) throw error;
+      console.log(`${LOG_PREFIX} Found ${data?.length || 0} districts`);
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getDistricts failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Normalize Kyrgyz phone number to +996 format
+   * Accepts: +996XXXXXXXXX, 0XXXXXXXXX, XXXXXXXXX
+   * Returns: +996XXXXXXXXX or null if invalid
+   */
+  normalizeKyrgyzPhone = (phone) => {
+    if (!phone) return null;
+
+    // Remove all non-digit characters except leading +
+    let cleaned = phone.replace(/[^\d+]/g, '');
+
+    // If starts with +996, keep it
+    if (cleaned.startsWith('+996')) {
+      const digits = cleaned.slice(4);
+      if (digits.length === 9) return `+996${digits}`;
+    }
+    // If starts with 996 (no +), add +
+    else if (cleaned.startsWith('996')) {
+      const digits = cleaned.slice(3);
+      if (digits.length === 9) return `+996${digits}`;
+    }
+    // If starts with 0, replace with +996
+    else if (cleaned.startsWith('0')) {
+      const digits = cleaned.slice(1);
+      if (digits.length === 9) return `+996${digits}`;
+    }
+    // If just 9 digits, add +996
+    else if (cleaned.length === 9 && /^\d{9}$/.test(cleaned)) {
+      return `+996${cleaned}`;
+    }
+
+    return null; // Invalid format
+  }
+
+  /**
+   * Validate Kyrgyz phone number format
+   * Returns: { valid: boolean, normalized: string|null, error: string|null }
+   */
+  validateKyrgyzPhone = (phone) => {
+    const normalized = this.normalizeKyrgyzPhone(phone);
+    if (normalized) {
+      return { valid: true, normalized, error: null };
+    }
+    return {
+      valid: false,
+      normalized: null,
+      error: 'Invalid format. Use +996XXXXXXXXX, 0XXXXXXXXX, or XXXXXXXXX'
+    };
+  }
+
+  /**
+   * Try to find existing client by phone number
+   * Returns client_id if found, null otherwise
+   */
+  findClientByPhone = async (clientPhone) => {
+    if (!clientPhone) return null;
+
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, phone')
+        .eq('phone', clientPhone)
+        .eq('role', 'client')
+        .maybeSingle();
+
+      if (error) {
+        console.warn(`${LOG_PREFIX} Error finding client:`, error);
+        return null;
+      }
+
+      return data?.id || null;
+    } catch (error) {
+      console.warn(`${LOG_PREFIX} findClientByPhone failed:`, error);
+      return null;
+    }
+  }
+
+  /**
    * Create order extended (dispatcher) - Creates a new order with all fields
+   * Uses client_name/client_phone columns for dispatcher-created orders
+   * Client phone is used to look up existing registered clients
    */
   createOrderExtended = async (orderData, dispatcherId) => {
     console.log(`${LOG_PREFIX} Creating order (extended):`, orderData);
 
     try {
+      if (!orderData.clientPhone) {
+        throw new Error('Client phone number is required');
+      }
+
+      // Normalize phone number to +996 format
+      const normalizedPhone = this.normalizeKyrgyzPhone(orderData.clientPhone);
+      if (!normalizedPhone) {
+        throw new Error('Invalid phone format. Use +996XXXXXXXXX, 0XXXXXXXXX, or XXXXXXXXX');
+      }
+
+      // Try to find existing registered client by normalized phone
+      const existingClientId = await this.findClientByPhone(normalizedPhone);
+
+      // Client name is validated at form level, just trim the values
+      const clientName = orderData.clientName?.trim();
+
+      if (!clientName) {
+        throw new Error('Client name is required');
+      }
+
+      console.log(`${LOG_PREFIX} Order data - clientId: ${existingClientId}, clientName: ${clientName}, clientPhone: ${normalizedPhone}`);
+
+      const insertPayload = {
+        client_id: existingClientId, // null if no registered client found
+        client_name: clientName,
+        client_phone: normalizedPhone,
+        dispatcher_id: dispatcherId,
+        service_type: orderData.serviceType || 'other',
+        urgency: orderData.urgency || 'planned',
+        status: ORDER_STATUS.PLACED,
+        pricing_type: orderData.pricingType || 'unknown',
+        initial_price: orderData.initialPrice || null,
+        callout_fee: orderData.calloutFee || null,
+        problem_description: orderData.problemDescription,
+        area: orderData.area,
+        full_address: orderData.fullAddress,
+        orientir: orderData.orientir || null,
+        preferred_date: orderData.preferredDate || null,
+        preferred_time: orderData.preferredTime || null,
+        dispatcher_note: orderData.dispatcherNote || null,
+      };
+
+      console.log(`${LOG_PREFIX} Insert payload:`, JSON.stringify(insertPayload, null, 2));
+
       const { data, error } = await supabase
         .from('orders')
-        .insert({
-          client_id: orderData.clientId,
-          dispatcher_id: dispatcherId,
-          service_type: orderData.serviceType || 'other',
-          urgency: orderData.urgency || 'planned',
-          status: ORDER_STATUS.PLACED,
-          pricing_type: orderData.pricingType || 'unknown',
-          initial_price: orderData.initialPrice || null,
-          callout_fee: orderData.calloutFee || null,
-          problem_description: orderData.problemDescription,
-          area: orderData.area,
-          full_address: orderData.fullAddress,
-          preferred_date: orderData.preferredDate || null,
-          preferred_time: orderData.preferredTime || null,
-          dispatcher_note: orderData.dispatcherNote || null,
-          client_name: orderData.clientName || null,
-          client_phone: orderData.clientPhone || null,
-        })
-        .select()
+        .insert(insertPayload)
+        .select(`
+          *,
+          client:client_id(full_name, phone)
+        `)
         .single();
 
       if (error) {
@@ -860,8 +1131,8 @@ class OrdersService {
   }
 
   /**
-   * Get available masters for assignment (uses RPC function)
-   */
+ * Get available masters for assignment (uses RPC function)
+ */
   getAvailableMasters = async () => {
     console.log(`${LOG_PREFIX} Fetching available masters for assignment...`);
 
@@ -912,30 +1183,8 @@ class OrdersService {
     }
   }
 
-  /**
-   * Update order inline (dispatcher editable fields)
-   */
-  updateOrderInline = async (orderId, updates) => {
-    console.log(`${LOG_PREFIX} Updating order inline: ${orderId}`, updates);
-
-    try {
-      const { data, error } = await supabase.rpc('update_order_inline', {
-        p_order_id: orderId,
-        p_updates: updates
-      });
-
-      if (error) {
-        console.error(`${LOG_PREFIX} updateOrderInline RPC error:`, error);
-        throw error;
-      }
-
-      console.log(`${LOG_PREFIX} Order updated:`, data);
-      return { success: true, message: 'Order updated!', ...data };
-    } catch (error) {
-      console.error(`${LOG_PREFIX} updateOrderInline failed:`, error);
-      return { success: false, message: error.message };
-    }
-  }
+  // NOTE: updateOrderInline is defined earlier in the file (around line 531)
+  // with proper fee handling and debug logging
 
   /**
    * Confirm payment (dispatcher) - Transition: completed → confirmed
@@ -1032,73 +1281,6 @@ class OrdersService {
     } catch (error) {
       console.error(`${LOG_PREFIX} getDispatcherOrdersAdvanced failed:`, error);
       return [];
-    }
-  }
-
-  /**
-   * Create order with extended fields for new dashboard
-   */
-  createOrderExtended = async (orderData, dispatcherId) => {
-    console.log(`${LOG_PREFIX} Creating order (extended) by dispatcher: ${dispatcherId}`);
-
-    try {
-      const {
-        clientId,
-        pricingType,
-        initialPrice,
-        calloutFee,
-        serviceType,
-        urgency,
-        problemDescription,
-        area,
-        fullAddress,
-        preferredDate,
-        preferredTime,
-        guaranteedPayout,
-        dispatcherNote
-      } = orderData;
-
-      // Get default guaranteed payout if not specified
-      let payout = guaranteedPayout;
-      if (!payout) {
-        const { data: settings } = await supabase
-          .from('platform_settings')
-          .select('default_guaranteed_payout')
-          .single();
-        payout = settings?.default_guaranteed_payout || 500;
-      }
-
-      const { data, error } = await supabase
-        .from('orders')
-        .insert({
-          client_id: clientId,
-          dispatcher_id: dispatcherId,
-          pricing_type: pricingType || 'unknown',
-          initial_price: initialPrice || null,
-          guaranteed_payout: calloutFee || payout,
-          service_type: serviceType || 'repair',
-          urgency: urgency || 'planned',
-          problem_description: problemDescription,
-          area: area,
-          full_address: fullAddress,
-          preferred_date: preferredDate || null,
-          preferred_time: preferredTime || null,
-          dispatcher_note: dispatcherNote || null,
-          status: ORDER_STATUS.PLACED
-        })
-        .select(`
-          *,
-          client:client_id(full_name, phone)
-        `)
-        .single();
-
-      if (error) throw error;
-
-      console.log(`${LOG_PREFIX} Order created: ${data.id}`);
-      return { success: true, message: 'Order created!', order: data, orderId: data.id };
-    } catch (error) {
-      console.error(`${LOG_PREFIX} createOrderExtended failed:`, error);
-      return { success: false, message: error.message };
     }
   }
 
@@ -1288,7 +1470,7 @@ class OrdersService {
 
   /**
    * CRUD operations for admin
-
+  
    */
   updateOrder = async (orderId, updates) => {
     console.log(`${LOG_PREFIX} Updating order (admin): ${orderId}`, updates);

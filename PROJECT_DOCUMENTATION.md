@@ -555,3 +555,47 @@ npx expo start --clear
 ---
 
 *End of Technical Documentation*
+
+---
+
+# 5. Version History & Changelog
+
+## v5.1.0 - Stability & Dispatcher Enhancements (January 25, 2026)
+
+### Critical Stability Fixes
+- **Session Persistence**: Implemented platform-aware storage solution. React Native Web now uses `localStorage` wrapper, while native apps continue using `AsyncStorage`. This resolves the issue of users being logged out on browser refresh.
+- **Auth Token Refresh**: Enhanced `App.js` auth listener to handle `TOKEN_REFRESHED` events, preventing "functions stop working" issues caused by stale tokens.
+- **Auto-Navigation**: Refactored `AppNavigator` to use conditional rendering based on auth state, ensuring seamless redirection to the appropriate dashboard upon session restoration.
+
+### Dispatcher Dashboard
+- **Order Cancellation**: 
+  - Enabled cancellation for `PLACED`, `REOPENED`, `EXPIRED` statuses.
+  - Added support for updating reason on `CANCELED_BY_MASTER` and `CANCELED_BY_CLIENT` orders.
+  - Implemented `window.confirm` for Web and `Alert.alert` for Native to ensure confirmation dialogs work reliably across platforms.
+- **Order Editing**:
+  - Fixed persistence bug where edits were not saving to the database by resolving duplicate function definitions (`updateOrderInline`).
+  - Added `initial_price` editing capability.
+  - Fixed empty fields issue when opening the edit form.
+- **New Fields**:
+  - **Districts**: Added localized district dropdown (fetched from `districts` table).
+  - **Orientir**: Added "Landmark" field with proper display logic (removed emojis).
+
+### Database Updates
+- **RPC Functions**: Added `update_order_inline` security definer function to allow dispatchers to safely update specific order fields.
+- **Triggers**: Fixed `validate_order_status_transition` trigger to correctly handle status updates without false positives.
+
+## v5.2.0 - Master Dashboard & Localization (January 25, 2026)
+
+### Master Dashboard Polish
+- **History View**: Combined "Order History" and "Balance Transactions" into a single chronological feed. Added detailed commission breakdown to order cards and localized transaction types (Top Up, Adjustment, etc.).
+- **UI Enhancements**:
+  - Added "Clear Filters" button to the filter bar.
+  - Moved "Verified" badge from Header to Profile section for better visibility.
+  - Removed redundant statistics (Rating, Completed Jobs) to declutter the interface.
+- **Localization**: Implemented full translation support (EN/RU/KG) for cancellation reasons in the "Refuse Job" modal, fetching localized names directly from the `cancellation_reasons` table.
+
+### Data Architecture & Core Fixes
+- **Districts**: Fully integrated `districts` table with localized names. Added `orientir` (landmark) field to orders for precise location sharing.
+- **Client Data**: Fixed persistence of `client_name` and `client_phone` during order creation, ensuring dispatcher-entered data is correctly stored and displayed.
+- **Job Limits**: Verified enforcement of `max_active_jobs` via the `check_master_can_claim` RPC function, preventing masters from exceeding their assigned workload.
+- **Cleanup**: Resolved database inconsistencies related to manual order deletions, ensuring master balances are accurately recalculated from transaction history.

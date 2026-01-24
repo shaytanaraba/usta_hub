@@ -96,16 +96,8 @@ const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, o
             <View style={styles.headerLeft}>
                 {user ? (
                     <>
+                        {/* User name and balance mini badge */}
                         <Text style={[styles.userName, { color: theme.textPrimary }]} numberOfLines={1}>{user.full_name || 'Master'}</Text>
-                        <View style={[styles.verifiedBadge, {
-                            backgroundColor: user.is_verified ? `${theme.accentSuccess}20` : `${theme.accentDanger}20`,
-                            borderColor: user.is_verified ? theme.accentSuccess : theme.accentDanger
-                        }]}>
-                            {user.is_verified ? <ShieldCheck size={12} color={theme.accentSuccess} /> : <AlertCircle size={12} color={theme.accentDanger} />}
-                            <Text style={[styles.verifiedText, { color: user.is_verified ? theme.accentSuccess : theme.accentDanger }]}>
-                                {t(user.is_verified ? 'verified' : 'unverified')}
-                            </Text>
-                        </View>
                         {financials && (
                             <View style={[styles.balanceMini, { backgroundColor: financials.balanceBlocked ? `${theme.accentDanger}15` : `${theme.accentIndigo}15` }]}>
                                 <Wallet size={12} color={financials.balanceBlocked ? theme.accentDanger : theme.accentIndigo} />
@@ -275,7 +267,7 @@ const SectionToggle = ({ sections, activeSection, onSectionChange }) => {
 // ============================================
 // MY ACCOUNT TAB
 // ============================================
-const MyAccountTab = ({ user, financials, earnings, orderHistory, refreshing, onRefresh }) => {
+const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransactions = [], refreshing, onRefresh }) => {
     const { t, language } = useLocalization();
     const { theme } = useTheme();
     const [section, setSection] = useState('history');
@@ -392,33 +384,101 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, refreshing, on
                 </View>
             )}
 
-            {/* History Section */}
+            {/* History Section - Combined orders and balance transactions */}
             {section === 'history' && (
                 <View style={styles.historySection}>
-                    {orderHistory.length === 0 ? (
-                        <View style={styles.emptyState}><ClipboardList size={40} color={theme.textMuted} /><Text style={{ color: theme.textMuted }}>{t('noOrderHistory')}</Text></View>
-                    ) : orderHistory.map((o, i) => (
-                        <View key={o.id} style={[styles.historyItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                            <View><Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{getServiceLabel(o.service_type)}</Text><Text style={{ color: theme.textMuted, fontSize: 11 }}>{o.area}</Text><Text style={{ color: theme.textMuted, fontSize: 10 }}>{new Date(o.created_at).toLocaleDateString()}</Text></View>
-                            <View style={{ alignItems: 'flex-end' }}><Text style={{ color: theme.accentSuccess, fontWeight: '600' }}>{o.final_price || o.initial_price || '-'}</Text><View style={[styles.statusBadgeSmall, { backgroundColor: `${getStatusColor(o.status)}20` }]}><Text style={{ color: getStatusColor(o.status), fontSize: 9 }}>{getStatusLabel(o.status)}</Text></View></View>
-                        </View>
-                    ))}
+                    {(() => {
+                        // Combine and sort order history with balance transactions by date (newest first)
+                        const combinedHistory = [
+                            ...orderHistory.map(o => ({ ...o, type: 'order', date: new Date(o.created_at) })),
+                            ...balanceTransactions.map(tx => ({ ...tx, type: 'transaction', date: new Date(tx.created_at) }))
+                        ].sort((a, b) => b.date - a.date);
+
+                        if (combinedHistory.length === 0) {
+                            return (
+                                <View style={styles.emptyState}>
+                                    <ClipboardList size={40} color={theme.textMuted} />
+                                    <Text style={{ color: theme.textMuted }}>{t('noOrderHistory')}</Text>
+                                </View>
+                            );
+                        }
+
+                        return combinedHistory.map((item, i) => {
+                            // Render balance transaction (top-up, adjustment, etc)
+                            if (item.type === 'transaction') {
+                                const isPositive = item.amount > 0;
+                                const txTypeLabel = {
+                                    top_up: t('transactionTopUp') || 'Top Up',
+                                    adjustment: t('transactionAdjustment') || 'Adjustment',
+                                    refund: t('transactionRefund') || 'Refund',
+                                    waiver: t('transactionWaiver') || 'Waiver',
+                                    commission: t('transactionCommission') || 'Commission'
+                                }[item.transaction_type] || item.transaction_type;
+
+                                return (
+                                    <View key={`tx-${item.id}`} style={[styles.historyItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                                        <View>
+                                            <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{txTypeLabel}</Text>
+                                            {item.notes && <Text style={{ color: theme.textMuted, fontSize: 11 }} numberOfLines={1}>{item.notes}</Text>}
+                                            <Text style={{ color: theme.textMuted, fontSize: 10 }}>{item.date.toLocaleDateString()}</Text>
+                                        </View>
+                                        <View style={{ alignItems: 'flex-end' }}>
+                                            <Text style={{ color: isPositive ? theme.accentSuccess : theme.accentDanger, fontWeight: '600' }}>
+                                                {isPositive ? '+' : ''}{Number(item.amount).toFixed(0)}
+                                            </Text>
+                                            <Text style={{ color: theme.textMuted, fontSize: 9 }}>{item.balance_after?.toFixed(0) || '-'}</Text>
+                                        </View>
+                                    </View>
+                                );
+                            }
+
+                            // Render order history item with commission info
+                            const o = item;
+                            return (
+                                <View key={o.id} style={[styles.historyItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                                    <View>
+                                        <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{getServiceLabel(o.service_type)}</Text>
+                                        <Text style={{ color: theme.textMuted, fontSize: 11 }}>{o.area}</Text>
+                                        <Text style={{ color: theme.textMuted, fontSize: 10 }}>{o.date.toLocaleDateString()}</Text>
+                                    </View>
+                                    <View style={{ alignItems: 'flex-end' }}>
+                                        <Text style={{ color: theme.accentSuccess, fontWeight: '600' }}>{o.final_price || o.initial_price || '-'}</Text>
+                                        {/* Show commission if available */}
+                                        {o.commission_amount && <Text style={{ color: theme.textMuted, fontSize: 9 }}>-{o.commission_amount} {t('transactionCommission') || 'comm.'}</Text>}
+                                        <View style={[styles.statusBadgeSmall, { backgroundColor: `${getStatusColor(o.status)}20` }]}>
+                                            <Text style={{ color: getStatusColor(o.status), fontSize: 9 }}>{getStatusLabel(o.status)}</Text>
+                                        </View>
+                                    </View>
+                                </View>
+                            );
+                        });
+                    })()}
                 </View>
             )}
 
             {/* Profile Section */}
             {section === 'profile' && (
                 <View style={styles.profileSection}>
+                    {/* User info card with verified status */}
                     <View style={[styles.profileCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                        <Text style={[styles.profileName, { color: theme.textPrimary }]}>{financials?.fullName || user?.full_name}</Text>
-                        <Text style={{ color: theme.textMuted }}>{financials?.email || user?.email}</Text>
+                        <View style={styles.profileHeaderRow}>
+                            <Text style={[styles.profileName, { color: theme.textPrimary }]}>{financials?.fullName || user?.full_name}</Text>
+                            {/* Verified badge - moved from header */}
+                            <View style={[styles.verifiedBadgeProfile, {
+                                backgroundColor: user?.is_verified ? `${theme.accentSuccess}20` : `${theme.accentDanger}20`,
+                                borderColor: user?.is_verified ? theme.accentSuccess : theme.accentDanger
+                            }]}>
+                                {user?.is_verified ? <ShieldCheck size={12} color={theme.accentSuccess} /> : <AlertCircle size={12} color={theme.accentDanger} />}
+                                <Text style={{ color: user?.is_verified ? theme.accentSuccess : theme.accentDanger, fontSize: 10, fontWeight: '600' }}>
+                                    {t(user?.is_verified ? 'verified' : 'unverified')}
+                                </Text>
+                            </View>
+                        </View>
+                        <Text style={{ color: theme.textMuted, marginTop: 4 }}>{financials?.email || user?.email}</Text>
                         <Text style={{ color: theme.textSecondary }}>{financials?.phone || user?.phone}</Text>
                     </View>
-                    <View style={styles.statsRow}>
-                        <View style={[styles.statItem, { backgroundColor: theme.bgCard }]}><Star size={16} color={theme.accentWarning} /><Text style={{ color: theme.textPrimary, fontSize: 18, fontWeight: '600' }}>{financials?.rating?.toFixed(1) || '0.0'}</Text><Text style={{ color: theme.textMuted, fontSize: 10 }}>{t('rating')}</Text></View>
-                        <View style={[styles.statItem, { backgroundColor: theme.bgCard }]}><CheckCircle2 size={16} color={theme.accentSuccess} /><Text style={{ color: theme.textPrimary, fontSize: 18, fontWeight: '600' }}>{financials?.completedJobs || 0}</Text><Text style={{ color: theme.textMuted, fontSize: 10 }}>{t('completed')}</Text></View>
-                        <View style={[styles.statItem, { backgroundColor: theme.bgCard }]}><XCircle size={16} color={theme.accentDanger} /><Text style={{ color: theme.textPrimary, fontSize: 18, fontWeight: '600' }}>{financials?.refusalCount || 0}</Text><Text style={{ color: theme.textMuted, fontSize: 10 }}>{t('refused')}</Text></View>
-                    </View>
+
+                    {/* Professional info card */}
                     <View style={[styles.profileCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
                         <Text style={{ color: theme.textPrimary, fontWeight: '600', marginBottom: 8 }}>{t('professionalInfo')}</Text>
                         <View style={styles.infoRow}><Text style={{ color: theme.textMuted }}>{t('serviceArea')}:</Text><Text style={{ color: theme.textPrimary }}>{financials?.serviceArea || '-'}</Text></View>
@@ -450,6 +510,8 @@ const DashboardContent = ({ navigation }) => {
     const [financials, setFinancials] = useState(null);
     const [earnings, setEarnings] = useState([]);
     const [orderHistory, setOrderHistory] = useState([]);
+    // Balance transactions for showing admin top-ups in History
+    const [balanceTransactions, setBalanceTransactions] = useState([]);
     const [serviceTypes, setServiceTypes] = useState([]);
     const [cancelReasons, setCancelReasons] = useState([]);
 
@@ -473,18 +535,20 @@ const DashboardContent = ({ navigation }) => {
             const u = await authService.getCurrentUser();
             setUser(u);
             if (u) {
-                const [poolRes, jobsRes, fin, earn, hist, svcTypes, reasons] = await Promise.all([
+                const [poolRes, jobsRes, fin, earn, hist, balTx, svcTypes, reasons] = await Promise.all([
                     ordersService.getAvailableOrders(1, PAGE_LIMIT, filters),
                     ordersService.getMasterOrders(u.id, 1, 100),
                     earningsService.getMasterFinancialSummary(u.id),
                     earningsService.getMasterEarnings(u.id),
                     ordersService.getMasterOrderHistory(u.id),
+                    earningsService.getBalanceTransactions(u.id),  // Fetch balance transactions (top-ups)
                     ordersService.getServiceTypes(),
                     ordersService.getCancellationReasons('master'),
                 ]);
                 setAvailableOrders(poolRes.data); setTotalPool(poolRes.count);
                 setMyOrders(jobsRes.data); setFinancials(fin); setEarnings(earn);
-                setOrderHistory(hist); setServiceTypes(svcTypes); setCancelReasons(reasons);
+                setOrderHistory(hist); setBalanceTransactions(balTx);
+                setServiceTypes(svcTypes); setCancelReasons(reasons);
             }
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
@@ -601,16 +665,35 @@ const DashboardContent = ({ navigation }) => {
                     <SectionToggle sections={[{ key: 'available', label: t('sectionAvailable'), count: availableOrders.length }, { key: 'myJobs', label: t('sectionMyJobs'), count: activeJobsCount }]} activeSection={orderSection} onSectionChange={setOrderSection} />
                     <View style={[styles.filterBar, { backgroundColor: theme.bgSecondary, borderBottomColor: theme.borderPrimary }]}>
                         <View style={styles.filterBarRow}>
-                            <TouchableOpacity style={[styles.filterToggleBtn, { backgroundColor: showFilters ? `${theme.accentIndigo}15` : theme.bgCard, borderColor: showFilters ? theme.accentIndigo : theme.borderPrimary }]} onPress={() => setShowFilters(!showFilters)}>
+                            {/* Filter toggle button - left side */}
+                            <TouchableOpacity
+                                style={[styles.filterToggleBtn, {
+                                    backgroundColor: showFilters ? `${theme.accentIndigo}15` : theme.bgCard,
+                                    borderColor: showFilters ? theme.accentIndigo : theme.borderPrimary
+                                }]}
+                                onPress={() => setShowFilters(!showFilters)}
+                            >
                                 <Filter size={14} color={showFilters ? theme.accentIndigo : theme.textSecondary} />
                                 {showFilters ? <ChevronUp size={14} color={theme.accentIndigo} /> : <ChevronDown size={14} color={theme.textSecondary} />}
                             </TouchableOpacity>
+
+                            {/* Filter dropdowns - center/scrollable */}
                             {showFilters && (
                                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScrollContent} style={styles.filterScroll}>
                                     <Dropdown label={t('filterUrgency')} value={filters.urgency} options={['all', 'emergency', 'urgent', 'planned']} optionLabels={{ all: t('filterAll'), emergency: t('urgencyEmergency'), urgent: t('urgencyUrgent'), planned: t('urgencyPlanned') }} onChange={v => setFilters({ ...filters, urgency: v })} />
                                     <Dropdown label={t('filterService')} value={filters.service} options={['all', ...availableServices]} optionLabels={serviceOptionLabels} onChange={v => setFilters({ ...filters, service: v })} />
                                     <Dropdown label={t('filterArea')} value={filters.area} options={['all', ...availableAreas]} optionLabels={{ all: t('filterAll') }} onChange={v => setFilters({ ...filters, area: v })} />
                                 </ScrollView>
+                            )}
+
+                            {/* Clear Filters button - right side, only visible when filters are active */}
+                            {(filters.urgency !== 'all' || filters.service !== 'all' || filters.area !== 'all' || filters.pricing !== 'all') && (
+                                <TouchableOpacity
+                                    style={[styles.clearFiltersBtn, { borderColor: theme.textMuted, marginLeft: 'auto' }]}
+                                    onPress={() => setFilters({ urgency: 'all', service: 'all', area: 'all', pricing: 'all' })}
+                                >
+                                    <X size={14} color={theme.textMuted} />
+                                </TouchableOpacity>
                             )}
                         </View>
                     </View>
@@ -620,7 +703,7 @@ const DashboardContent = ({ navigation }) => {
             {loading && !refreshing ? (
                 <View style={styles.center}><ActivityIndicator color={theme.accentIndigo} size="large" /></View>
             ) : activeTab === 'account' ? (
-                <MyAccountTab user={user} financials={financials} earnings={earnings} orderHistory={orderHistory} refreshing={refreshing} onRefresh={onRefresh} />
+                <MyAccountTab user={user} financials={financials} earnings={earnings} orderHistory={orderHistory} balanceTransactions={balanceTransactions} refreshing={refreshing} onRefresh={onRefresh} />
             ) : (
                 <FlatList data={processedOrders} key={deviceUtils.getGridColumns()} numColumns={deviceUtils.getGridColumns()} keyExtractor={item => item.id} contentContainerStyle={styles.list}
                     columnWrapperStyle={deviceUtils.getGridColumns() > 1 ? styles.colWrapper : null} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}
@@ -671,11 +754,25 @@ const DashboardContent = ({ navigation }) => {
                             <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>{t('modalCancelTitle')}</Text>
                             <Text style={[styles.modalLabel, { color: theme.textMuted }]}>{t('modalSelectReason')}</Text>
                             <ScrollView style={{ maxHeight: 200 }}>
-                                {cancelReasons.map(r => (
-                                    <TouchableOpacity key={r.code} style={[styles.reasonItem, { backgroundColor: refuseData.reason === r.code ? `${theme.accentIndigo}15` : theme.bgCard, borderColor: refuseData.reason === r.code ? theme.accentIndigo : theme.borderPrimary }]} onPress={() => setRefuseData({ ...refuseData, reason: r.code })}>
-                                        <Text style={{ color: refuseData.reason === r.code ? theme.accentIndigo : theme.textPrimary }}>{r.name_en}</Text>
-                                    </TouchableOpacity>
-                                ))}
+                                {/* Render cancellation reasons with localized names */}
+                                {cancelReasons.map(r => {
+                                    // Get localized reason name based on current language
+                                    const reasonLabel = language === 'ru' ? (r.name_ru || r.name_en)
+                                        : language === 'kg' ? (r.name_kg || r.name_en)
+                                            : r.name_en;
+                                    return (
+                                        <TouchableOpacity
+                                            key={r.code}
+                                            style={[styles.reasonItem, {
+                                                backgroundColor: refuseData.reason === r.code ? `${theme.accentIndigo}15` : theme.bgCard,
+                                                borderColor: refuseData.reason === r.code ? theme.accentIndigo : theme.borderPrimary
+                                            }]}
+                                            onPress={() => setRefuseData({ ...refuseData, reason: r.code })}
+                                        >
+                                            <Text style={{ color: refuseData.reason === r.code ? theme.accentIndigo : theme.textPrimary }}>{reasonLabel}</Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
                             </ScrollView>
                             <TextInput style={[styles.modalInput, { backgroundColor: theme.bgCard, color: theme.textPrimary, borderColor: theme.borderPrimary, marginTop: 10 }]} placeholder={t('modalAdditionalNotes')} placeholderTextColor={theme.textMuted} multiline numberOfLines={2} value={refuseData.notes || ''} onChangeText={text => setRefuseData({ ...refuseData, notes: text })} />
                             <View style={styles.modalActions}>
@@ -713,6 +810,9 @@ const styles = StyleSheet.create({
     filterToggleBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, height: 36, borderRadius: 8, borderWidth: 1 },
     filterScroll: { flex: 1 },
     filterScrollContent: { gap: 8 },
+    // Clear filters button - outline style with X icon
+    clearFiltersBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, height: 32, borderRadius: 8, borderWidth: 1, backgroundColor: 'transparent' },
+    clearFiltersBtnText: { fontSize: 10, fontWeight: '600', textTransform: 'uppercase' },
     dropdownWrapper: { position: 'relative' },
     dropdownButton: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, height: 36, borderRadius: 8, borderWidth: 1 },
     dropdownLabel: { fontSize: 12, fontWeight: '600', textTransform: 'uppercase' },
@@ -778,7 +878,10 @@ const styles = StyleSheet.create({
     emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
     profileSection: { gap: 16 },
     profileCard: { padding: 16, borderRadius: 12, borderWidth: 1 },
-    profileName: { fontSize: 18, fontWeight: '700', marginBottom: 4 },
+    // Profile header row with name and verified badge
+    profileHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    verifiedBadgeProfile: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
+    profileName: { fontSize: 18, fontWeight: '700' },
     statsRow: { flexDirection: 'row', gap: 10 },
     statItem: { flex: 1, alignItems: 'center', padding: 16, borderRadius: 12, gap: 4 },
     infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },

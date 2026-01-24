@@ -41,15 +41,39 @@ function AppNavigator() {
     console.log(`${LOG_PREFIX} Initializing app...`);
     checkUser();
 
-    // Listen for auth state changes
+    // Listen for auth state changes - handles session persistence and token refresh
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log(`${LOG_PREFIX} Auth state changed: ${event}`);
 
-      if (event === 'SIGNED_OUT') {
-        setUser(null);
-      } else if (session?.user) {
-        const currentUser = await authService.getCurrentUser();
-        setUser(currentUser);
+      switch (event) {
+        case 'SIGNED_OUT':
+          console.log(`${LOG_PREFIX} User signed out, clearing state`);
+          setUser(null);
+          break;
+
+        case 'SIGNED_IN':
+        case 'TOKEN_REFRESHED':
+        case 'USER_UPDATED':
+          // Refresh user data when session changes or token refreshes
+          if (session?.user) {
+            console.log(`${LOG_PREFIX} Session active, refreshing user data...`);
+            // Only fetch if we don't have the user or if it's a legitimate refresh
+            // Optimization: could check if user ID matches to avoid re-fetch on every token refresh
+            const currentUser = await authService.getCurrentUser();
+            setUser(currentUser);
+          }
+          break;
+
+        case 'INITIAL_SESSION':
+          if (session?.user) {
+            console.log(`${LOG_PREFIX} Restoring session from storage...`);
+            const currentUser = await authService.getCurrentUser();
+            setUser(currentUser);
+          }
+          break;
+
+        default:
+          console.log(`${LOG_PREFIX} Unhandled auth event: ${event}`);
       }
     });
 
@@ -70,16 +94,6 @@ function AppNavigator() {
     }
   };
 
-  const getInitialScreen = (role) => {
-    switch (role) {
-      case 'master': return 'MasterDashboard';
-      case 'dispatcher': return 'DispatcherDashboard';
-      case 'admin': return 'AdminDashboard';
-      case 'client': return 'Login'; // Clients hidden for now
-      default: return 'Login';
-    }
-  };
-
   if (loading) {
     return <LoadingScreen />;
   }
@@ -87,40 +101,37 @@ function AppNavigator() {
   return (
     <NavigationContainer>
       <Stack.Navigator
-        initialRouteName="Login"
         screenOptions={{
           headerShown: false,
           animation: 'slide_from_right',
           contentStyle: { backgroundColor: '#0f172a' }
         }}
       >
-        {/* Login - Always available */}
-        <Stack.Screen
-          name="Login"
-          component={LoginScreen}
-          options={{ animationTypeForReplace: 'pop' }}
-        />
+        {!user ? (
+          // Authenticated: Show Dashboard based on Role
+          <Stack.Screen
+            name="Login"
+            component={LoginScreen}
+            options={{ animationTypeForReplace: 'pop' }}
+          />
+        ) : (
+          // Authenticated: Show Dashboard based on Role
+          <>
+            {user.role === 'master' && (
+              <Stack.Screen name="MasterDashboard" component={MasterDashboard} initialParams={{ user }} />
+            )}
+            {user.role === 'dispatcher' && (
+              <Stack.Screen name="DispatcherDashboard" component={DispatcherDashboard} initialParams={{ user }} />
+            )}
+            {user.role === 'admin' && (
+              <Stack.Screen name="AdminDashboard" component={AdminDashboard} initialParams={{ user }} />
+            )}
 
-        {/* Master Dashboard */}
-        <Stack.Screen
-          name="MasterDashboard"
-          component={MasterDashboard}
-          initialParams={{ user }}
-        />
-
-        {/* Dispatcher Dashboard */}
-        <Stack.Screen
-          name="DispatcherDashboard"
-          component={DispatcherDashboard}
-          initialParams={{ user }}
-        />
-
-        {/* Admin Dashboard */}
-        <Stack.Screen
-          name="AdminDashboard"
-          component={AdminDashboard}
-          initialParams={{ user }}
-        />
+            {/* Fallback for unknown roles - arguably shouldn't happen due to Login checks */}
+            {/* If role doesn't match, we might want to fallback to Login or show Error, 
+                but for now we assume role is valid from authService */}
+          </>
+        )}
       </Stack.Navigator>
     </NavigationContainer>
   );

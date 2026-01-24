@@ -55,6 +55,7 @@ const translations = {
         filterService: "Service",
         filterArea: "Area",
         filterAll: "All",
+        filterClear: "Clear",
         filterStatus: "Status",
         filterSort: "Sort",
         filterNewestFirst: "Newest First",
@@ -340,6 +341,12 @@ const translations = {
         finJobsDone: "Jobs Done",
         finPaid: "Paid",
         finPending: "Pending",
+        // Transaction types for history
+        transactionTopUp: "Top Up",
+        transactionAdjustment: "Adjustment",
+        transactionRefund: "Refund",
+        transactionWaiver: "Waiver",
+        transactionCommission: "Commission",
         debt: "Debt",
 
         // Profile
@@ -568,6 +575,7 @@ const translations = {
         filterService: "Услуга",
         filterArea: "Район",
         filterAll: "Все",
+        filterClear: "Сброс",
         filterStatus: "Статус",
         filterSort: "Сортировка",
         filterNewestFirst: "Сначала новые",
@@ -853,6 +861,12 @@ const translations = {
         finJobsDone: "Выполнено работ",
         finPaid: "Оплачено",
         finPending: "Ожидает",
+        // Transaction types for history
+        transactionTopUp: "Пополнение",
+        transactionAdjustment: "Корректировка",
+        transactionRefund: "Возврат",
+        transactionWaiver: "Списание",
+        transactionCommission: "Комиссия",
         debt: "Долг",
 
         // Profile
@@ -1079,6 +1093,7 @@ const translations = {
         filterService: "Кызмат",
         filterArea: "Район",
         filterAll: "Бардыгы",
+        filterClear: "Тазалоо",
         filterStatus: "Статус",
         filterSort: "Реттөө",
         filterNewestFirst: "Жаңылар биринчи",
@@ -1363,6 +1378,12 @@ const translations = {
         finJobsDone: "Аткарылган иштер",
         finPaid: "Төлөндү",
         finPending: "Күтүүдө",
+        // Transaction types for history
+        transactionTopUp: "Толуктоо",
+        transactionAdjustment: "Оңдоо",
+        transactionRefund: "Кайтаруу",
+        transactionWaiver: "Кечүү",
+        transactionCommission: "Комиссия",
         debt: "Карыз",
 
         // Profile

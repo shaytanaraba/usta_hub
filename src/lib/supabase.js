@@ -1,21 +1,60 @@
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 // Load from environment variables
 // In Expo, use EXPO_PUBLIC_ prefix for variables accessible in the app
-export const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://hoiodsflirvqgkfcnoxe.supabase.co';
-export const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhvaW9kc2ZsaXJ2cWdrZmNub3hlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcwNzAwODIsImV4cCI6MjA4MjY0NjA4Mn0.SMG6fNHPGtawwxCWi3_iWrc92HGkT4aec9KU_1zuVsw';
+export const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://dpwdyvahtkvwvfpmhkhx.supabase.co';
+export const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRwd2R5dmFodGt2d3ZmcG1oa2h4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzY1NjEyMDQsImV4cCI6MjA1MjEzNzIwNH0.dNpvPQxCFzXhFqX-msHG2IIpSxRvRTOjTCAbTTe21J4';
 
 // Warn if using fallback values (development only)
 if (!process.env.EXPO_PUBLIC_SUPABASE_URL) {
-    console.warn('⚠️ EXPO_PUBLIC_SUPABASE_URL not found in environment, using fallback');
+    console.warn('[Supabase] ⚠️ EXPO_PUBLIC_SUPABASE_URL not found in environment, using fallback');
 }
+
+// Detect if running on web more reliably
+const isWeb = Platform.OS === 'web' || (typeof window !== 'undefined' && typeof localStorage !== 'undefined');
+console.log('[Supabase] Platform:', Platform.OS, 'isWeb:', isWeb);
+
+// Create a localStorage wrapper that matches Supabase's expected interface
+const webStorage = {
+    getItem: async (key) => {
+        try {
+            const value = localStorage.getItem(key);
+            console.log('[Supabase] webStorage.getItem:', key, value ? 'found' : 'null');
+            return value;
+        } catch (e) {
+            console.error('[Supabase] webStorage.getItem error:', e);
+            return null;
+        }
+    },
+    setItem: async (key, value) => {
+        try {
+            localStorage.setItem(key, value);
+            console.log('[Supabase] webStorage.setItem:', key);
+        } catch (e) {
+            console.error('[Supabase] webStorage.setItem error:', e);
+        }
+    },
+    removeItem: async (key) => {
+        try {
+            localStorage.removeItem(key);
+            console.log('[Supabase] webStorage.removeItem:', key);
+        } catch (e) {
+            console.error('[Supabase] webStorage.removeItem error:', e);
+        }
+    },
+};
+
+// Use appropriate storage based on platform
+const storage = isWeb ? webStorage : AsyncStorage;
+console.log('[Supabase] Using storage:', isWeb ? 'localStorage (web)' : 'AsyncStorage (native)');
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     auth: {
-        storage: AsyncStorage,
+        storage: storage,
         autoRefreshToken: true,
         persistSession: true,
-        detectSessionInUrl: false,
+        detectSessionInUrl: isWeb, // Enable for web OAuth flows
     },
 });
