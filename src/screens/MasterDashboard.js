@@ -57,14 +57,6 @@ const Dropdown = ({ label, value, options, optionLabels = {}, onChange }) => {
         } else setIsOpen(false);
     };
 
-    const calloutFee = order.callout_fee;
-    const displayPrice = order.final_price ?? order.initial_price;
-    const displayPriceText = displayPrice !== null && displayPrice !== undefined
-        ? `${displayPrice}`
-        : calloutFee !== null && calloutFee !== undefined
-            ? `${t('labelCallout') || 'Call-out:'} ${calloutFee}`
-            : (t('priceOpen') || 'Open');
-
     return (
         <View style={styles.dropdownWrapper}>
             <TouchableOpacity ref={buttonRef} style={[styles.dropdownButton, {
@@ -161,6 +153,13 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
         planned: { bg: `${theme.urgencyPlanned}15`, text: theme.urgencyPlanned }
     }[order.urgency] || { bg: `${theme.urgencyPlanned}15`, text: theme.urgencyPlanned };
     const statusLabel = getOrderStatusLabel(order.status, t);
+    const calloutFee = order.callout_fee;
+    const displayPrice = order.final_price ?? order.initial_price;
+    const displayPriceText = displayPrice !== null && displayPrice !== undefined
+        ? `${displayPrice}`
+        : calloutFee !== null && calloutFee !== undefined
+            ? `${t('labelCallout') || 'Call-out:'} ${calloutFee}`
+            : (t('priceOpen') || 'Open');
 
     const getLocationDisplay = () => {
         if (isPool) return order.area;

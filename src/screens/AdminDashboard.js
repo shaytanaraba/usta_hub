@@ -357,8 +357,14 @@ export default function AdminDashboard({ navigation }) {
 
     // Handlers
     const handleLogout = async () => {
-        await authService.logoutUser();
-        navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+        try {
+            await authService.logoutUser();
+        } catch (e) {
+            console.error('Logout failed', e);
+        } finally {
+            setIsSidebarOpen(false);
+            navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+        }
     };
 
     const handleSaveServiceType = async (typeData) => {
