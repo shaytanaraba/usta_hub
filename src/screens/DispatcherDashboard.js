@@ -788,8 +788,14 @@ export default function DispatcherDashboard({ navigation, route }) {
 
     const handleLogout = async () => {
         const doLogout = async () => {
-            await authService.logoutUser();
-            navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+            try {
+                await authService.logoutUser();
+            } catch (e) {
+                console.error('Logout failed', e);
+            } finally {
+                setIsSidebarOpen(false);
+                navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+            }
         };
         if (Platform.OS === 'web') {
             if (window.confirm(TRANSLATIONS[language].alertLogoutTitle + '?')) await doLogout();

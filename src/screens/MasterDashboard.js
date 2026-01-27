@@ -524,6 +524,16 @@ const DashboardContent = ({ navigation }) => {
 
     const onRefresh = useCallback(async () => { setRefreshing(true); await loadData(); setRefreshing(false); }, []);
 
+    const handleLogout = async () => {
+        try {
+            await authService.logoutUser();
+        } catch (e) {
+            console.error('Logout failed', e);
+        } finally {
+            navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+        }
+    };
+
     const sortJobs = (jobs) => {
         const score = (s) => ({ claimed: 4, started: 3, completed: 2, confirmed: 1 }[s] || 0);
         return [...jobs].sort((a, b) => score(b.status) - score(a.status) || new Date(b.created_at) - new Date(a.created_at));
@@ -621,7 +631,7 @@ const DashboardContent = ({ navigation }) => {
 
     return (
         <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
-            <Header user={user} financials={financials} onLogout={() => authService.logoutUser().then(() => navigation.reset({ index: 0, routes: [{ name: 'Login' }] }))} onLanguageToggle={cycleLanguage} onThemeToggle={toggleTheme} onRefresh={() => loadData(true)} />
+            <Header user={user} financials={financials} onLogout={handleLogout} onLanguageToggle={cycleLanguage} onThemeToggle={toggleTheme} onRefresh={() => loadData(true)} />
 
             {activeTab === 'orders' && (
                 <>
