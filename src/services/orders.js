@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '../lib/supabase';
+import { normalizeKyrgyzPhone as normalizeKyrgyzPhoneUtil, validateKyrgyzPhone as validateKyrgyzPhoneUtil } from '../utils/phone';
 
 const LOG_PREFIX = '[OrdersService]';
 
@@ -258,6 +259,19 @@ class OrdersService {
         throw new Error('Final price is required');
       }
 
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .select('callout_fee')
+        .eq('id', orderId)
+        .single();
+
+      if (orderError) throw orderError;
+
+      const calloutFee = orderData?.callout_fee;
+      if (calloutFee !== null && calloutFee !== undefined && finalPrice < calloutFee) {
+        throw new Error('Final price cannot be lower than call-out fee');
+      }
+
       const { data, error } = await supabase
         .from('orders')
         .update({
@@ -417,13 +431,22 @@ class OrdersService {
         payout = settings?.default_guaranteed_payout || 500;
       }
 
+      const parsedInitial = initialPrice !== null && initialPrice !== undefined
+        ? parseFloat(initialPrice)
+        : null;
+      const normalizedInitial = !isNaN(parsedInitial) ? parsedInitial : null;
+
+      if (normalizedInitial !== null && payout !== null && payout !== undefined && normalizedInitial < payout) {
+        throw new Error('Initial price cannot be lower than call-out fee');
+      }
+
       const { data, error } = await supabase
         .from('orders')
         .insert({
           client_id: clientId,
           dispatcher_id: dispatcherId,
           pricing_type: pricingType || 'unknown',
-          initial_price: initialPrice || null,
+          initial_price: normalizedInitial,
           service_type: serviceType,
           urgency: urgency || 'planned',
           problem_description: problemDescription,
@@ -432,6 +455,7 @@ class OrdersService {
           preferred_date: preferredDate || null,
           preferred_time: preferredTime || null,
           guaranteed_payout: payout,
+          callout_fee: payout,
           status: ORDER_STATUS.PLACED
         })
         .select(`
@@ -462,7 +486,7 @@ class OrdersService {
         .select(`
           *,
           client:client_id(full_name, phone, email),
-          master:master_id(full_name, phone)
+          master:master_id(id, full_name, phone)
         `)
         .eq('dispatcher_id', dispatcherId)
         .order('created_at', { ascending: false });
@@ -554,14 +578,21 @@ class OrdersService {
         ? parseFloat(updates.initial_price)
         : null;
 
+      const normalizedFee = !isNaN(feeValue) && feeValue !== null ? feeValue : null;
+      const normalizedPrice = !isNaN(priceValue) && priceValue !== null ? priceValue : null;
+
+      if (normalizedFee !== null && normalizedPrice !== null && normalizedPrice < normalizedFee) {
+        throw new Error('Initial price cannot be lower than call-out fee');
+      }
+
       const updatePayload = {
         problem_description: updates.problem_description,
         dispatcher_note: updates.dispatcher_note,
         full_address: updates.full_address,
         area: updates.area,
         orientir: updates.orientir,
-        callout_fee: !isNaN(feeValue) && feeValue !== null ? feeValue : null,
-        initial_price: !isNaN(priceValue) && priceValue !== null ? priceValue : null,
+        callout_fee: normalizedFee,
+        initial_price: normalizedPrice,
         client_name: updates.client_name,
         client_phone: updates.client_phone,
         updated_at: new Date().toISOString()
@@ -721,6 +752,52 @@ class OrdersService {
       return { success: true, message: 'Order reopened', order: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} reopenOrder failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Unassign master (dispatcher) - Cancel then reopen to return to pool
+   */
+  unassignMaster = async (orderId, dispatcherId, reason = 'dispatcher_unassign') => {
+    console.log(`${LOG_PREFIX} Unassigning master from order: ${orderId}`);
+
+    try {
+      const { data: canceled, error: cancelError } = await supabase
+        .from('orders')
+        .update({
+          status: ORDER_STATUS.CANCELED_BY_MASTER,
+          canceled_at: new Date().toISOString(),
+          cancellation_reason: reason,
+          cancellation_notes: 'Unassigned by dispatcher'
+        })
+        .eq('id', orderId)
+        .eq('dispatcher_id', dispatcherId)
+        .select()
+        .single();
+
+      if (cancelError) throw cancelError;
+
+      const { data, error } = await supabase
+        .from('orders')
+        .update({
+          status: ORDER_STATUS.REOPENED,
+          master_id: null,
+          claimed_at: null,
+          started_at: null,
+          canceled_at: null,
+          cancellation_reason: null,
+          cancellation_notes: null
+        })
+        .eq('id', orderId)
+        .eq('dispatcher_id', dispatcherId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return { success: true, message: 'Order reopened', order: data, canceled };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} unassignMaster failed:`, error);
       return { success: false, message: error.message };
     }
   }
@@ -983,50 +1060,13 @@ class OrdersService {
    * Accepts: +996XXXXXXXXX, 0XXXXXXXXX, XXXXXXXXX
    * Returns: +996XXXXXXXXX or null if invalid
    */
-  normalizeKyrgyzPhone = (phone) => {
-    if (!phone) return null;
-
-    // Remove all non-digit characters except leading +
-    let cleaned = phone.replace(/[^\d+]/g, '');
-
-    // If starts with +996, keep it
-    if (cleaned.startsWith('+996')) {
-      const digits = cleaned.slice(4);
-      if (digits.length === 9) return `+996${digits}`;
-    }
-    // If starts with 996 (no +), add +
-    else if (cleaned.startsWith('996')) {
-      const digits = cleaned.slice(3);
-      if (digits.length === 9) return `+996${digits}`;
-    }
-    // If starts with 0, replace with +996
-    else if (cleaned.startsWith('0')) {
-      const digits = cleaned.slice(1);
-      if (digits.length === 9) return `+996${digits}`;
-    }
-    // If just 9 digits, add +996
-    else if (cleaned.length === 9 && /^\d{9}$/.test(cleaned)) {
-      return `+996${cleaned}`;
-    }
-
-    return null; // Invalid format
-  }
+  normalizeKyrgyzPhone = (phone) => normalizeKyrgyzPhoneUtil(phone);
 
   /**
    * Validate Kyrgyz phone number format
    * Returns: { valid: boolean, normalized: string|null, error: string|null }
    */
-  validateKyrgyzPhone = (phone) => {
-    const normalized = this.normalizeKyrgyzPhone(phone);
-    if (normalized) {
-      return { valid: true, normalized, error: null };
-    }
-    return {
-      valid: false,
-      normalized: null,
-      error: 'Invalid format. Use +996XXXXXXXXX, 0XXXXXXXXX, or XXXXXXXXX'
-    };
-  }
+  validateKyrgyzPhone = (phone) => validateKyrgyzPhoneUtil(phone);
 
   /**
    * Try to find existing client by phone number
@@ -1086,6 +1126,19 @@ class OrdersService {
 
       console.log(`${LOG_PREFIX} Order data - clientId: ${existingClientId}, clientName: ${clientName}, clientPhone: ${normalizedPhone}`);
 
+      const parsedInitial = orderData.initialPrice !== null && orderData.initialPrice !== undefined
+        ? parseFloat(orderData.initialPrice)
+        : null;
+      const parsedCallout = orderData.calloutFee !== null && orderData.calloutFee !== undefined
+        ? parseFloat(orderData.calloutFee)
+        : null;
+      const normalizedInitial = !isNaN(parsedInitial) ? parsedInitial : null;
+      const normalizedCallout = !isNaN(parsedCallout) ? parsedCallout : null;
+
+      if (normalizedInitial !== null && normalizedCallout !== null && normalizedInitial < normalizedCallout) {
+        throw new Error('Initial price cannot be lower than call-out fee');
+      }
+
       const insertPayload = {
         client_id: existingClientId, // null if no registered client found
         client_name: clientName,
@@ -1095,8 +1148,8 @@ class OrdersService {
         urgency: orderData.urgency || 'planned',
         status: ORDER_STATUS.PLACED,
         pricing_type: orderData.pricingType || 'unknown',
-        initial_price: orderData.initialPrice || null,
-        callout_fee: orderData.calloutFee || null,
+        initial_price: normalizedInitial,
+        callout_fee: normalizedCallout,
         problem_description: orderData.problemDescription,
         area: orderData.area,
         full_address: orderData.fullAddress,
@@ -1170,16 +1223,23 @@ class OrdersService {
         throw error;
       }
 
-      if (!data.success) {
-        console.warn(`${LOG_PREFIX} forceAssignMaster failed:`, data.message);
-        return { success: false, message: data.message, error: data.error };
+      if (!data || !data.success) {
+        const errorCode = data?.error || 'UNKNOWN';
+        console.warn(`${LOG_PREFIX} forceAssignMaster failed:`, data?.message || errorCode);
+        return { success: false, message: data?.message, error: errorCode };
       }
 
       console.log(`${LOG_PREFIX} Master assigned successfully:`, data);
       return { success: true, message: 'Master assigned!', ...data };
     } catch (error) {
       console.error(`${LOG_PREFIX} forceAssignMaster failed:`, error);
-      return { success: false, message: error.message };
+      const message = error?.message || '';
+      const normalized = message.toLowerCase();
+      let errorCode = 'UNKNOWN';
+      if (normalized.includes('unauthorized')) errorCode = 'UNAUTHORIZED';
+      if (normalized.includes('order not found')) errorCode = 'ORDER_NOT_FOUND';
+      if (normalized.includes('master not found')) errorCode = 'MASTER_NOT_FOUND';
+      return { success: false, message: error?.message, error: errorCode };
     }
   }
 
@@ -1589,7 +1649,7 @@ class OrdersService {
     try {
       const { data, error } = await supabase
         .from('service_types')
-        .select('code, name_en, name_ru, name_kg, icon')
+        .select('code, name_en, name_ru, name_kg')
         .eq('is_active', true)
         .order('sort_order');
 
@@ -1804,6 +1864,50 @@ class OrdersService {
       return { success: true, message: `Assigned to ${data.master_name}`, orderId: data.order_id, masterName: data.master_name };
     } catch (error) {
       console.error(`${LOG_PREFIX} forceAssignMasterAdmin failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Unassign master (admin) - Cancel then reopen to return to pool
+   */
+  unassignMasterAdmin = async (orderId, reason = 'admin_unassign') => {
+    console.log(`${LOG_PREFIX} Admin unassigning master from order: ${orderId}`);
+
+    try {
+      const { data: canceled, error: cancelError } = await supabase
+        .from('orders')
+        .update({
+          status: ORDER_STATUS.CANCELED_BY_MASTER,
+          canceled_at: new Date().toISOString(),
+          cancellation_reason: reason,
+          cancellation_notes: 'Unassigned by admin'
+        })
+        .eq('id', orderId)
+        .select()
+        .single();
+
+      if (cancelError) throw cancelError;
+
+      const { data, error } = await supabase
+        .from('orders')
+        .update({
+          status: ORDER_STATUS.REOPENED,
+          master_id: null,
+          claimed_at: null,
+          started_at: null,
+          canceled_at: null,
+          cancellation_reason: null,
+          cancellation_notes: null
+        })
+        .eq('id', orderId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return { success: true, message: 'Order reopened', order: data, canceled };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} unassignMasterAdmin failed:`, error);
       return { success: false, message: error.message };
     }
   }

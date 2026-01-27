@@ -3,6 +3,9 @@
  * Formatting and utility functions for the app
  */
 
+import { STATUS_COLORS } from './orderHelpers';
+import { isValidKyrgyzPhone, normalizeKyrgyzPhone } from './phone';
+
 /**
  * Format date and time
  */
@@ -62,16 +65,15 @@ export const timeAgo = (dateString) => {
  * Get status color
  */
 export const getStatusColor = (status) => {
-  const colors = {
-    pending: '#F59E0B',    // Amber
-    claimed: '#6366F1',    // Indigo
-    in_progress: '#3B82F6', // Blue
-    completed: '#10B981',  // Emerald
-    verified: '#10B981',   // Emerald
-    cancelled: '#EF4444',  // Red
+  const legacyColors = {
+    pending: STATUS_COLORS.placed,
+    in_progress: STATUS_COLORS.started,
+    verified: STATUS_COLORS.confirmed,
+    cancelled: STATUS_COLORS.canceled_by_client,
+    canceled: STATUS_COLORS.canceled_by_client,
   };
 
-  return colors[status] || '#94A3B8';
+  return STATUS_COLORS[status] || legacyColors[status] || '#94A3B8';
 };
 
 /**
@@ -98,8 +100,7 @@ export const isValidEmail = (email) => {
  * Validate phone
  */
 export const isValidPhone = (phone) => {
-  const phoneRegex = /^[\d\s\-\+\(\)]+$/;
-  return phone.length >= 10 && phoneRegex.test(phone);
+  return isValidKyrgyzPhone(phone);
 };
 
 /**
@@ -124,12 +125,7 @@ export const capitalize = (str) => {
  */
 export const formatPhone = (phone) => {
   if (!phone) return '';
-  const cleaned = phone.replace(/\D/g, '');
-  const match = cleaned.match(/^(\d{3})(\d{3})(\d{4})$/);
-  if (match) {
-    return `(${match[1]}) ${match[2]}-${match[3]}`;
-  }
-  return phone;
+  return normalizeKyrgyzPhone(phone) || phone;
 };
 
 /**

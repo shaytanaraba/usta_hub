@@ -26,9 +26,17 @@ import { useToast } from '../contexts/ToastContext';
 import { useLocalization, LocalizationProvider } from '../contexts/LocalizationContext';
 import { useTheme, ThemeProvider } from '../contexts/ThemeContext';
 import deviceUtils from '../utils/device';
+import { getOrderStatusLabel, getServiceLabel } from '../utils/orderHelpers';
 
 const LOG_PREFIX = '[MasterDashboard]';
 const PAGE_LIMIT = 5;
+const sanitizeNumberInput = (value) => {
+    if (value === null || value === undefined) return '';
+    const cleaned = String(value).replace(/[^\d.]/g, '');
+    const parts = cleaned.split('.');
+    if (parts.length <= 1) return cleaned;
+    return `${parts.shift()}.${parts.join('')}`;
+};
 
 // ============================================
 // DROPDOWN COMPONENT
@@ -48,6 +56,14 @@ const Dropdown = ({ label, value, options, optionLabels = {}, onChange }) => {
             });
         } else setIsOpen(false);
     };
+
+    const calloutFee = order.callout_fee;
+    const displayPrice = order.final_price ?? order.initial_price;
+    const displayPriceText = displayPrice !== null && displayPrice !== undefined
+        ? `${displayPrice}`
+        : calloutFee !== null && calloutFee !== undefined
+            ? `${t('labelCallout') || 'Call-out:'} ${calloutFee}`
+            : (t('priceOpen') || 'Open');
 
     return (
         <View style={styles.dropdownWrapper}>
@@ -133,32 +149,6 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
     const isClaimed = order.status === 'claimed';
     const isCompleted = order.status === 'completed';
 
-    // Helper to translate service type
-    const getServiceLabel = (serviceCode) => {
-        if (!serviceCode) return '';
-        // Convert service_type codes like 'plumbing', 'electrician', 'appliance_repair' to translation keys
-        const normalized = serviceCode.toLowerCase().replace(/_/g, '');
-        const keyMap = {
-            plumbing: 'servicePlumbing',
-            electrician: 'serviceElectrician',
-            cleaning: 'serviceCleaning',
-            carpenter: 'serviceCarpenter',
-            repair: 'serviceRepair',
-            installation: 'serviceInstallation',
-            maintenance: 'serviceMaintenance',
-            other: 'serviceOther',
-            appliancerepair: 'serviceApplianceRepair',
-            building: 'serviceBuilding',
-            inspection: 'serviceInspection',
-            hvac: 'serviceHvac',
-            painting: 'servicePainting',
-            flooring: 'serviceFlooring',
-            roofing: 'serviceRoofing',
-            landscaping: 'serviceLandscaping',
-        };
-        const translationKey = keyMap[normalized];
-        return translationKey ? t(translationKey) : serviceCode.charAt(0).toUpperCase() + serviceCode.slice(1).replace(/_/g, ' ');
-    };
 
     const getStatusColor = () => ({
         placed: theme.statusPlaced, claimed: theme.statusClaimed, started: theme.statusStarted,
@@ -170,6 +160,7 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
         urgent: { bg: `${theme.urgencyUrgent}15`, text: theme.urgencyUrgent },
         planned: { bg: `${theme.urgencyPlanned}15`, text: theme.urgencyPlanned }
     }[order.urgency] || { bg: `${theme.urgencyPlanned}15`, text: theme.urgencyPlanned };
+    const statusLabel = getOrderStatusLabel(order.status, t);
 
     const getLocationDisplay = () => {
         if (isPool) return order.area;
@@ -191,15 +182,15 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
             <View style={[styles.statusStripe, { backgroundColor: getStatusColor() }]} />
             <View style={styles.cardContent}>
                 <View style={styles.cardHeader}>
-                    <Text style={[styles.serviceType, { color: theme.textPrimary }]} numberOfLines={1}>{getServiceLabel(order.service_type)}</Text>
+                    <Text style={[styles.serviceType, { color: theme.textPrimary }]} numberOfLines={1}>{getServiceLabel(order.service_type, t)}</Text>
                     <Text style={[styles.cardPrice, { color: theme.accentSuccess }]}>
-                        {order.final_price ? `${order.final_price}` : order.initial_price ? `${order.initial_price}` : `${order.guaranteed_payout}+`}
+                        {displayPriceText}
                     </Text>
                 </View>
                 <View style={styles.cardMeta}>
                     <View style={[styles.urgencyBadge, { backgroundColor: isPool ? urgencyStyle.bg : `${getStatusColor()}15`, borderColor: isPool ? urgencyStyle.text : getStatusColor() }]}>
                         <Text style={[styles.urgencyText, { color: isPool ? urgencyStyle.text : getStatusColor() }]}>
-                            {isPool ? t(`urgency${order.urgency.charAt(0).toUpperCase() + order.urgency.slice(1)}`) : t(`status${order.status.charAt(0).toUpperCase() + order.status.slice(1).replace(/_/g, '')}`)}
+                            {isPool ? t(`urgency${order.urgency.charAt(0).toUpperCase() + order.urgency.slice(1)}`) : statusLabel}
                         </Text>
                     </View>
                     <View style={styles.locationContainer}>
@@ -295,39 +286,7 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
 
     const getStatusColor = (status) => ({ confirmed: theme.accentSuccess, completed: theme.statusCompleted, canceled_by_master: theme.accentDanger, canceled_by_client: theme.accentWarning }[status] || theme.textMuted);
 
-    // Helper to translate service type
-    const getServiceLabel = (serviceCode) => {
-        if (!serviceCode) return '';
-        const normalized = serviceCode.toLowerCase().replace(/_/g, '');
-        const keyMap = {
-            plumbing: 'servicePlumbing',
-            electrician: 'serviceElectrician',
-            cleaning: 'serviceCleaning',
-            carpenter: 'serviceCarpenter',
-            repair: 'serviceRepair',
-            installation: 'serviceInstallation',
-            maintenance: 'serviceMaintenance',
-            other: 'serviceOther',
-            appliancerepair: 'serviceApplianceRepair',
-            building: 'serviceBuilding',
-            inspection: 'serviceInspection',
-            hvac: 'serviceHvac',
-            painting: 'servicePainting',
-            flooring: 'serviceFlooring',
-            roofing: 'serviceRoofing',
-            landscaping: 'serviceLandscaping',
-        };
-        const translationKey = keyMap[normalized];
-        return translationKey ? t(translationKey) : serviceCode.charAt(0).toUpperCase() + serviceCode.slice(1).replace(/_/g, ' ');
-    };
-
-    // Helper to translate status
-    const getStatusLabel = (status) => {
-        if (!status) return '';
-        const key = `status${status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, '')}`;
-        const translated = t(key);
-        return translated !== key ? translated : status.replace(/_/g, ' ');
-    };
+    const getStatusLabel = (status) => getOrderStatusLabel(status, t);
 
     const StatCard = ({ label, value, color, icon: Icon, small }) => (
         <View style={[small ? styles.statCardSmall : styles.statCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
@@ -437,12 +396,14 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
                             return (
                                 <View key={o.id} style={[styles.historyItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
                                     <View>
-                                        <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{getServiceLabel(o.service_type)}</Text>
+                                        <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{getServiceLabel(o.service_type, t)}</Text>
                                         <Text style={{ color: theme.textMuted, fontSize: 11 }}>{o.area}</Text>
                                         <Text style={{ color: theme.textMuted, fontSize: 10 }}>{o.date.toLocaleDateString()}</Text>
                                     </View>
                                     <View style={{ alignItems: 'flex-end' }}>
-                                        <Text style={{ color: theme.accentSuccess, fontWeight: '600' }}>{o.final_price || o.initial_price || '-'}</Text>
+                                        <Text style={{ color: theme.accentSuccess, fontWeight: '600' }}>
+                                            {o.final_price ?? o.initial_price ?? o.callout_fee ?? '-'}
+                                        </Text>
                                         {/* Show commission if available */}
                                         {o.commission_amount && <Text style={{ color: theme.textMuted, fontSize: 9 }}>-{o.commission_amount} {t('transactionCommission') || 'comm.'}</Text>}
                                         <View style={[styles.statusBadgeSmall, { backgroundColor: `${getStatusColor(o.status)}20` }]}>
@@ -626,12 +587,15 @@ const DashboardContent = ({ navigation }) => {
     const handleClaim = async (orderId) => {
         // Find the order to estimate commission
         const order = availableOrders.find(o => o.id === orderId);
-        const estimatedCommission = (order?.guaranteed_payout || 500) * 0.20; // 20% platform rate
-        const projectedBalance = (financials?.prepaidBalance || 0) - estimatedCommission;
+        const priceForCommission = Number(order?.final_price ?? order?.initial_price ?? 0);
+        if (priceForCommission > 0) {
+            const estimatedCommission = priceForCommission * 0.20; // 20% platform rate on job price only
+            const projectedBalance = (financials?.prepaidBalance || 0) - estimatedCommission;
 
-        // Show warning if balance would go negative after commission
-        if (projectedBalance < 0 && financials?.prepaidBalance > 0) {
-            showToast?.(`Warning: After completing this job, your balance may go negative. Remember to top up!`, 'warning');
+            // Show warning if balance would go negative after commission
+            if (projectedBalance < 0 && financials?.prepaidBalance > 0) {
+                showToast?.(`Warning: After completing this job, your balance may go negative. Remember to top up!`, 'warning');
+            }
         }
 
         setActionLoading(true);
@@ -734,12 +698,21 @@ const DashboardContent = ({ navigation }) => {
                     <View style={styles.modalOverlay}>
                         <View style={[styles.modalContent, { backgroundColor: theme.bgSecondary }]}>
                             <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>{t('modalCompleteTitle')}</Text>
-                            <TextInput style={[styles.modalInput, { backgroundColor: theme.bgCard, color: theme.textPrimary, borderColor: theme.borderPrimary }]} placeholder={t('modalFinalPrice')} placeholderTextColor={theme.textMuted} keyboardType="numeric" value={completeData.finalPrice || ''} onChangeText={text => setCompleteData({ ...completeData, finalPrice: text })} />
+                            <TextInput style={[styles.modalInput, { backgroundColor: theme.bgCard, color: theme.textPrimary, borderColor: theme.borderPrimary }]} placeholder={t('modalFinalPrice')} placeholderTextColor={theme.textMuted} keyboardType="numeric" value={completeData.finalPrice || ''} onChangeText={text => setCompleteData({ ...completeData, finalPrice: sanitizeNumberInput(text) })} />
                             <TextInput style={[styles.modalInput, { backgroundColor: theme.bgCard, color: theme.textPrimary, borderColor: theme.borderPrimary }]} placeholder={t('modalWorkPerformed')} placeholderTextColor={theme.textMuted} multiline numberOfLines={3} value={completeData.workPerformed || ''} onChangeText={text => setCompleteData({ ...completeData, workPerformed: text })} />
-                            <TextInput style={[styles.modalInput, { backgroundColor: theme.bgCard, color: theme.textPrimary, borderColor: theme.borderPrimary }]} placeholder={t('modalHoursWorked')} placeholderTextColor={theme.textMuted} keyboardType="numeric" value={completeData.hoursWorked || ''} onChangeText={text => setCompleteData({ ...completeData, hoursWorked: text })} />
+                            <TextInput style={[styles.modalInput, { backgroundColor: theme.bgCard, color: theme.textPrimary, borderColor: theme.borderPrimary }]} placeholder={t('modalHoursWorked')} placeholderTextColor={theme.textMuted} keyboardType="numeric" value={completeData.hoursWorked || ''} onChangeText={text => setCompleteData({ ...completeData, hoursWorked: sanitizeNumberInput(text) })} />
                             <View style={styles.modalActions}>
                                 <TouchableOpacity style={[styles.modalButton, { backgroundColor: theme.borderSecondary }]} onPress={() => { setModalState({ type: null, order: null }); setCompleteData({}); }}><Text style={[styles.modalButtonText, { color: theme.textSecondary }]}>{t('actionBack')}</Text></TouchableOpacity>
-                                <TouchableOpacity style={[styles.modalButton, { backgroundColor: theme.accentSuccess, flex: 1 }]} onPress={() => { handleAction(ordersService.completeJob, modalState.order.id, user.id, { finalPrice: parseFloat(completeData.finalPrice), workPerformed: completeData.workPerformed, hoursWorked: parseFloat(completeData.hoursWorked) || null }); setCompleteData({}); }}><Text style={styles.modalButtonText}>{t('actionSubmit')}</Text></TouchableOpacity>
+                                <TouchableOpacity style={[styles.modalButton, { backgroundColor: theme.accentSuccess, flex: 1 }]} onPress={() => {
+                                    const parsedFinal = parseFloat(completeData.finalPrice);
+                                    const calloutFee = modalState.order.callout_fee;
+                                    if (calloutFee !== null && calloutFee !== undefined && !isNaN(parsedFinal) && parsedFinal < calloutFee) {
+                                        showToast?.(t('errorFinalBelowCallout') || 'Final price cannot be lower than call-out fee', 'error');
+                                        return;
+                                    }
+                                    handleAction(ordersService.completeJob, modalState.order.id, user.id, { finalPrice: parsedFinal, workPerformed: completeData.workPerformed, hoursWorked: parseFloat(completeData.hoursWorked) || null });
+                                    setCompleteData({});
+                                }}><Text style={styles.modalButtonText}>{t('actionSubmit')}</Text></TouchableOpacity>
                             </View>
                         </View>
                     </View>

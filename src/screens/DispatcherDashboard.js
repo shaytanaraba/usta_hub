@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Dispatcher Dashboard - v5 Enhanced
  * Features: Queue with filters, Grid/List view, Details Drawer, Master Assignment,
  * Draft saving, Recent Addresses, Internal Notes
@@ -15,17 +15,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import authService from '../services/auth';
 import ordersService, { ORDER_STATUS } from '../services/orders';
+import earningsService from '../services/earnings';
 import { useToast } from '../contexts/ToastContext';
+import { useLocalization } from '../contexts/LocalizationContext';
+import { STATUS_COLORS, getOrderStatusLabel, getServiceLabel, getTimeAgo } from '../utils/orderHelpers';
+import { normalizeKyrgyzPhone, isValidKyrgyzPhone } from '../utils/phone';
 const LOG_PREFIX = '[DispatcherDashboard]';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-
-// Status colors
-const STATUS_COLORS = {
-    placed: '#3b82f6', claimed: '#f59e0b', started: '#8b5cf6',
-    completed: '#f97316', confirmed: '#22c55e',
-    canceled_by_master: '#ef4444', canceled_by_client: '#ef4444',
-    reopened: '#06b6d4', expired: '#6b7280',
-};
 
 const SERVICE_TYPES = [
     { id: 'plumbing', label: 'Plumbing' }, { id: 'electrician', label: 'Electrician' },
@@ -37,18 +33,10 @@ const SERVICE_TYPES = [
 // Status filter options
 // Status filter options
 const STATUS_OPTIONS = [
-    { id: 'All', label: 'statusAll' },
     { id: 'Active', label: 'statusActive' },
-    { id: 'placed', label: 'filterStatusPlaced' },
-    { id: 'reopened', label: 'filterStatusReopened' },
-    { id: 'claimed', label: 'filterStatusClaimed' },
-    { id: 'started', label: 'filterStatusStarted' },
-    { id: 'completed', label: 'filterStatusCompleted' },
-    { id: 'confirmed', label: 'filterStatusConfirmed' },
     { id: 'Payment', label: 'statusPayment' },
-    { id: 'Disputed', label: 'statusDisputed' },
+    { id: 'Confirmed', label: 'filterStatusConfirmed' },
     { id: 'Canceled', label: 'statusCanceled' },
-    { id: 'expired', label: 'filterStatusExpired' },
 ];
 
 // Urgency filter options
@@ -79,569 +67,6 @@ const SORT_OPTIONS = [
     { id: 'oldest', label: 'filterOldestFirst' },
 ];
 
-// Translations
-const TRANSLATIONS = {
-    en: {
-        ordersQueue: 'Orders Queue',
-        createOrder: 'Create Order',
-        showFilters: 'Show Filters',
-        hideFilters: 'Hide Filters',
-        clear: 'Clear',
-        selectOption: 'Select Option',
-        cancel: 'Cancel',
-        dispatcherPro: 'Dispatcher Pro',
-        online: 'Online',
-        exit: 'Exit',
-        needsAttention: 'Needs Attention',
-        statusActive: 'Active',
-        statusPayment: 'Awaiting Payment',
-        statusDisputed: 'Disputed',
-        statusCanceled: 'Canceled',
-        statusAll: 'All Orders',
-        startToSeeAddress: 'Start to see address',
-        actionClaim: 'Assign',
-        actionStart: 'Start',
-        actionComplete: 'Complete',
-        actionCancel: 'Cancel',
-        actionLocked: 'Locked',
-        priceBase: ' base',
-        currencySom: 'c',
-        stuck: 'Stuck',
-        unassigned: 'Unassigned',
-        sectionClient: 'Client',
-        sectionMaster: 'Master',
-        sectionDetails: 'Order Details',
-        sectionFinancials: 'Financials',
-        sectionNote: 'Internal Note',
-        labelCallout: 'Call-out:',
-        labelInitial: 'Initial:',
-        labelFinal: 'Final:',
-        btnEdit: 'Edit',
-        btnCancelEdit: 'Cancel Edit',
-        btnClose: 'Close',
-        btnPay: 'Pay',
-        btnCopy: 'Copy',
-        btnCall: 'Call',
-        clientName: 'Client Name',
-        clientPhone: 'Client Phone',
-        address: 'Address',
-        description: 'Description',
-        // Create Order
-        createClientDetails: 'Client Details',
-        createPhone: 'Phone',
-        createName: 'Name',
-        createLocation: 'Location',
-        createDistrict: 'District',
-        createFullAddress: 'Full Address',
-        createServiceType: 'Service Type',
-        createProblemDesc: 'Problem Description',
-        createPrice: 'Price',
-        createInternalNote: 'Internal Note',
-        createConfirm: 'Confirm Details',
-        createClear: 'Clear',
-        createPublish: 'Publish Order',
-        createAnother: 'Create Another',
-        createSuccess: 'Order Created!',
-        createViewQueue: 'View in Queue',
-        recentBtn: 'Recent',
-        needsAttentionSort: 'Sort',
-        sortNewest: 'Newest',
-        sortOldest: 'Oldest',
-        btnSaveChanges: 'Save Changes',
-        titlePayment: 'Confirm Payment',
-        labelAmount: 'Amount:',
-        labelProof: 'Proof URL',
-        titleSelectMaster: 'Select Master',
-        labelRating: 'Rating',
-        labelJobs: 'jobs',
-        noMasters: 'No available masters',
-        actionReopen: 'Reopen Order',
-        actionPay: 'Pay',
-        msgNoMatch: 'No items match filter',
-        // Schedule & Pricing
-        schedule: 'Schedule',
-        pricing: 'Pricing',
-        urgencyPlanned: 'Planned',
-        urgencyUrgent: 'Urgent',
-        urgencyEmergency: 'Emergency',
-        pricingMasterQuotes: 'Master Quotes',
-        pricingFixed: 'Fixed Price',
-        calloutFee: 'Call-out Fee',
-        fixedAmount: 'Fixed Amount',
-        preferredDate: 'Preferred Date',
-        preferredTime: 'Preferred Time',
-        dateToday: 'Today',
-        dateTomorrow: 'Tomorrow',
-        timeMorning: '🌅 Morning',
-        timeAfternoon: '☀️ Afternoon',
-        timeEvening: '🌙 Evening',
-        problemDesc: 'Problem Description',
-        // Placeholders & misc
-        districtPlaceholder: 'e.g. Leninsky',
-        addressPlaceholder: 'Full Address',
-        keepLocation: 'Keep Location',
-        startFresh: 'Start Fresh',
-        createAnotherOrder: 'Create Another Order',
-        // Toast messages
-        toastPasted: 'Pasted & formatted',
-        toastClipboardEmpty: 'Clipboard empty',
-        toastPasteFailed: 'Paste failed - check permissions',
-        toastConfirmDetails: 'Please confirm details',
-        toastFillRequired: 'Please fill required fields',
-        toastFixPhone: 'Fix phone format',
-        toastOrderCreated: 'Order created!',
-        toastOrderFailed: 'Order creation failed',
-        toastPaymentConfirmed: 'Payment confirmed!',
-        toastMasterAssigned: 'Master assigned!',
-        toastUpdated: 'Order updated',
-        toastCopied: 'Copied!',
-        // Missing Keys Added
-        alertAssignTitle: 'Assign Master',
-        alertAssignMsg: 'Assign {0} to this order?',
-        alertAssignBtn: 'Assign',
-        toastAssignFail: 'Assignment failed',
-        alertCancelTitle: 'Cancel Order',
-        alertCancelMsg: 'Are you sure?',
-        alertLogoutTitle: 'Logout',
-        alertLogoutMsg: 'Are you sure?',
-        alertLogoutBtn: 'Logout',
-        toastFormCleared: 'Form cleared',
-        placeholderSearch: 'Search...',
-        pickerStatus: 'Status',
-        pickerDispatcher: 'Dispatcher',
-        pickerUrgency: 'Urgency',
-        pickerService: 'Service',
-        pickerSort: 'Sort',
-        pickerErrorType: 'Error Type',
-        labelAllServices: 'All Services',
-        btnSortNewest: '↓ Newest',
-        btnSortOldest: '↑ Oldest',
-        badgeDispute: 'Dispute',
-        badgeUnpaid: 'Unpaid',
-        badgeStuck: 'Stuck',
-        badgeCanceled: 'Canceled',
-        labelMasterPrefix: 'Master: ',
-        btnPayWithAmount: 'Pay {0}c',
-        emptyList: 'No orders found',
-        drawerTitle: 'Order #{0}',
-        debtPrefix: 'Debt: ',
-        priceOpen: 'Open',
-        modalOrderPrefix: 'Order #{0}',
-        paymentCash: 'Cash',
-        paymentTransfer: 'Transfer',
-        paymentCard: 'Card',
-        issueAllIssues: 'All Issues',
-        issueStuck: 'Stuck',
-        issueDisputed: 'Disputed',
-        issueUnpaid: 'Unpaid',
-        issueCanceled: 'Canceled',
-        filterAllOrders: 'All Orders',
-        filterMyOrders: 'My Orders',
-        filterNewestFirst: 'Newest First',
-        filterOldestFirst: 'Oldest First',
-        filterAllUrgency: 'All Urgency',
-        filterStatusPlaced: 'Placed',
-        filterStatusReopened: 'Reopened',
-        filterStatusClaimed: 'Claimed',
-        filterStatusStarted: 'Started',
-        filterStatusCompleted: 'Completed (Unpaid)',
-        filterStatusConfirmed: 'Confirmed',
-        filterStatusPayment: 'Awaiting Payment',
-        filterStatusDisputed: 'Disputed',
-        filterStatusCanceled: 'Canceled',
-        filterStatusExpired: 'Expired',
-        tabOrders: 'Orders Queue',
-        tabCreate: 'Create Order',
-        timeUnitNow: 'Just now',
-        timeUnitMins: 'm ago',
-        timeUnitHours: 'h ago',
-        timeUnitDays: 'd ago',
-        // New Errors
-        toastSelectPaymentMethod: 'Select payment method',
-        toastProofRequired: 'Proof required for transfers',
-        toastNoOrderSelected: 'No order selected',
-        toastFailedPrefix: 'Failed: ',
-        toastCreateFailed: 'Create failed',
-        errorPhoneFormat: 'Invalid format (+996...)',
-    },
-    ru: {
-        ordersQueue: 'Очередь заказов',
-        createOrder: 'Создать заказ',
-        showFilters: 'Показать фильтры',
-        hideFilters: 'Скрыть фильтры',
-        clear: 'Очистить',
-        selectOption: 'Выберите',
-        cancel: 'Отмена',
-        dispatcherPro: 'Диспетчер Pro',
-        online: 'В сети',
-        exit: 'Выход',
-        needsAttention: 'Требует внимания',
-        statusActive: 'Активные',
-        statusPayment: 'Ожидает оплаты',
-        statusDisputed: 'Спорные',
-        statusCanceled: 'Отмененные',
-        statusAll: 'Все заказы',
-        startToSeeAddress: 'Начните для адреса',
-        actionClaim: 'Назначить',
-        actionStart: 'Начать',
-        actionComplete: 'Завершить',
-        actionCancel: 'Отменить',
-        actionLocked: 'Заблок.',
-        priceBase: ' фикс',
-        currencySom: 'с',
-        stuck: 'Застрял',
-        unassigned: 'Не назначен',
-        sectionClient: 'Клиент',
-        sectionMaster: 'Мастер',
-        sectionDetails: 'Детали заказа',
-        sectionFinancials: 'Финансы',
-        sectionNote: 'Внутренняя заметка',
-        labelCallout: 'Выезд:',
-        labelInitial: 'Начальная:',
-        labelFinal: 'Итоговая:',
-        btnEdit: 'Изменить',
-        btnCancelEdit: 'Отмена',
-        btnClose: 'Закрыть',
-        btnPay: 'Оплатить',
-        btnCopy: 'Копия',
-        btnCall: 'Звонок',
-        clientName: 'Имя клиента',
-        clientPhone: 'Телефон клиента',
-        address: 'Адрес',
-        description: 'Описание',
-        // Create Order
-        createClientDetails: 'Данные клиента',
-        createPhone: 'Телефон',
-        createName: 'Имя',
-        createLocation: 'Локация',
-        createDistrict: 'Район',
-        createFullAddress: 'Полный адрес',
-        createServiceType: 'Тип услуги',
-        createProblemDesc: 'Описание проблемы',
-        createPrice: 'Цена',
-        createInternalNote: 'Внутренняя заметка',
-        createConfirm: 'Подтвердить детали',
-        createClear: 'Очистить',
-        createPublish: 'Опубликовать',
-        createAnother: 'Создать еще',
-        createSuccess: 'Заказ создан!',
-        createViewQueue: 'Посмотреть в очереди',
-        recentBtn: 'Недавние',
-        needsAttentionSort: 'Сорт.',
-        sortNewest: 'Сначала новые',
-        sortOldest: 'Сначала старые',
-        btnSaveChanges: 'Сохранить',
-        titlePayment: 'Подтвердить оплату',
-        labelAmount: 'Сумма:',
-        labelProof: 'Ссылка на чек',
-        titleSelectMaster: 'Выберите мастера',
-        labelRating: 'Рейтинг',
-        labelJobs: 'заказов',
-        noMasters: 'Нет доступных мастеров',
-        actionReopen: 'Переоткрыть',
-        actionPay: 'Оплатить',
-        msgNoMatch: 'Нет результатов',
-        // Schedule & Pricing
-        schedule: 'Расписание',
-        pricing: 'Цена',
-        urgencyPlanned: 'Планово',
-        urgencyUrgent: 'Срочно',
-        urgencyEmergency: 'Экстренно',
-        pricingMasterQuotes: 'Оценка мастера',
-        pricingFixed: 'Фикс. цена',
-        calloutFee: 'Плата за выезд',
-        fixedAmount: 'Фикс. сумма',
-        preferredDate: 'Желаемая дата',
-        preferredTime: 'Желаемое время',
-        dateToday: 'Сегодня',
-        dateTomorrow: 'Завтра',
-        timeMorning: '🌅 Утро',
-        timeAfternoon: '☀️ День',
-        timeEvening: '🌙 Вечер',
-        problemDesc: 'Описание проблемы',
-        // Placeholders & misc
-        districtPlaceholder: 'напр. Ленинский',
-        addressPlaceholder: 'Полный адрес',
-        keepLocation: 'Оставить адрес',
-        startFresh: 'Начать заново',
-        createAnotherOrder: 'Создать еще заказ',
-        // Toast messages
-        toastPasted: 'Вставлено и отформатировано',
-        toastClipboardEmpty: 'Буфер пуст',
-        toastPasteFailed: 'Ошибка вставки - проверьте разрешения',
-        toastConfirmDetails: 'Подтвердите детали',
-        toastFillRequired: 'Заполните обязательные поля',
-        toastFixPhone: 'Исправьте формат телефона',
-        toastOrderCreated: 'Заказ создан!',
-        toastOrderFailed: 'Ошибка создания заказа',
-        toastPaymentConfirmed: 'Оплата подтверждена!',
-        toastMasterAssigned: 'Мастер назначен!',
-        toastUpdated: 'Заказ обновлен',
-        toastCopied: 'Скопировано!',
-        // Missing Keys Added
-        alertAssignTitle: 'Назначить мастера',
-        alertAssignMsg: 'Назначить {0} на этот заказ?',
-        alertAssignBtn: 'Назначить',
-        toastAssignFail: 'Ошибка назначения',
-        alertCancelTitle: 'Отменить заказ',
-        alertCancelMsg: 'Вы уверены?',
-        alertLogoutTitle: 'Выход',
-        alertLogoutMsg: 'Вы уверены?',
-        alertLogoutBtn: 'Выход',
-        toastFormCleared: 'Форма очищена',
-        placeholderSearch: 'Поиск...',
-        pickerStatus: 'Статус',
-        pickerDispatcher: 'Диспетчер',
-        pickerUrgency: 'Срочность',
-        pickerService: 'Сервис',
-        pickerSort: 'Сортировка',
-        pickerErrorType: 'Тип ошибки',
-        labelAllServices: 'Все услуги',
-        btnSortNewest: '↓ Новые',
-        btnSortOldest: '↑ Старые',
-        badgeDispute: 'Спор',
-        badgeUnpaid: 'Не оплачен',
-        badgeStuck: 'Застрял',
-        badgeCanceled: 'Отменен',
-        labelMasterPrefix: 'Мастер: ',
-        btnPayWithAmount: 'Оплатить {0}c',
-        emptyList: 'Заказов не найдено',
-        drawerTitle: 'Заказ #{0}',
-        debtPrefix: 'Долг: ',
-        priceOpen: 'Открыто',
-        modalOrderPrefix: 'Заказ #{0}',
-        paymentCash: 'Наличные',
-        paymentTransfer: 'Перевод',
-        paymentCard: 'Карта',
-        issueAllIssues: 'Все вопросы',
-        issueStuck: 'Застрял',
-        issueDisputed: 'Спорный',
-        issueUnpaid: 'Не оплачен',
-        issueCanceled: 'Отменен',
-        filterAllOrders: 'Все заказы',
-        filterMyOrders: 'Мои заказы',
-        filterNewestFirst: 'Сначала новые',
-        filterOldestFirst: 'Сначала старые',
-        filterAllUrgency: 'Любая срочность',
-        filterStatusPlaced: 'Новый',
-        filterStatusReopened: 'Переоткрыт',
-        filterStatusClaimed: 'Принят',
-        filterStatusStarted: 'В работе',
-        filterStatusCompleted: 'Выполнен (Не оплачен)',
-        filterStatusConfirmed: 'Подтвержден',
-        filterStatusPayment: 'Ожидает оплаты',
-        filterStatusDisputed: 'Спорный',
-        filterStatusCanceled: 'Отменен',
-        filterStatusExpired: 'Истек',
-        timeUnitNow: 'Только что',
-        timeUnitMins: ' м назад',
-        timeUnitHours: ' ч назад',
-        timeUnitDays: ' д назад',
-        // New Errors
-        toastSelectPaymentMethod: 'Выберите способ оплаты',
-        toastProofRequired: 'Нужен чек перевода',
-        toastNoOrderSelected: 'Заказ не выбран',
-        toastFailedPrefix: 'Ошибка: ',
-        toastCreateFailed: 'Ошибка создания',
-        errorPhoneFormat: 'Неверный формат (+996...)',
-        tabOrders: 'Очередь',
-        tabCreate: 'Создать'
-    },
-    kg: {
-        ordersQueue: 'Буйрутмалар кезеги',
-        createOrder: 'Буйрутма түзүү',
-        showFilters: 'Фильтрлерди көрсөтүү',
-        hideFilters: 'Фильтрлерди жашыруу',
-        clear: 'Тазалоо',
-        selectOption: 'Тандоо',
-        cancel: 'Жокко чыгаруу',
-        dispatcherPro: 'Диспетчер Pro',
-        online: 'Онлайн',
-        exit: 'Чыгуу',
-        needsAttention: 'Көңүл буруңуз',
-        statusActive: 'Активдүү',
-        statusPayment: 'Төлөм күтүүдө',
-        statusDisputed: 'Талаштуу',
-        statusCanceled: 'Жокко чыгарылган',
-        statusAll: 'Баардык буйрутмалар',
-        startToSeeAddress: 'Даректи көрүү үчүн баштаңыз',
-        actionClaim: 'Дайындоо',
-        actionStart: 'Баштоо',
-        actionComplete: 'Аяктоо',
-        actionCancel: 'Жокко чыгаруу',
-        actionLocked: 'Кулпуланган',
-        priceBase: ' негиз',
-        currencySom: 'с',
-        stuck: 'Токтоп калды',
-        unassigned: 'Дайындала элек',
-        sectionClient: 'Кардар',
-        sectionMaster: 'Уста',
-        sectionDetails: 'Буйрутма чоо-жайы',
-        sectionFinancials: 'Финансы',
-        sectionNote: 'Ички белги',
-        labelCallout: 'Чакыруу:',
-        labelInitial: 'Баштапкы:',
-        labelFinal: 'Акыркы:',
-        btnEdit: 'Өзгөртүү',
-        btnCancelEdit: 'Жокко чыгаруу',
-        btnClose: 'Жабуу',
-        btnPay: 'Төлөө',
-        btnCopy: 'Көчүрүү',
-        btnCall: 'Чалуу',
-        clientName: 'Кардардын аты',
-        clientPhone: 'Кардардын телефону',
-        address: 'Дарек',
-        description: 'Сүрөттөмө',
-        // Create Order
-        createClientDetails: 'Кардардын маалыматы',
-        createPhone: 'Телефон',
-        createName: 'Аты',
-        createLocation: 'Жайгашкан жер',
-        createDistrict: 'Район',
-        createFullAddress: 'Толук дарек',
-        createServiceType: 'Кызмат түрү',
-        createProblemDesc: 'Көйгөйдүн сүрөттөлүшү',
-        createPrice: 'Баасы',
-        createInternalNote: 'Ички белги',
-        createConfirm: 'Толуктоолорду ырастоо',
-        createClear: 'Тазалоо',
-        createPublish: 'Жарыялоо',
-        createAnother: 'Дагы түзүү',
-        createSuccess: 'Буйрутма түзүлдү!',
-        createViewQueue: 'Кезекти көрүү',
-        timeJustNow: 'Азыр эле',
-        timeMinsAgo: 'м мурун',
-        timeHoursAgo: 'с мурун',
-        timeDaysAgo: 'к мурун',
-        // New Errors
-        toastSelectPaymentMethod: 'Төлөм ыкмасын тандаңыз',
-        toastProofRequired: 'Чек талап кылынат',
-        toastNoOrderSelected: 'Буйрутма тандалган жок',
-        toastFailedPrefix: 'Ката: ',
-        toastCreateFailed: 'Түзүү катасы',
-        errorPhoneFormat: 'Ката формат (+996...)',
-        urgencyEmergency: 'Авариялык',
-        urgencyUrgent: 'Шашылыш',
-        urgencyPlanned: 'Пландалган',
-        filterMe: 'Мен',
-        filterOthers: 'Башкалар',
-        recentBtn: 'Акыркы',
-        needsAttentionSort: 'Реттөө',
-        sortNewest: 'Жаңылар',
-        sortOldest: 'Эскилер',
-        // Schedule & Pricing
-        schedule: 'Убакыт',
-        pricing: 'Баа',
-        urgencyPlanned: 'Пландуу',
-        urgencyUrgent: 'Шашылыш',
-        urgencyEmergency: 'Өзгөчө',
-        pricingMasterQuotes: 'Мастер баа',
-        pricingFixed: 'Белгиленген',
-        calloutFee: 'Чыгуу акысы',
-        fixedAmount: 'Белгиленген сумма',
-        preferredDate: 'Каалаган дата',
-        preferredTime: 'Каалаган убакыт',
-        dateToday: 'Бүгүн',
-        dateTomorrow: 'Эртең',
-        timeMorning: '🌅 Эртең менен',
-        timeAfternoon: '☀️ Түш',
-        timeEvening: '🌙 Кечинде',
-        problemDesc: 'Көйгөй сүрөттөмө',
-        // Placeholders & misc
-        districtPlaceholder: 'мис. Ленин',
-        addressPlaceholder: 'Толук дарек',
-        keepLocation: 'Даректи сактоо',
-        startFresh: 'Жаңыдан баштоо',
-        createAnotherOrder: 'Дагы буйрутма түзүү',
-        // Toast messages
-        toastPasted: 'Киргизилди',
-        toastClipboardEmpty: 'Буфер бош',
-        toastPasteFailed: 'Ката - уруксатты текшериңиз',
-        toastConfirmDetails: 'Маалыматтарды ырастаңыз',
-        toastFillRequired: 'Талап кылынган талааларды толтуруңуз',
-        toastFixPhone: 'Телефон форматын оңдоңуз',
-        toastOrderCreated: 'Буйрутма түзүлдү!',
-        toastOrderFailed: 'Буйрутма түзүү катасы',
-        toastPaymentConfirmed: 'Төлөм ырасталды!',
-        toastMasterAssigned: 'Мастер дайындалды!',
-        toastUpdated: 'Буйрутма жаңыланды',
-        toastCopied: 'Көчүрүлдү!',
-        // Added missing keys
-        btnSaveChanges: 'Сактоо',
-        titlePayment: 'Төлөмдү ырастоо',
-        labelAmount: 'Сумма:',
-        labelProof: 'Чектин шилтемеси',
-        titleSelectMaster: 'Уста тандаңыз',
-        labelRating: 'Рейтинг',
-        labelJobs: 'иштер',
-        noMasters: 'Бош уста жок',
-        actionReopen: 'Кайра ачуу',
-        actionPay: 'Төлөө',
-        msgNoMatch: 'Эч нерсе табылган жок',
-        // Missing Keys Added
-        alertAssignTitle: 'Устаны дайындоо',
-        alertAssignMsg: '{0} деген устаны бул буйрутмага дайындайсызбы?',
-        alertAssignBtn: 'Дайындоо',
-        toastAssignFail: 'Дайындоо катасы',
-        alertCancelTitle: 'Буйрутманы жокко чыгаруу',
-        alertCancelMsg: 'Ишенимдүүсүзбү?',
-        alertLogoutTitle: 'Чыгуу',
-        alertLogoutMsg: 'Ишенимдүүсүзбү?',
-        alertLogoutBtn: 'Чыгуу',
-        toastFormCleared: 'Форма тазаланды',
-        placeholderSearch: 'Издөө...',
-        pickerStatus: 'Статус',
-        pickerDispatcher: 'Диспетчер',
-        pickerUrgency: 'Шашылыштык',
-        pickerService: 'Кызмат',
-        pickerSort: 'Реттөө',
-        pickerErrorType: 'Ката түрү',
-        labelAllServices: 'Бардык кызматтар',
-        btnSortNewest: '↓ Жаңылар',
-        btnSortOldest: '↑ Эскилер',
-        badgeDispute: 'Талаш',
-        badgeUnpaid: 'Төлөнбөгөн',
-        badgeStuck: 'Токтогон',
-        badgeCanceled: 'Жокко чыгарылган',
-        labelMasterPrefix: 'Уста: ',
-        btnPayWithAmount: '{0}с төлөө',
-        emptyList: 'Буйрутма табылган жок',
-        drawerTitle: 'Буйрутма #{0}',
-        debtPrefix: 'Карыз: ',
-        priceOpen: 'Ачык',
-        modalOrderPrefix: 'Буйрутма #{0}',
-        paymentCash: 'Накталай',
-        paymentTransfer: 'Которуу',
-        paymentCard: 'Карта',
-        issueAllIssues: 'Бардык маселелер',
-        issueStuck: 'Токтогон',
-        issueDisputed: 'Талаштуу',
-        issueUnpaid: 'Төлөнбөгөн',
-        issueCanceled: 'Жокко чыгарылган',
-        filterAllOrders: 'Бардык буйрутмалар',
-        filterMyOrders: 'Менин буйрутмаларым',
-        filterNewestFirst: 'Жаңылар биринчи',
-        filterOldestFirst: 'Эскилер биринчи',
-        filterAllUrgency: 'Бардык шашылыштык',
-        filterStatusPlaced: 'Жаңы',
-        filterStatusReopened: 'Кайра ачылган',
-        filterStatusClaimed: 'Алынган',
-        filterStatusStarted: 'Иште',
-        filterStatusCompleted: 'Аяктаган (Төлөнбөгөн)',
-        filterStatusConfirmed: 'Тастыкталган',
-        filterStatusPayment: 'Төлөм күтүүдө',
-        filterStatusDisputed: 'Талаштуу',
-        filterStatusCanceled: 'Жокко чыгарылган',
-        filterStatusExpired: 'Мөөнөтү бүткөн',
-        tabOrders: 'Кезек',
-        tabCreate: 'Жаңы түзүү',
-        timeUnitNow: 'Азыр эле',
-        timeUnitMins: 'м мурун',
-        timeUnitHours: 'с мурун',
-        timeUnitDays: 'к мурун',
-    },
-};
-
 // Storage keys
 const STORAGE_KEYS = { DRAFT: 'dispatcher_draft_order', RECENT_ADDR: 'dispatcher_recent_addresses' };
 
@@ -666,55 +91,11 @@ const generateIdempotencyKey = () => {
     });
 };
 
-// Helper: time ago
-// Helper: time ago
-const getTimeAgo = (dateStr, language) => {
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const mins = Math.floor(diff / 60000);
-    const hrs = Math.floor(mins / 60);
-    const days = Math.floor(hrs / 24);
-    if (days > 0) return `${days}${TRANSLATIONS[language]?.timeUnitDays || 'd ago'}`;
-    if (hrs > 0) return `${hrs}${TRANSLATIONS[language]?.timeUnitHours || 'h ago'}`;
-    if (mins > 0) return `${mins}${TRANSLATIONS[language]?.timeUnitMins || 'm ago'}`;
-    return TRANSLATIONS[language]?.timeUnitNow || 'Just now';
-};
-
-// Helper: normalize phone
-const normalizePhone = (input) => {
-    let cleaned = input.replace(/[\s\-\(\)]/g, '');
-    if (cleaned.startsWith('+996') && cleaned.length === 13) return cleaned;
-    let digits = cleaned.replace(/\D/g, '');
-    if (digits.length === 10 && digits.startsWith('0')) return '+996' + digits.substring(1);
-    if (digits.length === 12 && digits.startsWith('996')) return '+' + digits;
-    if (digits.length === 9) return '+996' + digits;
-    return input;
-};
-
-// Helper: validate phone
-const isValidPhone = (phone) => /^(\+996)\d{9}$/.test(phone);
-
-const getOrderStatusLabel = (status, language) => {
-    if (!status) return '';
-    const key = `filterStatus${status.charAt(0).toUpperCase() + status.slice(1)}`;
-    return TRANSLATIONS[language]?.[key] || TRANSLATIONS[language]?.[`status${status.charAt(0).toUpperCase() + status.slice(1)}`] || status.replace(/_/g, ' ');
-};
-
-// Helper: Get Translated Service Label
-const getServiceLabel = (serviceCode, language) => {
-    if (!serviceCode) return '';
-    const normalized = serviceCode.toLowerCase().replace(/_/g, '');
-    const keyMap = {
-        plumbing: 'servicePlumbing', electrician: 'serviceElectrician', cleaning: 'serviceCleaning',
-        carpenter: 'serviceCarpenter', repair: 'serviceRepair', installation: 'serviceInstallation',
-        maintenance: 'serviceMaintenance', other: 'serviceOther', appliancerepair: 'serviceApplianceRepair',
-        building: 'serviceBuilding', inspection: 'serviceInspection', hvac: 'serviceHvac',
-        painting: 'servicePainting', flooring: 'serviceFlooring', roofing: 'serviceRoofing',
-        landscaping: 'serviceLandscaping',
-    };
-    const translationKey = keyMap[normalized];
-    return translationKey && TRANSLATIONS[language]?.[translationKey]
-        ? TRANSLATIONS[language][translationKey]
-        : serviceCode.charAt(0).toUpperCase() + serviceCode.slice(1).replace(/_/g, ' ');
+const sanitizeNumberInput = (value) => {
+    if (value === null || value === undefined) return '';
+    const cleaned = String(value).replace(/[^0-9.]/g, '');
+    const parts = cleaned.split('.');
+    return parts.length <= 1 ? cleaned : `${parts[0]}.${parts.slice(1).join('')}`;
 };
 
 // Pagination Component
@@ -737,6 +118,8 @@ const Pagination = ({ current, total, onPageChange }) => {
 
 export default function DispatcherDashboard({ navigation, route }) {
     const { showToast } = useToast();
+    const { translations, language, cycleLanguage, t } = useLocalization();
+    const TRANSLATIONS = translations;
 
     // User & Data
     const [user, setUser] = useState(route.params?.user || null);
@@ -751,7 +134,6 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [refreshing, setRefreshing] = useState(false);
     const [loading, setLoading] = useState(true);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-    const [language, setLanguage] = useState('en'); // 'en', 'ru', 'kg'
     const [isDark, setIsDark] = useState(true); // Theme state
     const [actionLoading, setActionLoading] = useState(false);
     const [page, setPage] = useState(1); // Pagination state
@@ -785,6 +167,9 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [paymentOrder, setPaymentOrder] = useState(null); // Store order for payment modal
     const [showAssignModal, setShowAssignModal] = useState(false);
     const [assignTarget, setAssignTarget] = useState(null);
+    const [showMasterDetails, setShowMasterDetails] = useState(false);
+    const [masterDetails, setMasterDetails] = useState(null);
+    const [masterDetailsLoading, setMasterDetailsLoading] = useState(false);
 
     // Create Order Form
     const [newOrder, setNewOrder] = useState(INITIAL_ORDER_STATE);
@@ -793,8 +178,6 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [creationSuccess, setCreationSuccess] = useState(null);
     const [showRecentAddr, setShowRecentAddr] = useState(false);
     const [idempotencyKey, setIdempotencyKey] = useState(generateIdempotencyKey());
-    const [showDistrictDropdown, setShowDistrictDropdown] = useState(false);
-    const [editDistrictDropdown, setEditDistrictDropdown] = useState(false);
     const [platformSettings, setPlatformSettings] = useState(null); // Dynamic platform settings
 
     // ============================================
@@ -815,6 +198,13 @@ export default function DispatcherDashboard({ navigation, route }) {
         loadServiceTypes();
         loadDistricts();
     }, [language]);
+
+    // Set default callout fee when settings load
+    useEffect(() => {
+        if (platformSettings?.base_price && !newOrder.calloutFee) {
+            setNewOrder(prev => ({ ...prev, calloutFee: String(platformSettings.base_price) }));
+        }
+    }, [platformSettings]);
 
     const loadData = async () => {
         if (!refreshing) setLoading(true);
@@ -921,6 +311,39 @@ export default function DispatcherDashboard({ navigation, route }) {
         setRefreshing(false);
     }, []);
 
+    const getAssignErrorMessage = (errorCode) => {
+        if (!errorCode) return null;
+        const map = {
+            INVALID_STATUS: TRANSLATIONS[language].errorAssignInvalidStatus,
+            MASTER_NOT_VERIFIED: TRANSLATIONS[language].errorAssignMasterNotVerified,
+            MASTER_INACTIVE: TRANSLATIONS[language].errorAssignMasterInactive,
+            MASTER_NOT_FOUND: TRANSLATIONS[language].errorAssignMasterNotFound,
+            ORDER_NOT_FOUND: TRANSLATIONS[language].errorAssignOrderNotFound,
+            UNAUTHORIZED: TRANSLATIONS[language].errorAssignUnauthorized
+        };
+        return map[errorCode] || null;
+    };
+
+    const openDistrictPicker = () => {
+        setPickerModal({
+            visible: true,
+            title: TRANSLATIONS[language].createDistrict || 'District',
+            value: newOrder.area,
+            options: districts.map(d => ({ id: d.id, label: d.label })),
+            onChange: (val) => setNewOrder(prev => ({ ...prev, area: val }))
+        });
+    };
+
+    const openEditDistrictPicker = () => {
+        setPickerModal({
+            visible: true,
+            title: TRANSLATIONS[language].createDistrict || 'District',
+            value: editForm.area,
+            options: districts.map(d => ({ id: d.id, label: d.label })),
+            onChange: (val) => setEditForm(prev => ({ ...prev, area: val }))
+        });
+    };
+
     // ============================================
     // FILTERING
     // ============================================
@@ -930,11 +353,28 @@ export default function DispatcherDashboard({ navigation, route }) {
         return orders.filter(o => {
             if (o.is_disputed) return true;
             if (o.status === ORDER_STATUS.COMPLETED) return true;
-            if (o.status === ORDER_STATUS.CANCELED_BY_MASTER || o.status === ORDER_STATUS.CANCELED_BY_CLIENT) return true;
+            if (o.status === ORDER_STATUS.CANCELED_BY_CLIENT) return false;
+            if (o.status === ORDER_STATUS.CANCELED_BY_MASTER) return true;
             if (o.status === ORDER_STATUS.PLACED && (now - new Date(o.created_at).getTime()) > 15 * 60000) return true;
             if (o.status === ORDER_STATUS.CLAIMED && (now - new Date(o.updated_at).getTime()) > 30 * 60000) return true;
             return false;
         });
+    }, [orders]);
+
+    const statusCounts = useMemo(() => {
+        const counts = { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 };
+        orders.forEach(o => {
+            if ([ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED, ORDER_STATUS.CLAIMED, ORDER_STATUS.STARTED].includes(o.status)) {
+                counts.Active += 1;
+            } else if (o.status === ORDER_STATUS.COMPLETED) {
+                counts.Payment += 1;
+            } else if (o.status === ORDER_STATUS.CONFIRMED) {
+                counts.Confirmed += 1;
+            } else if (o.status?.includes('canceled')) {
+                counts.Canceled += 1;
+            }
+        });
+        return counts;
     }, [orders]);
 
     const filteredOrders = useMemo(() => {
@@ -942,41 +382,44 @@ export default function DispatcherDashboard({ navigation, route }) {
 
         // Search
         if (searchQuery) {
-            const q = searchQuery.toLowerCase();
-            res = res.filter(o =>
-                o.id?.toLowerCase().includes(q) ||
-                o.client?.full_name?.toLowerCase().includes(q) ||
-                o.client?.phone?.includes(q) ||
-                o.full_address?.toLowerCase().includes(q) ||
-                o.master?.full_name?.toLowerCase().includes(q)
-            );
+            const qRaw = searchQuery.trim().toLowerCase();
+            if (qRaw) {
+                const q = qRaw.startsWith('#') ? qRaw.slice(1) : qRaw;
+                const qDigits = q.replace(/\D/g, '');
+                res = res.filter(o => {
+                    const id = String(o.id || '').toLowerCase();
+                    const idMatch = q.length <= 6 ? id.endsWith(q) : id.includes(q);
+                    const clientName = o.client?.full_name?.toLowerCase() || '';
+                    const masterName = o.master?.full_name?.toLowerCase() || '';
+                    const fullAddress = o.full_address?.toLowerCase() || '';
+                    const phoneRaw = String(o.client?.phone || o.client_phone || '');
+                    const phoneDigits = phoneRaw.replace(/\D/g, '');
+                    const phoneMatch = qDigits ? phoneDigits.includes(qDigits) : phoneRaw.includes(q);
+
+                    return (
+                        idMatch ||
+                        clientName.includes(q) ||
+                        masterName.includes(q) ||
+                        fullAddress.includes(q) ||
+                        phoneMatch
+                    );
+                });
+            }
         }
 
         // Status tabs
         switch (statusFilter) {
-            case 'All':
-                // Show all orders, no filtering
-                break;
             case 'Active':
-                res = res.filter(o => ['placed', 'reopened', 'claimed', 'started'].includes(o.status) && !o.is_disputed);
+                res = res.filter(o => [ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED, ORDER_STATUS.CLAIMED, ORDER_STATUS.STARTED].includes(o.status));
                 break;
             case 'Payment':
-                res = res.filter(o => o.status === 'completed' && !o.is_disputed);
+                res = res.filter(o => o.status === ORDER_STATUS.COMPLETED);
                 break;
-            case 'Disputed':
-                res = res.filter(o => o.is_disputed);
+            case 'Confirmed':
+                res = res.filter(o => o.status === ORDER_STATUS.CONFIRMED);
                 break;
             case 'Canceled':
                 res = res.filter(o => o.status?.includes('canceled'));
-                break;
-            case 'placed':
-            case 'reopened':
-            case 'claimed':
-            case 'started':
-            case 'completed':
-            case 'confirmed':
-            case 'expired':
-                res = res.filter(o => o.status === statusFilter);
                 break;
         }
 
@@ -1022,6 +465,20 @@ export default function DispatcherDashboard({ navigation, route }) {
         }
         if (phoneError) { showToast?.(TRANSLATIONS[language].toastFixPhone, 'error'); return; }
 
+        const parsedCallout = newOrder.calloutFee !== '' && newOrder.calloutFee !== null && newOrder.calloutFee !== undefined
+            ? parseFloat(newOrder.calloutFee)
+            : null;
+        const calloutValue = !isNaN(parsedCallout) ? parsedCallout : null;
+        const parsedInitial = newOrder.pricingType === 'fixed' && newOrder.initialPrice !== '' && newOrder.initialPrice !== null && newOrder.initialPrice !== undefined
+            ? parseFloat(newOrder.initialPrice)
+            : null;
+        const initialValue = !isNaN(parsedInitial) ? parsedInitial : null;
+
+        if (calloutValue !== null && initialValue !== null && initialValue < calloutValue) {
+            showToast?.(TRANSLATIONS[language].errorInitialBelowCallout || 'Initial price cannot be lower than call-out fee', 'error');
+            return;
+        }
+
         setActionLoading(true);
         try {
             const result = await ordersService.createOrderExtended({
@@ -1042,14 +499,14 @@ export default function DispatcherDashboard({ navigation, route }) {
             }, user.id);
 
             if (result.success) {
-                showToast?.('Order created!', 'success');
+                showToast?.(TRANSLATIONS[language].toastOrderCreated || 'Order created!', 'success');
                 await saveRecentAddress(newOrder.area, newOrder.fullAddress);
                 await AsyncStorage.removeItem(STORAGE_KEYS.DRAFT);
                 setCreationSuccess({ id: result.orderId });
                 setConfirmChecked(false);
                 await loadData();
             } else {
-                showToast?.(result.message, 'error');
+                showToast?.(TRANSLATIONS[language].toastOrderFailed || TRANSLATIONS[language].toastCreateFailed, 'error');
             }
         } catch (error) {
             showToast?.(TRANSLATIONS[language].toastCreateFailed, 'error');
@@ -1059,9 +516,10 @@ export default function DispatcherDashboard({ navigation, route }) {
     };
 
     const handlePhoneBlur = () => {
-        const val = normalizePhone(newOrder.clientPhone);
-        setNewOrder(prev => ({ ...prev, clientPhone: val }));
-        setPhoneError(val && !isValidPhone(val) ? TRANSLATIONS[language].errorPhoneFormat : '');
+        const normalized = normalizeKyrgyzPhone(newOrder.clientPhone);
+        const nextValue = normalized || newOrder.clientPhone;
+        setNewOrder(prev => ({ ...prev, clientPhone: nextValue }));
+        setPhoneError(nextValue && !isValidKyrgyzPhone(nextValue) ? TRANSLATIONS[language].errorPhoneFormat : '');
     };
 
     // Paste phone from clipboard and auto-format
@@ -1075,10 +533,11 @@ export default function DispatcherDashboard({ navigation, route }) {
                 text = await Clipboard.getString();
             }
             if (text) {
-                const val = normalizePhone(text);
-                setNewOrder(prev => ({ ...prev, clientPhone: val }));
+                const normalized = normalizeKyrgyzPhone(text);
+                const nextValue = normalized || text;
+                setNewOrder(prev => ({ ...prev, clientPhone: nextValue }));
                 showToast?.(TRANSLATIONS[language].toastPasted, 'success');
-                setPhoneError(val && !isValidPhone(val) ? TRANSLATIONS[language].errorPhoneFormat : '');
+                setPhoneError(nextValue && !isValidKyrgyzPhone(nextValue) ? TRANSLATIONS[language].errorPhoneFormat : '');
             } else {
                 showToast?.(TRANSLATIONS[language].toastClipboardEmpty, 'info');
             }
@@ -1113,34 +572,116 @@ export default function DispatcherDashboard({ navigation, route }) {
                 setPaymentOrder(null);
                 setPaymentData({ method: 'cash', proofUrl: '' });
                 await loadData();
-            } else { showToast?.(result.message, 'error'); }
+            } else { showToast?.(TRANSLATIONS[language].toastFailedPrefix + (TRANSLATIONS[language].errorGeneric || 'Error'), 'error'); }
         } catch (e) {
             console.error('Payment confirm error:', e);
-            showToast?.(TRANSLATIONS[language].toastFailedPrefix + e.message, 'error');
+            showToast?.(TRANSLATIONS[language].toastFailedPrefix + (TRANSLATIONS[language].errorGeneric || 'Error'), 'error');
         }
         finally { setActionLoading(false); }
     };
 
+    const openAssignModal = (order) => {
+        if (!order) return;
+        setAssignTarget(order);
+        setDetailsOrder(null);
+        setShowAssignModal(true);
+    };
+
     const handleAssignMaster = async (master) => {
         const targetId = assignTarget?.id || detailsOrder?.id;
+        if (!targetId) {
+            showToast?.(TRANSLATIONS[language].toastNoOrderSelected || 'No order selected', 'error');
+            return;
+        }
+        const maxJobs = Number.isFinite(Number(master?.max_active_jobs)) ? Number(master.max_active_jobs) : null;
+        const activeJobs = Number.isFinite(Number(master?.active_jobs)) ? Number(master.active_jobs) : 0;
+        if (maxJobs !== null && activeJobs >= maxJobs) {
+            showToast?.(TRANSLATIONS[language].errorMasterLimitReached || 'Master has reached the active jobs limit', 'error');
+            return;
+        }
         const msg = (TRANSLATIONS[language].alertAssignMsg || 'Assign {0}?').replace('{0}', master.full_name);
-        Alert.alert(TRANSLATIONS[language].alertAssignTitle, msg, [
-            { text: TRANSLATIONS[language].cancel, style: 'cancel' },
-            {
-                text: TRANSLATIONS[language].alertAssignBtn, onPress: async () => {
-                    setActionLoading(true);
-                    try {
-                        const result = await ordersService.forceAssignMaster(targetId, master.id, 'Dispatcher assignment');
-                        if (result.success) {
-                            showToast?.(TRANSLATIONS[language].toastMasterAssigned, 'success');
-                            setShowAssignModal(false); setDetailsOrder(null);
-                            await loadData();
-                        } else { showToast?.(result.message, 'error'); }
-                    } catch (e) { showToast?.(TRANSLATIONS[language].toastAssignFail, 'error'); }
-                    finally { setActionLoading(false); }
+
+        const confirmAssign = async () => {
+            setActionLoading(true);
+            try {
+                const result = await ordersService.forceAssignMaster(targetId, master.id, 'Dispatcher assignment');
+                if (result.success) {
+                    showToast?.(TRANSLATIONS[language].toastMasterAssigned, 'success');
+                    setShowAssignModal(false);
+                    setDetailsOrder(null);
+                    setAssignTarget(null);
+                    await loadData();
+                } else {
+                    const mapped = getAssignErrorMessage(result?.error);
+                    showToast?.(mapped || TRANSLATIONS[language].toastAssignFail, 'error');
                 }
+            } catch (e) { showToast?.(TRANSLATIONS[language].toastAssignFail, 'error'); }
+            finally { setActionLoading(false); }
+        };
+
+        if (Platform.OS === 'web') {
+            if (window.confirm(msg)) confirmAssign();
+        } else {
+            Alert.alert(TRANSLATIONS[language].alertAssignTitle, msg, [
+                { text: TRANSLATIONS[language].cancel, style: 'cancel' },
+                { text: TRANSLATIONS[language].alertAssignBtn, onPress: confirmAssign }
+            ]);
+        }
+    };
+
+    const openMasterDetails = async (master) => {
+        if (!master?.id) {
+            showToast?.(TRANSLATIONS[language].errorMasterDetailsUnavailable || 'Master details unavailable', 'error');
+            return;
+        }
+        setShowMasterDetails(true);
+        setMasterDetails({ profile: master, summary: null });
+        setMasterDetailsLoading(true);
+        const summary = await earningsService.getMasterFinancialSummary(master.id);
+        setMasterDetails({ profile: master, summary });
+        setMasterDetailsLoading(false);
+    };
+
+    const closeMasterDetails = () => {
+        setShowMasterDetails(false);
+        setMasterDetails(null);
+        setMasterDetailsLoading(false);
+    };
+
+    const handleRemoveMaster = async () => {
+        if (!detailsOrder?.id || !user?.id) return;
+        if ([ORDER_STATUS.COMPLETED, ORDER_STATUS.CONFIRMED].includes(detailsOrder.status)) {
+            showToast?.(TRANSLATIONS[language].errorCannotUnassign || 'Cannot remove master from completed/confirmed order', 'error');
+            return;
+        }
+        const confirmRemove = async () => {
+            setActionLoading(true);
+            try {
+                const result = await ordersService.unassignMaster(detailsOrder.id, user.id, 'dispatcher_unassign');
+                if (result.success) {
+                    showToast?.(TRANSLATIONS[language].toastMasterUnassigned || 'Master removed', 'success');
+                    setIsEditing(false);
+                    setDetailsOrder(null);
+                    await loadData();
+                } else {
+                    showToast?.(TRANSLATIONS[language].toastFailedPrefix + (TRANSLATIONS[language].errorGeneric || 'Error'), 'error');
+                }
+            } catch (e) {
+                showToast?.(TRANSLATIONS[language].toastFailedPrefix + (TRANSLATIONS[language].errorGeneric || 'Error'), 'error');
+            } finally {
+                setActionLoading(false);
             }
-        ]);
+        };
+
+        const msg = TRANSLATIONS[language].alertUnassignMsg || 'Remove master and reopen this order?';
+        if (Platform.OS === 'web') {
+            if (window.confirm(msg)) confirmRemove();
+        } else {
+            Alert.alert(TRANSLATIONS[language].alertUnassignTitle || 'Remove Master', msg, [
+                { text: TRANSLATIONS[language].cancel, style: 'cancel' },
+                { text: TRANSLATIONS[language].alertUnassignBtn || 'Remove', style: 'destructive', onPress: confirmRemove }
+            ]);
+        }
     };
 
     const handleSaveEdit = async () => {
@@ -1150,6 +691,21 @@ export default function DispatcherDashboard({ navigation, route }) {
             const normalizedPhone = ordersService.normalizeKyrgyzPhone(editForm.client_phone);
             if (editForm.client_phone && !normalizedPhone) {
                 showToast?.(TRANSLATIONS[language].errorPhoneFormat || 'Invalid phone format', 'error');
+                setActionLoading(false);
+                return;
+            }
+
+            const parsedCallout = editForm.callout_fee !== '' && editForm.callout_fee !== null && editForm.callout_fee !== undefined
+                ? parseFloat(editForm.callout_fee)
+                : null;
+            const calloutValue = !isNaN(parsedCallout) ? parsedCallout : null;
+            const parsedInitial = editForm.initial_price !== '' && editForm.initial_price !== null && editForm.initial_price !== undefined
+                ? parseFloat(editForm.initial_price)
+                : null;
+            const initialValue = !isNaN(parsedInitial) ? parsedInitial : null;
+
+            if (calloutValue !== null && initialValue !== null && initialValue < calloutValue) {
+                showToast?.(TRANSLATIONS[language].errorInitialBelowCallout || 'Initial price cannot be lower than call-out fee', 'error');
                 setActionLoading(false);
                 return;
             }
@@ -1186,8 +742,8 @@ export default function DispatcherDashboard({ navigation, route }) {
                         phone: editForm.client_phone
                     }
                 }));
-            } else { showToast?.(TRANSLATIONS[language].toastOrderFailed, 'error'); }
-        } catch (e) { showToast?.(TRANSLATIONS[language].toastFailedPrefix + 'Error', 'error'); }
+            } else { showToast?.(TRANSLATIONS[language].toastOrderFailed || TRANSLATIONS[language].toastCreateFailed, 'error'); }
+        } catch (e) { showToast?.(TRANSLATIONS[language].toastFailedPrefix + (TRANSLATIONS[language].errorGeneric || 'Error'), 'error'); }
         finally { setActionLoading(false); }
     };
 
@@ -1199,7 +755,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                 await loadData();
                 setDetailsOrder(null); // Close the drawer/modal after success
             }
-            else showToast?.(result.message, 'error');
+            else showToast?.(TRANSLATIONS[language].toastFailedPrefix + (TRANSLATIONS[language].errorGeneric || 'Error'), 'error');
         };
 
         if (Platform.OS === 'web') {
@@ -1212,7 +768,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                 TRANSLATIONS[language].alertCancelMsg,
                 [
                     { text: TRANSLATIONS[language].cancel, style: 'cancel' },
-                    { text: 'Yes', style: 'destructive', onPress: confirmCancel }
+                    { text: TRANSLATIONS[language].yes || 'Yes', style: 'destructive', onPress: confirmCancel }
                 ]
             );
         }
@@ -1221,7 +777,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     const handleReopen = async (orderId) => {
         const result = await ordersService.reopenOrder(orderId, user.id);
         if (result.success) { showToast?.(TRANSLATIONS[language].filterStatusReopened, 'success'); await loadData(); }
-        else showToast?.(result.message, 'error');
+        else showToast?.(TRANSLATIONS[language].toastFailedPrefix + (TRANSLATIONS[language].errorGeneric || 'Error'), 'error');
     };
 
     const copyToClipboard = (text) => {
@@ -1246,7 +802,10 @@ export default function DispatcherDashboard({ navigation, route }) {
     };
 
     const clearForm = () => {
-        setNewOrder(INITIAL_ORDER_STATE);
+        setNewOrder({
+            ...INITIAL_ORDER_STATE,
+            calloutFee: platformSettings?.base_price ? String(platformSettings.base_price) : ''
+        });
         setConfirmChecked(false); setPhoneError('');
         setIdempotencyKey(generateIdempotencyKey());
         AsyncStorage.removeItem(STORAGE_KEYS.DRAFT);
@@ -1257,6 +816,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     const keepLocationAndReset = () => {
         setNewOrder(prev => ({
             ...INITIAL_ORDER_STATE,
+            calloutFee: platformSettings?.base_price ? String(platformSettings.base_price) : '',
             area: prev.area,
             fullAddress: prev.fullAddress
         }));
@@ -1339,7 +899,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     setPickerModal(prev => ({ ...prev, visible: false }));
                                 }}>
                                 <Text style={[styles.pickerOptionText, pickerModal.value === opt.id && styles.pickerOptionTextActive]}>
-                                    {TRANSLATIONS[language][opt.label] || opt.label}
+                                    {(TRANSLATIONS[language][opt.label] || opt.label)}{typeof opt.count === 'number' ? ` (${opt.count})` : ''}
                                 </Text>
                                 {pickerModal.value === opt.id && <Text style={styles.pickerCheck}>✓</Text>}
                             </TouchableOpacity>
@@ -1374,7 +934,14 @@ export default function DispatcherDashboard({ navigation, route }) {
                         <TouchableOpacity
                             style={[styles.sidebarNavItem, activeTab === 'queue' && styles.sidebarNavItemActive]}
                             onPress={() => { setActiveTab('queue'); setIsSidebarOpen(false); }}>
-                            <Text style={[styles.sidebarNavText, activeTab === 'queue' && styles.sidebarNavTextActive]}>{TRANSLATIONS[language].ordersQueue}</Text>
+                            <View style={styles.sidebarNavRow}>
+                                <Text style={[styles.sidebarNavText, activeTab === 'queue' && styles.sidebarNavTextActive]}>{TRANSLATIONS[language].ordersQueue}</Text>
+                                {needsActionOrders.length > 0 && (
+                                    <View style={styles.sidebarBadge}>
+                                        <Text style={styles.sidebarBadgeText}>{needsActionOrders.length}</Text>
+                                    </View>
+                                )}
+                            </View>
                         </TouchableOpacity>
                     </View>
 
@@ -1387,7 +954,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={[styles.sidebarLangBtn, !isDark && styles.sidebarBtnLight]}
-                                onPress={() => setLanguage(prev => prev === 'en' ? 'ru' : prev === 'ru' ? 'kg' : 'en')}>
+                                onPress={cycleLanguage}>
                                 <Text style={[styles.sidebarLangText, !isDark && styles.textDark, { fontSize: 24 }]}>
                                     {language === 'en' ? '🇬🇧' : language === 'ru' ? '🇷🇺' : '🇰🇬'}
                                 </Text>
@@ -1431,7 +998,16 @@ export default function DispatcherDashboard({ navigation, route }) {
         </View>
     );
 
-    const renderFilters = () => (
+    const renderFilters = () => {
+        const statusOptionsWithCounts = STATUS_OPTIONS.map(opt => ({
+            ...opt,
+            count: statusCounts[opt.id] ?? 0,
+        }));
+        const currentStatusLabel = TRANSLATIONS[language][STATUS_OPTIONS.find(o => o.id === statusFilter)?.label]
+            || STATUS_OPTIONS.find(o => o.id === statusFilter)?.label
+            || statusFilter;
+
+        return (
         <View style={styles.filtersContainer}>
             {/* Search */}
             <View style={styles.searchRow}>
@@ -1470,10 +1046,10 @@ export default function DispatcherDashboard({ navigation, route }) {
             {showFilters && (
                 <View style={styles.filterDropdownRow}>
                     <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
-                        visible: true, title: TRANSLATIONS[language].pickerStatus, options: STATUS_OPTIONS, value: statusFilter, onChange: setStatusFilter
+                        visible: true, title: TRANSLATIONS[language].pickerStatus, options: statusOptionsWithCounts, value: statusFilter, onChange: setStatusFilter
                     })}>
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
-                            {TRANSLATIONS[language][STATUS_OPTIONS.find(o => o.id === statusFilter)?.label] || STATUS_OPTIONS.find(o => o.id === statusFilter)?.label || statusFilter}
+                            {currentStatusLabel} ({statusCounts[statusFilter] ?? 0})
                         </Text>
                         <Text style={styles.filterDropdownArrow}>▾</Text>
                     </TouchableOpacity>
@@ -1527,7 +1103,8 @@ export default function DispatcherDashboard({ navigation, route }) {
                 </View>
             )}
         </View>
-    );
+        );
+    };
 
     const renderNeedsAttention = () => {
         if (needsActionOrders.length === 0) return null;
@@ -1599,7 +1176,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                         {sortedNeedsAction.map(o => (
                             <TouchableOpacity key={o.id} style={[styles.attentionCard, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(o)}>
                                 <Text style={styles.attentionBadge}>{o.is_disputed ? TRANSLATIONS[language].badgeDispute : o.status === 'completed' ? TRANSLATIONS[language].badgeUnpaid : o.status?.includes('canceled') ? (TRANSLATIONS[language].badgeCanceled || 'Canceled') : TRANSLATIONS[language].badgeStuck}</Text>
-                                <Text style={[styles.attentionService, !isDark && styles.textDark]}>{getServiceLabel(o.service_type, language)}</Text>
+                                <Text style={[styles.attentionService, !isDark && styles.textDark]}>{getServiceLabel(o.service_type, t)}</Text>
                                 <Text style={[styles.attentionAddr, !isDark && styles.textSecondary]} numberOfLines={1}>{o.full_address}</Text>
                             </TouchableOpacity>
                         ))}
@@ -1614,13 +1191,13 @@ export default function DispatcherDashboard({ navigation, route }) {
         <TouchableOpacity style={[styles.compactRow, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(item)}>
             {/* Status indicator */}
             <View style={[styles.compactStatusBadge, { backgroundColor: STATUS_COLORS[item.status] || '#64748b' }]}>
-                <Text style={styles.compactStatusText}>{getOrderStatusLabel(item.status, language)}</Text>
+                <Text style={styles.compactStatusText}>{getOrderStatusLabel(item.status, t)}</Text>
             </View>
             {/* Main info */}
             <View style={styles.compactMain}>
                 <View style={styles.compactTopRow}>
                     <Text style={[styles.compactId, !isDark && styles.textSecondary]}>#{item.id?.slice(-6)}</Text>
-                    <Text style={[styles.compactService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, language)}</Text>
+                    <Text style={[styles.compactService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, t)}</Text>
                     {item.urgency && item.urgency !== 'planned' && (
                         <Text style={[styles.compactUrgency, item.urgency === 'emergency' && styles.compactUrgencyEmergency]}>
                             {TRANSLATIONS[language][`urgency${item.urgency.charAt(0).toUpperCase() + item.urgency.slice(1)}`] || item.urgency.toUpperCase()}
@@ -1632,11 +1209,19 @@ export default function DispatcherDashboard({ navigation, route }) {
                     <Text style={[styles.compactClient, !isDark && styles.textDark]}>{item.client?.full_name || item.client_name || 'N/A'}</Text>
                     {item.master && <Text style={styles.compactMaster}>{TRANSLATIONS[language].labelMasterPrefix}{item.master.full_name}</Text>}
                     {item.final_price && <Text style={styles.compactPrice}>{item.final_price}c</Text>}
+                    {['placed', 'reopened'].includes(item.status) && (
+                        <TouchableOpacity
+                            style={styles.compactAssignBtn}
+                            onPress={(e) => { e.stopPropagation?.(); openAssignModal(item); }}
+                        >
+                            <Text style={styles.compactAssignText}>{TRANSLATIONS[language].actionAssign}</Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
             </View>
             {/* Right side */}
             <View style={styles.compactRight}>
-                <Text style={styles.compactTime}>{getTimeAgo(item.created_at, language)}</Text>
+                <Text style={styles.compactTime}>{getTimeAgo(item.created_at, t)}</Text>
                 <Text style={[styles.compactChevron, !isDark && styles.textSecondary]}>›</Text>
             </View>
         </TouchableOpacity>
@@ -1645,16 +1230,24 @@ export default function DispatcherDashboard({ navigation, route }) {
     const renderCard = ({ item }) => (
         <TouchableOpacity style={[styles.orderCard, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(item)}>
             <View style={styles.cardHeader}>
-                <Text style={[styles.cardService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, language)}</Text>
+                <Text style={[styles.cardService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, t)}</Text>
                 <View style={[styles.cardStatus, { backgroundColor: STATUS_COLORS[item.status] }]}>
-                    <Text style={styles.cardStatusText}>{getOrderStatusLabel(item.status, language)}</Text>
+                    <Text style={styles.cardStatusText}>{getOrderStatusLabel(item.status, t)}</Text>
                 </View>
             </View>
             <Text style={[styles.cardAddr, !isDark && styles.textSecondary]} numberOfLines={2}>{item.full_address}</Text>
             <View style={styles.cardFooter}>
                 <Text style={[styles.cardClient, !isDark && styles.textDark]}>{item.client?.full_name || item.client_name || 'N/A'}</Text>
-                <Text style={styles.cardTime}>{getTimeAgo(item.created_at, language)}</Text>
+                <Text style={styles.cardTime}>{getTimeAgo(item.created_at, t)}</Text>
             </View>
+            {['placed', 'reopened'].includes(item.status) && (
+                <TouchableOpacity
+                    style={styles.cardAssignBtn}
+                    onPress={(e) => { e.stopPropagation?.(); openAssignModal(item); }}
+                >
+                    <Text style={styles.cardAssignText}>{TRANSLATIONS[language].actionAssign}</Text>
+                </TouchableOpacity>
+            )}
             {item.status === 'completed' && (
                 <TouchableOpacity style={styles.cardPayBtn} onPress={(e) => { e.stopPropagation?.(); setDetailsOrder(item); setShowPaymentModal(true); }}>
                     <Text style={styles.cardPayText}>{TRANSLATIONS[language].btnPayWithAmount ? TRANSLATIONS[language].btnPayWithAmount.replace('{0}', item.final_price) : `Pay ${item.final_price}c`}</Text>
@@ -1687,8 +1280,10 @@ export default function DispatcherDashboard({ navigation, route }) {
         );
     };
 
-    const renderCreateOrder = () => (
-        <View style={styles.createWrapper}>
+    const renderCreateOrder = () => {
+        const publishDisabled = !confirmChecked || actionLoading;
+        return (
+            <View style={styles.createWrapper}>
             <ScrollView style={styles.createContainer} showsVerticalScrollIndicator={false} contentContainerStyle={styles.createScrollContent}>
                 {creationSuccess ? (
                     <View style={styles.successContainer}>
@@ -1711,7 +1306,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                         </View>
                     </View>
                 ) : (
-                    <>
+                    <View style={styles.createSections}>
                         {/* Client */}
                         <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
                             <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createClientDetails}</Text>
@@ -1735,39 +1330,15 @@ export default function DispatcherDashboard({ navigation, route }) {
                             <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createLocation}</Text>
 
                             <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createDistrict} *</Text>
-                            {/* District Inline Dropdown */}
-                            <View style={{ zIndex: 100, position: 'relative' }}>
-                                <TouchableOpacity
-                                    style={[styles.input, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, !isDark && styles.inputLight]}
-                                    onPress={() => setShowDistrictDropdown(!showDistrictDropdown)}
-                                >
-                                    <Text style={[styles.pickerBtnText, !newOrder.area && styles.placeholderText, !isDark && styles.textDark]}>
-                                        {newOrder.area ? (districts.find(d => d.id === newOrder.area)?.label || newOrder.area) : (TRANSLATIONS[language].selectOption || 'Select')}
-                                    </Text>
-                                    <Text style={{ color: '#94a3b8', fontSize: 12 }}>{showDistrictDropdown ? '▲' : '▼'}</Text>
-                                </TouchableOpacity>
-                                {showDistrictDropdown && (
-                                    <View style={[styles.inlineDropdown, !isDark && styles.cardLight]}>
-                                        <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
-                                            {districts.map(d => (
-                                                <TouchableOpacity
-                                                    key={d.id}
-                                                    style={[styles.dropdownItem, newOrder.area === d.id && styles.dropdownItemActive]}
-                                                    onPress={() => {
-                                                        setNewOrder({ ...newOrder, area: d.id });
-                                                        setShowDistrictDropdown(false);
-                                                    }}
-                                                >
-                                                    <Text style={[styles.dropdownItemText, !isDark && styles.textDark, newOrder.area === d.id && styles.dropdownItemTextActive]}>
-                                                        {d.label}
-                                                    </Text>
-                                                    {d.region === 'countryside' && <Text style={styles.regionBadge}>{TRANSLATIONS[language].labelCountryside || 'Outskirts'}</Text>}
-                                                </TouchableOpacity>
-                                            ))}
-                                        </ScrollView>
-                                    </View>
-                                )}
-                            </View>
+                            <TouchableOpacity
+                                style={[styles.input, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, !isDark && styles.inputLight]}
+                                onPress={openDistrictPicker}
+                            >
+                                <Text style={[styles.pickerBtnText, !newOrder.area && styles.placeholderText, !isDark && styles.textDark]}>
+                                    {newOrder.area ? (districts.find(d => d.id === newOrder.area)?.label || newOrder.area) : (TRANSLATIONS[language].selectOption || 'Select')}
+                                </Text>
+                                <Text style={{ color: '#94a3b8', fontSize: 12 }}>▼</Text>
+                            </TouchableOpacity>
 
                             <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createFullAddress} *</Text>
                             <TextInput style={[styles.input, !isDark && styles.inputLight]}
@@ -1945,7 +1516,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                         placeholder={platformSettings ? String(platformSettings.base_price) : "..."}
                                         keyboardType="numeric"
                                         value={newOrder.calloutFee}
-                                        onChangeText={t => setNewOrder({ ...newOrder, calloutFee: t })}
+                                        onChangeText={t => setNewOrder({ ...newOrder, calloutFee: sanitizeNumberInput(t) })}
                                         placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                     />
                                 </View>
@@ -1957,7 +1528,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                             placeholder="0"
                                             keyboardType="numeric"
                                             value={newOrder.initialPrice}
-                                            onChangeText={t => setNewOrder({ ...newOrder, initialPrice: t })}
+                                            onChangeText={t => setNewOrder({ ...newOrder, initialPrice: sanitizeNumberInput(t) })}
                                             placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                         />
                                     </View>
@@ -1985,7 +1556,7 @@ export default function DispatcherDashboard({ navigation, route }) {
 
                         {/* Spacer for fixed bottom bar */}
                         <View style={{ height: 120 }} />
-                    </>
+                    </View>
                 )}
             </ScrollView>
 
@@ -2003,28 +1574,38 @@ export default function DispatcherDashboard({ navigation, route }) {
                             <TouchableOpacity style={[styles.bottomClearBtn, !isDark && styles.btnLight]} onPress={clearForm}>
                                 <Text style={[styles.bottomClearBtnText, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createClear}</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity style={[styles.bottomPublishBtn, (!confirmChecked || actionLoading) && styles.bottomPublishBtnDisabled]}
-                                onPress={handleCreateOrder} disabled={!confirmChecked || actionLoading}>
+                            <TouchableOpacity
+                                style={[
+                                    styles.bottomPublishBtn,
+                                    publishDisabled && styles.bottomPublishBtnDisabled,
+                                    publishDisabled && styles.pointerEventsNone
+                                ]}
+                                onPress={publishDisabled ? undefined : handleCreateOrder}
+                            >
                                 {actionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.bottomPublishBtnText}>{TRANSLATIONS[language].createPublish}</Text>}
                             </TouchableOpacity>
                         </View>
                     </View>
                 )
             }
-        </View >
-    );
+            </View>
+        );
+    };
 
     // Details Drawer
     const renderDetailsDrawer = () => {
         if (!detailsOrder) return null;
         // NOTE: handleSaveEdit is defined earlier in the component (around line 1146)
         // with proper fee handling, area, orientir, etc.
+        const calloutValue = detailsOrder.callout_fee;
+        const screenWidth = Dimensions.get('window').width;
+        const drawerWidth = screenWidth <= 480 ? screenWidth : (screenWidth > 500 ? 400 : screenWidth * 0.85);
+        const fullWidthDrawer = drawerWidth >= screenWidth;
 
-        return (
-            <Modal visible={!!detailsOrder} transparent animationType="none">
-                <View style={styles.drawerOverlay}>
-                    <TouchableOpacity style={styles.drawerBackdrop} onPress={() => setDetailsOrder(null)} />
-                    <View style={[styles.drawerContent, !isDark && styles.drawerContentLight]}>
+        const drawerBody = (
+            <View style={styles.drawerOverlay}>
+                <TouchableOpacity style={[styles.drawerBackdrop, fullWidthDrawer && styles.drawerBackdropHidden]} onPress={() => setDetailsOrder(null)} />
+                <View style={[styles.drawerContent, !isDark && styles.drawerContentLight, { width: drawerWidth }]}>
                         <View style={[styles.drawerHeader, !isDark && styles.drawerHeaderLight]}>
                             <View>
                                 <Text style={[styles.drawerTitle, !isDark && styles.textDark]}>{(TRANSLATIONS[language].drawerTitle || 'Order #{0}').replace('{0}', detailsOrder.id.slice(0, 8))}</Text>
@@ -2071,10 +1652,10 @@ export default function DispatcherDashboard({ navigation, route }) {
                             <View style={styles.drawerSection}>
                                 <View style={styles.drawerStatusRow}>
                                     <View style={[styles.drawerStatusBadge, { backgroundColor: STATUS_COLORS[detailsOrder.status] }]}>
-                                        <Text style={styles.drawerStatusText}>{getOrderStatusLabel(detailsOrder.status, language)}</Text>
+                                        <Text style={styles.drawerStatusText}>{getOrderStatusLabel(detailsOrder.status, t)}</Text>
                                     </View>
-                                    {detailsOrder.status === 'placed' && (
-                                        <TouchableOpacity style={styles.drawerBtn} onPress={() => { setAssignTarget(detailsOrder); setDetailsOrder(null); setShowAssignModal(true); }}>
+                                    {['placed', 'reopened'].includes(detailsOrder.status) && (
+                                        <TouchableOpacity style={styles.drawerBtn} onPress={() => openAssignModal(detailsOrder)}>
                                             <Text style={styles.drawerBtnText}>{TRANSLATIONS[language].actionClaim}</Text>
                                         </TouchableOpacity>
                                     )}
@@ -2103,37 +1684,15 @@ export default function DispatcherDashboard({ navigation, route }) {
 
                                     {/* Location Editing */}
                                     <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].createDistrict || 'District'}</Text>
-                                    <View style={{ zIndex: 100, position: 'relative' }}>
-                                        <TouchableOpacity
-                                            style={[styles.input, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, !isDark && styles.inputLight]}
-                                            onPress={() => setEditDistrictDropdown(!editDistrictDropdown)}
-                                        >
-                                            <Text style={[styles.pickerBtnText, !editForm.area && styles.placeholderText, !isDark && styles.textDark]}>
-                                                {editForm.area ? (districts.find(d => d.id === editForm.area)?.label || editForm.area) : (TRANSLATIONS[language].selectOption || 'Select')}
-                                            </Text>
-                                            <Text style={{ color: '#94a3b8', fontSize: 12 }}>{editDistrictDropdown ? '▲' : '▼'}</Text>
-                                        </TouchableOpacity>
-                                        {editDistrictDropdown && (
-                                            <View style={[styles.inlineDropdown, !isDark && styles.cardLight]}>
-                                                <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
-                                                    {districts.map(d => (
-                                                        <TouchableOpacity
-                                                            key={d.id}
-                                                            style={[styles.dropdownItem, editForm.area === d.id && styles.dropdownItemActive]}
-                                                            onPress={() => {
-                                                                setEditForm({ ...editForm, area: d.id });
-                                                                setEditDistrictDropdown(false);
-                                                            }}
-                                                        >
-                                                            <Text style={[styles.dropdownItemText, !isDark && styles.textDark, editForm.area === d.id && styles.dropdownItemTextActive]}>
-                                                                {d.label}
-                                                            </Text>
-                                                        </TouchableOpacity>
-                                                    ))}
-                                                </ScrollView>
-                                            </View>
-                                        )}
-                                    </View>
+                                    <TouchableOpacity
+                                        style={[styles.input, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, !isDark && styles.inputLight]}
+                                        onPress={openEditDistrictPicker}
+                                    >
+                                        <Text style={[styles.pickerBtnText, !editForm.area && styles.placeholderText, !isDark && styles.textDark]}>
+                                            {editForm.area ? (districts.find(d => d.id === editForm.area)?.label || editForm.area) : (TRANSLATIONS[language].selectOption || 'Select')}
+                                        </Text>
+                                        <Text style={{ color: '#94a3b8', fontSize: 12 }}>▼</Text>
+                                    </TouchableOpacity>
 
                                     <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].address}</Text>
                                     <TextInput style={[styles.input, !isDark && styles.inputLight]} value={editForm.full_address || ''}
@@ -2148,23 +1707,42 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     <TextInput style={[styles.input, styles.textArea, !isDark && styles.inputLight]} value={editForm.problem_description || ''}
                                         onChangeText={t => setEditForm({ ...editForm, problem_description: t })} multiline placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
 
-                                    {/* Fee Editing - Initial Price only (callout_fee postponed) */}
+                                    {/* Fee Editing */}
+                                    <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].calloutFee || 'Call-out Fee'}</Text>
+                                    <TextInput style={[styles.input, !isDark && styles.inputLight]} value={String(editForm.callout_fee ?? '')}
+                                        onChangeText={t => setEditForm({ ...editForm, callout_fee: sanitizeNumberInput(t) })}
+                                        keyboardType="numeric" placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
+
                                     <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].initialPrice || 'Initial Price'}</Text>
                                     <TextInput style={[styles.input, !isDark && styles.inputLight]} value={String(editForm.initial_price ?? '')}
-                                        onChangeText={t => setEditForm({ ...editForm, initial_price: t })}
+                                        onChangeText={t => setEditForm({ ...editForm, initial_price: sanitizeNumberInput(t) })}
                                         keyboardType="numeric" placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
 
                                     <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].sectionNote}</Text>
                                     <TextInput style={[styles.input, styles.textArea, !isDark && styles.inputLight]} value={editForm.dispatcher_note || ''}
                                         onChangeText={t => setEditForm({ ...editForm, dispatcher_note: t })} multiline placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
 
+                                    {detailsOrder?.master && (
+                                        <View style={styles.editActionRow}>
+                                            <TouchableOpacity style={[styles.editActionBtn, styles.editActionPrimary]} onPress={() => openAssignModal(detailsOrder)}>
+                                                <Text style={styles.editActionText}>{TRANSLATIONS[language].actionAssign || 'Assign'}</Text>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity style={[styles.editActionBtn, styles.editActionDanger]} onPress={handleRemoveMaster}>
+                                                <Text style={styles.editActionText}>{TRANSLATIONS[language].actionUnassign || 'Remove Master'}</Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                    )}
 
-                                    <TouchableOpacity style={styles.saveEditBtn} onPress={handleSaveEdit} disabled={actionLoading}>
+
+                                    <TouchableOpacity
+                                        style={[styles.saveEditBtn, actionLoading && styles.pointerEventsNone]}
+                                        onPress={actionLoading ? undefined : handleSaveEdit}
+                                    >
                                         {actionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveEditText}>{TRANSLATIONS[language].btnSaveChanges}</Text>}
                                     </TouchableOpacity>
                                 </View>
                             ) : (
-                                <>
+                                <View style={styles.drawerSections}>
                                     {/* Client */}
                                     <View style={styles.drawerSection}>
                                         <Text style={styles.drawerSectionTitle}>{TRANSLATIONS[language].sectionClient}</Text>
@@ -2197,11 +1775,9 @@ export default function DispatcherDashboard({ navigation, route }) {
                                             <View style={[styles.drawerCard, !isDark && styles.drawerCardLight]}>
                                                 <View style={styles.masterHeaderRow}>
                                                     <Text style={[styles.drawerCardTitle, !isDark && styles.textDark]}>{detailsOrder.master.full_name}</Text>
-                                                    <View style={[styles.masterBalanceBadge, detailsOrder.master.balance < 0 && styles.masterDebtBadge]}>
-                                                        <Text style={[styles.masterBalanceText, detailsOrder.master.balance < 0 && styles.masterDebtText]}>
-                                                            {detailsOrder.master.balance >= 0 ? `${detailsOrder.master.balance}c` : `${TRANSLATIONS[language].debtPrefix}${Math.abs(detailsOrder.master.balance)}c`}
-                                                        </Text>
-                                                    </View>
+                                                    <TouchableOpacity style={styles.masterDetailsBtn} onPress={() => openMasterDetails(detailsOrder.master)}>
+                                                        <Text style={styles.masterDetailsBtnText}>{TRANSLATIONS[language].btnDetails || 'Details'}</Text>
+                                                    </TouchableOpacity>
                                                 </View>
                                                 <View style={styles.drawerRow}>
                                                     <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>{detailsOrder.master.phone}</Text>
@@ -2223,7 +1799,9 @@ export default function DispatcherDashboard({ navigation, route }) {
                                         <Text style={styles.drawerSectionTitle}>{TRANSLATIONS[language].sectionFinancials}</Text>
                                         <View style={styles.finRow}>
                                             <Text style={styles.finLabel}>{TRANSLATIONS[language].labelCallout}</Text>
-                                            <Text style={[styles.finValue, !isDark && styles.textDark]}>{detailsOrder.guaranteed_payout || '-'}c</Text>
+                                            <Text style={[styles.finValue, !isDark && styles.textDark]}>
+                                                {calloutValue ?? '-'}{calloutValue !== null && calloutValue !== undefined ? 'c' : ''}
+                                            </Text>
                                         </View>
                                         <View style={styles.finRow}>
                                             <Text style={styles.finLabel}>{detailsOrder.final_price ? TRANSLATIONS[language].labelFinal : TRANSLATIONS[language].labelInitial}</Text>
@@ -2245,16 +1823,25 @@ export default function DispatcherDashboard({ navigation, route }) {
                                             <Text style={styles.reopenText}>↻ {TRANSLATIONS[language].actionReopen}</Text>
                                         </TouchableOpacity>
                                     )}
-                                    {['placed', 'reopened', 'expired', 'canceled_by_master', 'canceled_by_client'].includes(detailsOrder.status) && (
+                                    {['placed', 'reopened', 'expired', 'canceled_by_master'].includes(detailsOrder.status) && (
                                         <TouchableOpacity style={styles.cancelBtn} onPress={() => { handleCancel(detailsOrder.id); setDetailsOrder(null); }}>
                                             <Text style={styles.cancelText}>{TRANSLATIONS[language].alertCancelTitle}</Text>
                                         </TouchableOpacity>
                                     )}
-                                </>
+                                </View>
                             )}
                         </ScrollView>
-                    </View>
                 </View>
+            </View>
+        );
+
+        if (Platform.OS === 'web') {
+            return <View style={styles.drawerOverlayWeb}>{drawerBody}</View>;
+        }
+
+        return (
+            <Modal visible={!!detailsOrder} transparent animationType="none">
+                {drawerBody}
             </Modal>
         );
     };
@@ -2283,7 +1870,10 @@ export default function DispatcherDashboard({ navigation, route }) {
                         <TouchableOpacity style={styles.modalCancel} onPress={() => { setShowPaymentModal(false); setPaymentOrder(null); }}>
                             <Text style={styles.modalCancelText}>{TRANSLATIONS[language].cancel}</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.modalConfirm} onPress={handleConfirmPayment} disabled={actionLoading}>
+                        <TouchableOpacity
+                            style={[styles.modalConfirm, actionLoading && styles.pointerEventsNone]}
+                            onPress={actionLoading ? undefined : handleConfirmPayment}
+                        >
                             {actionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.modalConfirmText}>{TRANSLATIONS[language].createConfirm}</Text>}
                         </TouchableOpacity>
                     </View>
@@ -2299,17 +1889,74 @@ export default function DispatcherDashboard({ navigation, route }) {
                 <View style={styles.modalContent}>
                     <Text style={styles.modalTitle}>{TRANSLATIONS[language].titleSelectMaster}</Text>
                     <ScrollView style={styles.mastersList}>
-                        {masters.map(m => (
-                            <TouchableOpacity key={m.id} style={styles.masterItem} onPress={() => handleAssignMaster(m)}>
-                                <Text style={styles.masterName}>{m.full_name}</Text>
-                                <Text style={styles.masterInfo}>{TRANSLATIONS[language].labelRating}: {m.rating} • {m.active_jobs}/{m.max_active_jobs} {TRANSLATIONS[language].labelJobs}</Text>
-                            </TouchableOpacity>
-                        ))}
+                        {masters.map(m => {
+                            const maxJobs = Number.isFinite(Number(m.max_active_jobs)) ? Number(m.max_active_jobs) : null;
+                            const activeJobs = Number.isFinite(Number(m.active_jobs)) ? Number(m.active_jobs) : 0;
+                            const atLimit = maxJobs !== null && activeJobs >= maxJobs;
+                            return (
+                                <TouchableOpacity
+                                    key={m.id}
+                                    style={[styles.masterItem, atLimit && styles.masterItemDisabled]}
+                                    onPress={() => handleAssignMaster(m)}
+                                    disabled={atLimit}
+                                >
+                                    <View style={styles.masterItemHeader}>
+                                        <Text style={[styles.masterName, atLimit && styles.masterNameDisabled]}>{m.full_name}</Text>
+                                        {atLimit && <Text style={styles.masterLimitBadge}>{TRANSLATIONS[language].labelLimitReached || 'Limit reached'}</Text>}
+                                    </View>
+                                    <Text style={[styles.masterInfo, atLimit && styles.masterInfoDisabled]}>
+                                        {TRANSLATIONS[language].labelRating}: {m.rating} • {activeJobs}/{maxJobs ?? '-'} {TRANSLATIONS[language].labelJobs}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
                         {masters.length === 0 && <Text style={styles.noMasters}>{TRANSLATIONS[language].noMasters}</Text>}
                     </ScrollView>
                     <TouchableOpacity style={styles.modalCancel} onPress={() => { setShowAssignModal(false); setAssignTarget(null); }}>
                         <Text style={styles.modalCancelText}>{TRANSLATIONS[language].cancel}</Text>
                     </TouchableOpacity>
+                </View>
+            </View>
+        </Modal>
+    );
+
+    const renderMasterDetailsModal = () => (
+        <Modal visible={showMasterDetails} transparent animationType="fade">
+            <View style={styles.modalOverlay}>
+                <View style={styles.masterDetailsCard}>
+                    <View style={styles.masterDetailsHeader}>
+                        <Text style={styles.modalTitle}>{TRANSLATIONS[language].titleMasterDetails || 'Master Details'}</Text>
+                        <TouchableOpacity onPress={closeMasterDetails}>
+                            <Text style={styles.modalCancelText}>✕</Text>
+                        </TouchableOpacity>
+                    </View>
+                    {masterDetailsLoading ? (
+                        <ActivityIndicator color="#fff" />
+                    ) : (
+                        <View>
+                            <Text style={styles.masterDetailsName}>
+                                {masterDetails?.summary?.fullName || masterDetails?.profile?.full_name || '—'}
+                            </Text>
+                            <Text style={styles.masterDetailsSub}>
+                                {masterDetails?.summary?.phone || masterDetails?.profile?.phone || '—'}
+                            </Text>
+                            <View style={styles.masterDetailsRow}>
+                                <Text style={styles.masterDetailsLabel}>{TRANSLATIONS[language].prepaidBalance || 'Balance'}</Text>
+                                <Text style={styles.masterDetailsValue}>{masterDetails?.summary?.prepaidBalance ?? 0}c</Text>
+                            </View>
+                            <View style={styles.masterDetailsRow}>
+                                <Text style={styles.masterDetailsLabel}>{TRANSLATIONS[language].labelRating || 'Rating'}</Text>
+                                <Text style={styles.masterDetailsValue}>{masterDetails?.summary?.rating ?? 0}</Text>
+                            </View>
+                            <View style={styles.masterDetailsRow}>
+                                <Text style={styles.masterDetailsLabel}>{TRANSLATIONS[language].labelJobs || 'Jobs'}</Text>
+                                <Text style={styles.masterDetailsValue}>{masterDetails?.summary?.completedJobs ?? 0}</Text>
+                            </View>
+                            {masterDetails?.summary?.balanceBlocked && (
+                                <Text style={styles.masterDetailsBlocked}>{TRANSLATIONS[language].balanceBlocked || 'Balance Blocked'}</Text>
+                            )}
+                        </View>
+                    )}
                 </View>
             </View>
         </Modal>
@@ -2336,6 +1983,7 @@ export default function DispatcherDashboard({ navigation, route }) {
             {renderDetailsDrawer()}
             {renderPaymentModal()}
             {renderAssignModal()}
+            {renderMasterDetailsModal()}
             {renderPickerModal()}
         </LinearGradient>
     );
@@ -2445,6 +2093,8 @@ const styles = StyleSheet.create({
     cardFooter: { flexDirection: 'row', justifyContent: 'space-between' },
     cardClient: { fontSize: 11, color: '#64748b' },
     cardTime: { fontSize: 10, color: '#64748b' },
+    cardAssignBtn: { backgroundColor: 'rgba(59,130,246,0.2)', borderRadius: 8, paddingVertical: 6, alignItems: 'center', marginTop: 8 },
+    cardAssignText: { fontSize: 12, fontWeight: '700', color: '#60a5fa' },
     cardPayBtn: { backgroundColor: '#22c55e', borderRadius: 8, paddingVertical: 8, alignItems: 'center', marginTop: 8 },
     cardPayText: { fontSize: 12, fontWeight: '700', color: '#fff' },
 
@@ -2504,14 +2154,17 @@ const styles = StyleSheet.create({
 
     // Drawer
     drawerOverlay: { flex: 1, flexDirection: 'row', justifyContent: 'flex-end' },
+    drawerOverlayWeb: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 500 },
     drawerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
-    drawerContent: { width: SCREEN_WIDTH > 500 ? 400 : SCREEN_WIDTH * 0.85, backgroundColor: '#1e293b', height: '100%' },
+    drawerBackdropHidden: { flex: 0, width: 0 },
+    drawerContent: { width: SCREEN_WIDTH > 500 ? 400 : SCREEN_WIDTH * 0.85, maxWidth: '100%', backgroundColor: '#1e293b', height: '100%' },
     drawerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(71,85,105,0.3)' },
     drawerTitle: { fontSize: 16, fontWeight: '700', color: '#fff' },
     drawerDate: { fontSize: 11, color: '#64748b' },
     drawerActions: { flexDirection: 'row', gap: 12 },
     drawerActionText: { fontSize: 18, color: '#94a3b8' },
     drawerBody: { flex: 1, padding: 16 },
+    drawerSections: { flex: 1 },
     drawerSection: { marginBottom: 16 },
     drawerStatusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     drawerStatusBadge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
@@ -2554,9 +2207,31 @@ const styles = StyleSheet.create({
     modalConfirmText: { fontSize: 14, fontWeight: '700', color: '#fff' },
     mastersList: { maxHeight: 300, marginBottom: 16 },
     masterItem: { backgroundColor: 'rgba(71,85,105,0.3)', borderRadius: 10, padding: 12, marginBottom: 8 },
+    masterItemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    masterItemDisabled: { opacity: 0.5 },
     masterName: { fontSize: 14, fontWeight: '700', color: '#fff' },
+    masterNameDisabled: { color: '#94a3b8' },
     masterInfo: { fontSize: 12, color: '#94a3b8', marginTop: 2 },
+    masterInfoDisabled: { color: '#64748b' },
+    masterLimitBadge: { fontSize: 10, fontWeight: '700', color: '#ef4444' },
     noMasters: { fontSize: 14, color: '#64748b', textAlign: 'center', paddingVertical: 20 },
+
+    // Edit Actions
+    editActionRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
+    editActionBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
+    editActionPrimary: { backgroundColor: '#3b82f6' },
+    editActionDanger: { backgroundColor: '#ef4444' },
+    editActionText: { fontSize: 12, fontWeight: '700', color: '#fff' },
+
+    // Master Details Modal
+    masterDetailsCard: { backgroundColor: '#1e293b', borderRadius: 20, padding: 24 },
+    masterDetailsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+    masterDetailsName: { fontSize: 16, fontWeight: '700', color: '#fff', marginBottom: 4 },
+    masterDetailsSub: { fontSize: 12, color: '#94a3b8', marginBottom: 12 },
+    masterDetailsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+    masterDetailsLabel: { fontSize: 12, color: '#64748b' },
+    masterDetailsValue: { fontSize: 12, fontWeight: '700', color: '#fff' },
+    masterDetailsBlocked: { marginTop: 8, fontSize: 12, color: '#ef4444', fontWeight: '600' },
 
     // Sidebar
     sidebarOverlay: { flex: 1, flexDirection: 'row' },
@@ -2569,8 +2244,11 @@ const styles = StyleSheet.create({
     sidebarNav: { flex: 1, paddingVertical: 20, paddingHorizontal: 16 },
     sidebarNavItem: { paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, marginBottom: 4 },
     sidebarNavItemActive: { backgroundColor: '#3b82f6' },
+    sidebarNavRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     sidebarNavText: { fontSize: 14, fontWeight: '600', color: '#94a3b8' },
     sidebarNavTextActive: { color: '#fff' },
+    sidebarBadge: { backgroundColor: '#ef4444', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2, marginLeft: 8 },
+    sidebarBadgeText: { fontSize: 10, fontWeight: '700', color: '#fff' },
     sidebarFooter: { padding: 16, borderTopWidth: 1, borderTopColor: 'rgba(71,85,105,0.3)' },
     sidebarButtonRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
     sidebarSmallBtn: { flex: 1, height: 44, borderRadius: 10, backgroundColor: 'rgba(71,85,105,0.3)', justifyContent: 'center', alignItems: 'center' },
@@ -2639,9 +2317,12 @@ const styles = StyleSheet.create({
     compactClient: { fontSize: 11, color: '#94a3b8' },
     compactMaster: { fontSize: 11, color: '#22c55e' },
     compactPrice: { fontSize: 11, fontWeight: '700', color: '#22c55e' },
+    compactAssignBtn: { backgroundColor: 'rgba(59,130,246,0.2)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+    compactAssignText: { fontSize: 10, fontWeight: '700', color: '#60a5fa' },
 
     // Create Order Wrapper & Fixed Bottom Bar
     createWrapper: { flex: 1 },
+    createSections: { flex: 1 },
     createScrollContent: { paddingBottom: 20 },
     fixedBottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#1e293b', borderTopWidth: 1, borderTopColor: 'rgba(71,85,105,0.3)', padding: 12, paddingBottom: Platform.OS === 'ios' ? 28 : 12 },
     bottomBarButtons: { flexDirection: 'row', gap: 12 },
@@ -2649,6 +2330,7 @@ const styles = StyleSheet.create({
     bottomClearBtnText: { fontSize: 14, fontWeight: '600', color: '#94a3b8' },
     bottomPublishBtn: { flex: 1, paddingVertical: 14, borderRadius: 10, backgroundColor: '#3b82f6', alignItems: 'center' },
     bottomPublishBtnDisabled: { backgroundColor: '#475569', opacity: 0.7 },
+    pointerEventsNone: { pointerEvents: 'none' },
     bottomPublishBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
 
     // Pagination
@@ -2695,12 +2377,6 @@ const styles = StyleSheet.create({
     suggestionText: { color: '#fff', fontSize: 13 },
 
     // Inline Dropdown (for districts etc)
-    inlineDropdown: { position: 'absolute', top: 52, left: 0, right: 0, backgroundColor: '#1e293b', borderWidth: 1, borderColor: 'rgba(71,85,105,0.5)', borderRadius: 8, zIndex: 1000, elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
-    dropdownItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(71,85,105,0.3)' },
-    dropdownItemActive: { backgroundColor: 'rgba(59,130,246,0.2)' },
-    dropdownItemText: { color: '#fff', fontSize: 14 },
-    dropdownItemTextActive: { color: '#3b82f6', fontWeight: '600' },
-    regionBadge: { fontSize: 10, color: '#94a3b8', backgroundColor: 'rgba(100,116,139,0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
 
 
     // Needs Attention Header
@@ -2744,12 +2420,10 @@ const styles = StyleSheet.create({
     recentAddrBtn: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: 'rgba(59,130,246,0.2)', borderRadius: 8 },
     recentAddrBtnText: { fontSize: 11, color: '#3b82f6', fontWeight: '600' },
 
-    // Master Balance Badge
+    // Master Header
     masterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-    masterBalanceBadge: { paddingHorizontal: 10, paddingVertical: 4, backgroundColor: 'rgba(34,197,94,0.2)', borderRadius: 8 },
-    masterBalanceText: { fontSize: 11, fontWeight: '700', color: '#22c55e' },
-    masterDebtBadge: { backgroundColor: 'rgba(239,68,68,0.2)' },
-    masterDebtText: { color: '#ef4444' },
+    masterDetailsBtn: { paddingHorizontal: 10, paddingVertical: 4, backgroundColor: 'rgba(59,130,246,0.2)', borderRadius: 8 },
+    masterDetailsBtnText: { fontSize: 11, fontWeight: '700', color: '#3b82f6' },
 
     // Pricing Type Selector
     pricingTypeRow: { flexDirection: 'row', backgroundColor: 'rgba(71,85,105,0.2)', borderRadius: 12, padding: 4, marginBottom: 16 },

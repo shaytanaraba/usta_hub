@@ -579,6 +579,9 @@ npx expo start --clear
 - **New Fields**:
   - **Districts**: Added localized district dropdown (fetched from `districts` table).
   - **Orientir**: Added "Landmark" field with proper display logic (removed emojis).
+  - **Fees**: Enabled editing of callout fees and ensured values are correctly persisted.
+- **Validation**:
+  - **Phone Input**: Implemented auto-normalization of phone numbers to the `+996` format to maintain database consistency.
 
 ### Database Updates
 - **RPC Functions**: Added `update_order_inline` security definer function to allow dispatchers to safely update specific order fields.
@@ -598,4 +601,5 @@ npx expo start --clear
 - **Districts**: Fully integrated `districts` table with localized names. Added `orientir` (landmark) field to orders for precise location sharing.
 - **Client Data**: Fixed persistence of `client_name` and `client_phone` during order creation, ensuring dispatcher-entered data is correctly stored and displayed.
 - **Job Limits**: Verified enforcement of `max_active_jobs` via the `check_master_can_claim` RPC function, preventing masters from exceeding their assigned workload.
+- **Dynamic Fees**: Updated Dispatcher Dashboard to fetch the default callout fee from `platform_settings` (via `default_guaranteed_payout`) instead of using a hardcoded or empty value.
 - **Cleanup**: Resolved database inconsistencies related to manual order deletions, ensuring master balances are accurately recalculated from transaction history.

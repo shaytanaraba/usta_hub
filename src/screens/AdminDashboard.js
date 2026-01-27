@@ -41,19 +41,20 @@ import { DateRangeFilter } from '../components/filters/DateRangeFilter';
 import { Pagination } from '../components/ui/Pagination';
 import { OrdersByService } from '../components/ui/OrdersByService';
 import { StatusChart, CommissionWidget } from '../components/ui/DashboardCharts';
+import { STATUS_COLORS, getOrderStatusLabel, getServiceLabel, getTimeAgo } from '../utils/orderHelpers';
+import { normalizeKyrgyzPhone, isValidKyrgyzPhone } from '../utils/phone';
 
 const LOG_PREFIX = '[AdminDashboard]';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
-
-
-// --- Ported from DispatcherDashboard ---
-const STATUS_COLORS = {
-    placed: '#3b82f6', claimed: '#f59e0b', started: '#8b5cf6',
-    completed: '#f97316', confirmed: '#22c55e',
-    canceled_by_master: '#ef4444', canceled_by_client: '#ef4444', reopened: '#3b82f6',
-    expired: '#6b7280',
+const sanitizeNumberInput = (value) => {
+    if (value === null || value === undefined) return '';
+    const cleaned = String(value).replace(/[^0-9.]/g, '');
+    const parts = cleaned.split('.');
+    return parts.length <= 1 ? cleaned : `${parts[0]}.${parts.slice(1).join('')}`;
 };
+
+
 
 // Urgency filter options
 const URGENCY_OPTIONS = [
@@ -88,66 +89,14 @@ const SERVICE_TYPES = [
 const INITIAL_ORDER_STATE = {
     clientName: '', clientPhone: '', pricingType: 'unknown', initialPrice: '', calloutFee: '',
     serviceType: 'repair', urgency: 'planned', problemDescription: '',
-    area: '', fullAddress: '', preferredDate: '', preferredTime: '', dispatcherNote: '',
+    area: '', fullAddress: '', orientir: '', preferredDate: '', preferredTime: '', dispatcherNote: '',
 };
 // ----------------------------------------
 
-// --- Helpers Ported from DispatcherDashboard ---
-const getTimeAgo = (date, lang) => {
-    if (!date) return '';
-    const now = new Date();
-    const past = new Date(date);
-    const diffMs = now - past;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHours / 24);
-
-    if (diffMins < 1) return lang === 'ru' ? 'Только что' : 'Just now';
-    if (diffMins < 60) return `${diffMins} ${lang === 'ru' ? 'мин' : 'm'} ago`;
-    if (diffHours < 24) return `${diffHours} ${lang === 'ru' ? 'ч' : 'h'} ago`;
-    return `${diffDays} ${lang === 'ru' ? 'д' : 'd'} ago`;
-};
-
-const getServiceLabel = (type, lang) => {
-    if (!type) return 'Unknown';
-    // Simplified mapping
-    const labels = {
-        plumbing: { en: 'Plumbing', ru: 'Сантехника' },
-        electrician: { en: 'Electrician', ru: 'Электрика' },
-        cleaning: { en: 'Cleaning', ru: 'Уборка' },
-        carpenter: { en: 'Carpenter', ru: 'Плотник' },
-        repair: { en: 'Repair', ru: 'Ремонт' },
-        installation: { en: 'Installation', ru: 'Установка' },
-        maintenance: { en: 'Maintenance', ru: 'Обслуживание' },
-        other: { en: 'Other', ru: 'Другое' }
-    };
-    return labels[type]?.[lang] || labels[type]?.['en'] || type;
-};
-
-const getOrderStatusLabel = (status, lang, translations) => {
-    if (!status) return '';
-    // Use translation keys if available
-    const statusTranslationMap = {
-        'placed': translations?.statusPlaced,
-        'claimed': translations?.statusClaimed,
-        'started': translations?.statusStarted,
-        'completed': translations?.statusCompleted,
-        'confirmed': translations?.statusConfirmed,
-        'canceled_by_master': translations?.statusCanceledByMaster,
-        'canceled_by_client': translations?.statusCanceledByClient,
-        'reopened': translations?.statusReopened,
-        'expired': translations?.statusExpired,
-    };
-    const translated = statusTranslationMap[status];
-    if (translated) return translated.toUpperCase();
-    // Fallback to formatted status
-    return status.replace(/_/g, ' ').toUpperCase();
-};
-// -----------------------------------------------
 
 export default function AdminDashboard({ navigation }) {
     const { showToast } = useToast();
-    const { translations, language, setLanguage } = useLocalization();
+    const { translations, language, setLanguage, t } = useLocalization();
     const TRANSLATIONS = translations[language] || translations['en'] || {};
 
     // UI State
@@ -162,7 +111,6 @@ export default function AdminDashboard({ navigation }) {
     const [orders, setOrders] = useState([]);
     const [masters, setMasters] = useState([]);
     const [dispatchers, setDispatchers] = useState([]);
-    const [mastersWithDebt, setMastersWithDebt] = useState([]);
     const [settings, setSettings] = useState({});
     const [tempSettings, setTempSettings] = useState({});
     const [user, setUser] = useState(null);
@@ -176,8 +124,6 @@ export default function AdminDashboard({ navigation }) {
 
     // Modals
     const [selectedMaster, setSelectedMaster] = useState(null);
-    const [showPaymentModal, setShowPaymentModal] = useState(false);
-    const [paymentData, setPaymentData] = useState({ amount: '', method: 'cash', reference: '' });
 
     // Sidebar State (hamburger menu)
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -197,6 +143,7 @@ export default function AdminDashboard({ navigation }) {
 
     const [pickerModal, setPickerModal] = useState({ visible: false, options: [], value: '', onChange: null, title: '' });
     const [serviceTypes, setServiceTypes] = useState([]);
+    const [districts, setDistricts] = useState([]);
     const [serviceTypeModal, setServiceTypeModal] = useState({ visible: false, type: null });
     const [tempServiceType, setTempServiceType] = useState({});
 
@@ -208,8 +155,8 @@ export default function AdminDashboard({ navigation }) {
         { id: 'claimed', label: TRANSLATIONS.statusClaimed || 'Claimed' },
         { id: 'started', label: TRANSLATIONS.statusStarted || 'Started' },
         { id: 'completed', label: TRANSLATIONS.statusCompleted || 'Completed' },
-        { id: 'canceled_by_client', label: TRANSLATIONS.statusCanceledClient || 'Canceled (Client)' },
-        { id: 'canceled_by_master', label: TRANSLATIONS.statusCanceledMaster || 'Canceled (Master)' },
+        { id: 'canceled_by_client', label: TRANSLATIONS.statusCanceledByClient || 'Canceled (Client)' },
+        { id: 'canceled_by_master', label: TRANSLATIONS.statusCanceledByMaster || 'Canceled (Master)' },
     ];
 
     const getServiceFilterOptions = () => [
@@ -217,9 +164,29 @@ export default function AdminDashboard({ navigation }) {
         ...serviceTypes.map(st => ({ id: st.id, label: st[`name_${language}`] || st.name_en || st.id }))
     ];
 
+    const openDistrictPicker = () => {
+        setPickerModal({
+            visible: true,
+            title: TRANSLATIONS.createDistrict || 'District',
+            value: newOrder.area,
+            options: districts.map(d => ({ id: d.id, label: d.label })),
+            onChange: (val) => setNewOrder(prev => ({ ...prev, area: val }))
+        });
+    };
+
+    const openEditDistrictPicker = () => {
+        setPickerModal({
+            visible: true,
+            title: TRANSLATIONS.createDistrict || 'District',
+            value: editForm.area,
+            options: districts.map(d => ({ id: d.id, label: d.label })),
+            onChange: (val) => setEditForm(prev => ({ ...prev, area: val }))
+        });
+    };
+
     useEffect(() => {
         if (serviceTypeModal.visible) {
-            setTempServiceType(serviceTypeModal.type ? { ...serviceTypeModal.type } : { is_active: true, sort_order: 99, icon: '🔧' });
+            setTempServiceType(serviceTypeModal.type ? { ...serviceTypeModal.type } : { is_active: true, sort_order: 99 });
         }
     }, [serviceTypeModal]);
 
@@ -270,6 +237,11 @@ export default function AdminDashboard({ navigation }) {
         loadAllData();
     }, []);
 
+    useEffect(() => {
+        loadServiceTypes();
+        loadDistricts();
+    }, [language]);
+
     // Reload Stats on Filter Change (without full loading screen)
     useEffect(() => {
         // Skip the initial render (handled by loadAllData)
@@ -280,6 +252,12 @@ export default function AdminDashboard({ navigation }) {
             ]);
         }
     }, [dashboardFilter]);
+
+    useEffect(() => {
+        if (settings?.default_guaranteed_payout && !newOrder.calloutFee) {
+            setNewOrder(prev => ({ ...prev, calloutFee: String(settings.default_guaranteed_payout) }));
+        }
+    }, [settings]);
 
     const loadAllData = async (skipLoadingScreen = false) => {
         if (!skipLoadingScreen) setLoading(true);
@@ -298,6 +276,7 @@ export default function AdminDashboard({ navigation }) {
             loadDispatchers(), // Load dispatchers if available
             loadSettings(),
             loadServiceTypes(),
+            loadDistricts(),
         ]);
         setLoading(false);
     };
@@ -315,11 +294,8 @@ export default function AdminDashboard({ navigation }) {
         try {
             const data = await earningsService.getCommissionStats(dashboardFilter);
             setCommissionStats(data || {});
-            // Safe array check to prevent crash
-            setMastersWithDebt(Array.isArray(data?.mastersWithDebt) ? data.mastersWithDebt : []);
         } catch (e) {
             console.error('Commission error', e);
-            setMastersWithDebt([]);
         }
     };
 
@@ -359,6 +335,20 @@ export default function AdminDashboard({ navigation }) {
         } catch (e) { console.error(e); }
     };
 
+    const loadDistricts = async () => {
+        try {
+            const data = await ordersService.getDistricts();
+            if (data && data.length > 0) {
+                const labelField = language === 'ru' ? 'name_ru' : language === 'kg' ? 'name_kg' : 'name_en';
+                setDistricts(data.map(d => ({
+                    id: d.code,
+                    label: d[labelField] || d.name_en,
+                    region: d.region
+                })));
+            }
+        } catch (e) { console.error(e); }
+    };
+
     const onRefresh = useCallback(async () => {
         setRefreshing(true);
         await loadAllData(true); // Skip loading screen for smooth refresh
@@ -371,40 +361,21 @@ export default function AdminDashboard({ navigation }) {
         navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
     };
 
-    const handleRecordPayment = async () => {
-        setActionLoading(true);
-        try {
-            await earningsService.recordCommissionPayment({
-                masterId: selectedMaster.id,
-                amount: parseFloat(paymentData.amount),
-                method: paymentData.method,
-                reference: paymentData.reference
-            });
-            showToast('Payment recorded!', 'success');
-            setShowPaymentModal(false);
-            setPaymentData({ amount: '', method: 'cash', reference: '' });
-            loadCommissionData();
-        } catch (error) {
-            showToast('Failed to record payment', 'error');
-        } finally {
-            setActionLoading(false);
-        }
-    };
-
     const handleSaveServiceType = async (typeData) => {
         setActionLoading(true);
         try {
-            if (typeData.id) {
-                await ordersService.updateServiceType(typeData.id, typeData);
-                showToast('Service type updated', 'success');
+            const { icon, ...payload } = typeData || {};
+            if (payload.id) {
+                await ordersService.updateServiceType(payload.id, payload);
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
             } else {
-                await ordersService.addServiceType(typeData);
-                showToast('Service type added', 'success');
+                await ordersService.addServiceType(payload);
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
             }
             setServiceTypeModal({ visible: false, type: null });
             loadServiceTypes();
         } catch (e) {
-            showToast('Error saving service type', 'error');
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
         } finally {
             setActionLoading(false);
         }
@@ -420,7 +391,7 @@ export default function AdminDashboard({ navigation }) {
                     try {
                         await ordersService.deleteServiceType(id);
                         loadServiceTypes();
-                    } catch (e) { showToast('Error deleting', 'error'); }
+                    } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
                 }
             }
         ]);
@@ -428,12 +399,27 @@ export default function AdminDashboard({ navigation }) {
 
     // --- Ported Actions ---
     const handleCreateOrder = async () => {
-        if (!confirmChecked) { showToast?.('Please confirm details', 'error'); return; }
+        if (!confirmChecked) { showToast?.(TRANSLATIONS.toastConfirmDetails || 'Please confirm details', 'error'); return; }
         if (!newOrder.clientName?.trim()) {
-            showToast?.('Client name is required', 'error'); return;
+            showToast?.(TRANSLATIONS.toastClientNameRequired || 'Client name is required', 'error'); return;
         }
         if (!newOrder.clientPhone || !newOrder.problemDescription || !newOrder.area || !newOrder.fullAddress) {
-            showToast?.('Please fill required fields', 'error'); return;
+            showToast?.(TRANSLATIONS.toastFillRequired || 'Please fill required fields', 'error'); return;
+        }
+        if (phoneError) { showToast?.(TRANSLATIONS.toastFixPhone || 'Fix phone format', 'error'); return; }
+
+        const parsedCallout = newOrder.calloutFee !== '' && newOrder.calloutFee !== null && newOrder.calloutFee !== undefined
+            ? parseFloat(newOrder.calloutFee)
+            : null;
+        const calloutValue = !isNaN(parsedCallout) ? parsedCallout : null;
+        const parsedInitial = newOrder.initialPrice !== '' && newOrder.initialPrice !== null && newOrder.initialPrice !== undefined
+            ? parseFloat(newOrder.initialPrice)
+            : null;
+        const initialValue = !isNaN(parsedInitial) ? parsedInitial : null;
+
+        if (calloutValue !== null && initialValue !== null && initialValue < calloutValue) {
+            showToast?.(TRANSLATIONS.errorInitialBelowCallout || 'Initial price cannot be lower than call-out fee', 'error');
+            return;
         }
 
         setActionLoading(true);
@@ -442,50 +428,97 @@ export default function AdminDashboard({ navigation }) {
             const result = await ordersService.createOrderExtended({
                 clientName: newOrder.clientName,
                 clientPhone: newOrder.clientPhone,
-                pricingType: newOrder.pricingType,
-                initialPrice: parseFloat(newOrder.initialPrice) || null,
-                calloutFee: parseFloat(newOrder.calloutFee) || null,
+                pricingType: newOrder.pricingType === 'fixed' ? 'fixed' : 'unknown',
+                initialPrice: newOrder.pricingType === 'fixed' ? (parseFloat(newOrder.initialPrice) || null) : null,
+                calloutFee: calloutValue,
                 serviceType: newOrder.serviceType,
                 urgency: newOrder.urgency,
                 problemDescription: newOrder.problemDescription,
                 area: newOrder.area,
                 fullAddress: newOrder.fullAddress,
+                orientir: newOrder.orientir || null,
                 preferredDate: newOrder.preferredDate ? newOrder.preferredDate.split('.').reverse().join('-') : null,
                 preferredTime: newOrder.preferredTime || null,
                 dispatcherNote: newOrder.dispatcherNote,
             }, user?.id);
 
             if (result.success) {
-                showToast('Order created!', 'success');
+                showToast(TRANSLATIONS.toastOrderCreated || 'Order created!', 'success');
                 setCreationSuccess({ id: result.orderId });
                 setConfirmChecked(false);
                 loadOrders(); // Refresh list
             } else {
-                showToast(result.message, 'error');
+                showToast(TRANSLATIONS.toastCreateFailed || 'Create failed', 'error');
             }
         } catch (error) {
-            showToast('Create failed', 'error');
+            showToast(TRANSLATIONS.toastCreateFailed || 'Create failed', 'error');
         } finally {
             setActionLoading(false);
+        }
+    };
+
+    const handlePhoneBlur = () => {
+        const normalized = normalizeKyrgyzPhone(newOrder.clientPhone);
+        const nextValue = normalized || newOrder.clientPhone;
+        setNewOrder(prev => ({ ...prev, clientPhone: nextValue }));
+        setPhoneError(nextValue && !isValidKyrgyzPhone(nextValue) ? (TRANSLATIONS.errorPhoneFormat || 'Invalid phone format') : '');
+    };
+
+    const handlePastePhone = async () => {
+        try {
+            let text = '';
+            if (Platform.OS === 'web' && navigator?.clipboard) {
+                text = await navigator.clipboard.readText();
+            } else {
+                text = await Clipboard.getString();
+            }
+            if (text) {
+                const normalized = normalizeKyrgyzPhone(text);
+                const nextValue = normalized || text;
+                setNewOrder(prev => ({ ...prev, clientPhone: nextValue }));
+                showToast?.(TRANSLATIONS.toastPasted || 'Pasted & formatted', 'success');
+                setPhoneError(nextValue && !isValidKyrgyzPhone(nextValue) ? (TRANSLATIONS.errorPhoneFormat || 'Invalid phone format') : '');
+            } else {
+                showToast?.(TRANSLATIONS.toastClipboardEmpty || 'Clipboard empty', 'info');
+            }
+        } catch (e) {
+            showToast?.(TRANSLATIONS.toastPasteFailed || 'Paste failed', 'error');
         }
     };
 
     const handleSaveEdit = async () => {
         setActionLoading(true);
         try {
+            const parsedCallout = editForm.callout_fee !== '' && editForm.callout_fee !== null && editForm.callout_fee !== undefined
+                ? parseFloat(editForm.callout_fee)
+                : null;
+            const calloutValue = !isNaN(parsedCallout) ? parsedCallout : null;
+            const parsedInitial = editForm.initial_price !== '' && editForm.initial_price !== null && editForm.initial_price !== undefined
+                ? parseFloat(editForm.initial_price)
+                : null;
+            const initialValue = !isNaN(parsedInitial) ? parsedInitial : null;
+
+            if (calloutValue !== null && initialValue !== null && initialValue < calloutValue) {
+                showToast?.(TRANSLATIONS.errorInitialBelowCallout || 'Initial price cannot be lower than call-out fee', 'error');
+                setActionLoading(false);
+                return;
+            }
+
             const updates = {
                 problem_description: editForm.problem_description,
                 dispatcher_note: editForm.dispatcher_note,
                 full_address: editForm.full_address,
-                client: {
-                    full_name: editForm.client_name || detailsOrder.client?.full_name,
-                    phone: editForm.client_phone || detailsOrder.client?.phone
-                }
+                area: editForm.area,
+                orientir: editForm.orientir || null,
+                callout_fee: editForm.callout_fee,
+                initial_price: editForm.initial_price,
+                client_name: editForm.client_name || detailsOrder.client?.full_name,
+                client_phone: editForm.client_phone || detailsOrder.client?.phone
             };
 
             const result = await ordersService.updateOrderInline(detailsOrder.id, updates);
             if (result.success) {
-                showToast('Order updated', 'success');
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 setIsEditing(false);
                 loadOrders();
                 setDetailsOrder(prev => ({
@@ -493,8 +526,8 @@ export default function AdminDashboard({ navigation }) {
                     ...editForm,
                     client: { ...prev.client, full_name: editForm.client_name, phone: editForm.client_phone }
                 }));
-            } else { showToast('Update failed', 'error'); }
-        } catch (e) { showToast('Update error', 'error'); }
+            } else { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
+        } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
         finally { setActionLoading(false); }
     };
 
@@ -506,12 +539,12 @@ export default function AdminDashboard({ navigation }) {
                 : await authService.verifyMaster(masterId);
 
             if (res.success) {
-                showToast(isVerified ? 'Master unverified' : 'Master verified', 'success');
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 loadMasters();
             } else {
-                showToast(res.message, 'error');
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
-        } catch (e) { showToast('Action failed', 'error'); }
+        } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
         finally { setActionLoading(false); }
     };
 
@@ -520,12 +553,12 @@ export default function AdminDashboard({ navigation }) {
         try {
             const res = await authService.toggleDispatcherActive(dispatcherId, !isActive);
             if (res.success) {
-                showToast(res.message, 'success');
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 loadDispatchers();
             } else {
-                showToast(res.message, 'error');
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
-        } catch (e) { showToast('Action failed', 'error'); }
+        } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
         finally { setActionLoading(false); }
     };
 
@@ -540,13 +573,13 @@ export default function AdminDashboard({ navigation }) {
                     try {
                         const result = await ordersService.reopenOrderAdmin(orderId, 'Reopened by admin');
                         if (result.success) {
-                            showToast('Order reopened', 'success');
+                            showToast(TRANSLATIONS.filterStatusReopened || TRANSLATIONS.toastUpdated || 'Updated', 'success');
                             setDetailsOrder(null);
                             loadOrders();
                         } else {
-                            showToast(result.message, 'error');
+                            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
                         }
-                    } catch (e) { showToast('Reopen failed', 'error'); }
+                    } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
                     finally { setActionLoading(false); }
                 }
             }
@@ -564,13 +597,13 @@ export default function AdminDashboard({ navigation }) {
                     try {
                         const result = await ordersService.expireOldOrders();
                         if (result.success) {
-                            showToast(`${result.expiredCount} orders expired`, 'success');
+                            showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                             loadOrders();
                             loadStats();
                         } else {
-                            showToast(result.message, 'error');
+                            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
                         }
-                    } catch (e) { showToast('Expire failed', 'error'); }
+                    } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
                     finally { setActionLoading(false); }
                 }
             }
@@ -587,18 +620,49 @@ export default function AdminDashboard({ navigation }) {
                     try {
                         const result = await ordersService.forceAssignMasterAdmin(orderId, masterId, 'Admin assignment');
                         if (result.success) {
-                            showToast(`Assigned to ${result.masterName}`, 'success');
+                            showToast(TRANSLATIONS.toastMasterAssigned || 'Master assigned!', 'success');
                             setDetailsOrder(null);
                             setShowAssignModal(false);
                             loadOrders();
                         } else {
-                            showToast(result.message, 'error');
+                            showToast(TRANSLATIONS.toastAssignFail || 'Assignment failed', 'error');
                         }
-                    } catch (e) { showToast('Assign failed', 'error'); }
+                    } catch (e) { showToast(TRANSLATIONS.toastAssignFail || 'Assignment failed', 'error'); }
                     finally { setActionLoading(false); }
                 }
             }
         ]);
+    };
+
+    const handleUnassignMaster = async (orderId) => {
+        Alert.alert(
+            TRANSLATIONS.confirmUnassignTitle || 'Remove Master',
+            TRANSLATIONS.confirmUnassignMsg || 'Remove the assigned master and reopen this order?',
+            [
+                { text: TRANSLATIONS.cancel || 'Cancel' },
+                {
+                    text: TRANSLATIONS.remove || 'Remove',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setActionLoading(true);
+                        try {
+                            const result = await ordersService.unassignMasterAdmin(orderId, 'admin_unassign');
+                            if (result.success) {
+                                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
+                                setDetailsOrder(null);
+                                loadOrders();
+                            } else {
+                                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                            }
+                        } catch (e) {
+                            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                        } finally {
+                            setActionLoading(false);
+                        }
+                    }
+                }
+            ]
+        );
     };
 
     const handleVerifyPaymentProof = async (orderId, isValid) => {
@@ -606,13 +670,13 @@ export default function AdminDashboard({ navigation }) {
         try {
             const result = await ordersService.verifyPaymentProof(orderId, isValid, isValid ? 'Approved by admin' : 'Rejected by admin');
             if (result.success) {
-                showToast(result.message, 'success');
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 setDetailsOrder(null);
                 loadOrders();
             } else {
-                showToast(result.message, 'error');
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
-        } catch (e) { showToast('Verification failed', 'error'); }
+        } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
         finally { setActionLoading(false); }
     };
 
@@ -621,15 +685,15 @@ export default function AdminDashboard({ navigation }) {
         try {
             const result = await earningsService.addMasterBalance(masterId, parseFloat(amount), type, notes);
             if (result.success) {
-                showToast(result.message, 'success');
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 setShowBalanceModal(false);
                 setBalanceData({ amount: '', type: 'top_up', notes: '' });
                 loadMasters();
                 loadCommissionData();
             } else {
-                showToast(result.message, 'error');
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
-        } catch (e) { showToast('Balance update failed', 'error'); }
+        } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
         finally { setActionLoading(false); }
     };
 
@@ -638,13 +702,13 @@ export default function AdminDashboard({ navigation }) {
         try {
             const result = await authService.setMasterInitialDeposit(masterId, parseFloat(amount));
             if (result.success) {
-                showToast(result.message, 'success');
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 setShowDepositModal(false);
                 loadMasters();
             } else {
-                showToast(result.message, 'error');
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
-        } catch (e) { showToast('Deposit failed', 'error'); }
+        } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
         finally { setActionLoading(false); }
     };
     // ----------------------
@@ -667,17 +731,17 @@ export default function AdminDashboard({ navigation }) {
             const result = await authService.updateProfile(detailsPerson?.id, updates);
 
             if (result.success) {
-                showToast('Profile updated!', 'success');
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 setIsEditingPerson(false);
                 setDetailsPerson(null);
                 if (detailsPerson?.type === 'master') loadMasters();
                 else loadDispatchers();
             } else {
-                showToast(result.message || 'Update failed', 'error');
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
         } catch (e) {
             console.error('Profile update failed:', e);
-            showToast('Update failed', 'error');
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
         }
         finally { setActionLoading(false); }
     };
@@ -685,7 +749,7 @@ export default function AdminDashboard({ navigation }) {
     // Handle create new user (master/dispatcher)
     const handleCreateUser = async () => {
         if (!newUserData.email || !newUserData.password || !newUserData.full_name) {
-            showToast('Email, password, and name are required', 'error');
+            showToast(TRANSLATIONS.toastFillRequired || 'Please fill required fields', 'error');
             return;
         }
 
@@ -697,17 +761,17 @@ export default function AdminDashboard({ navigation }) {
             });
 
             if (result.success) {
-                showToast(result.message, 'success');
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 setShowAddUserModal(false);
                 setNewUserData({ email: '', password: '', full_name: '', phone: '', service_area: '', experience_years: '' });
                 if (addUserRole === 'master') loadMasters();
                 else loadDispatchers();
             } else {
-                showToast(result.message || 'Failed to create user', 'error');
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
         } catch (e) {
             console.error('Create user failed:', e);
-            showToast('Failed to create user', 'error');
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
         }
         finally { setActionLoading(false); }
     };
@@ -715,11 +779,11 @@ export default function AdminDashboard({ navigation }) {
     // Handle password reset for master/dispatcher
     const handleResetPassword = async () => {
         if (!newPassword || newPassword.length < 6) {
-            showToast('Password must be at least 6 characters', 'error');
+            showToast(TRANSLATIONS.minCharacters || 'Minimum 6 characters', 'error');
             return;
         }
         if (newPassword !== confirmPassword) {
-            showToast('Passwords do not match', 'error');
+            showToast(TRANSLATIONS.passwordsNotMatch || 'Passwords do not match', 'error');
             return;
         }
 
@@ -728,17 +792,17 @@ export default function AdminDashboard({ navigation }) {
             const result = await authService.resetUserPassword(passwordResetTarget?.id, newPassword);
 
             if (result.success) {
-                showToast(result.message, 'success');
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 setShowPasswordResetModal(false);
                 setPasswordResetTarget(null);
                 setNewPassword('');
                 setConfirmPassword('');
             } else {
-                showToast(result.message || 'Password reset failed', 'error');
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
         } catch (e) {
             console.error('Password reset failed:', e);
-            showToast('Password reset failed', 'error');
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
         }
         finally { setActionLoading(false); }
     };
@@ -789,7 +853,7 @@ export default function AdminDashboard({ navigation }) {
                     <View style={[styles.sidebarHeader, !isDark && styles.sidebarHeaderLight]}>
                         <Text style={[styles.sidebarTitle, !isDark && styles.textDark]}>{TRANSLATIONS.adminTitle || 'Admin Pro'}</Text>
                         <TouchableOpacity onPress={() => setIsSidebarOpen(false)} style={styles.sidebarClose}>
-                            <Text style={styles.sidebarCloseText}>✕</Text>
+                            <Text style={styles.sidebarCloseText}>X</Text>
                         </TouchableOpacity>
                     </View>
 
@@ -1099,16 +1163,16 @@ export default function AdminDashboard({ navigation }) {
                             >
                                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <View>
-                                        <Text style={styles.itemTitle}>{item.service_type || 'Service'}</Text>
+                                        <Text style={styles.itemTitle}>{getServiceLabel(item.service_type, t) || 'Service'}</Text>
                                         <Text style={styles.itemSubtitle}>{item.full_address}</Text>
                                     </View>
                                     <View style={[styles.statusBadge, { backgroundColor: STATUS_COLORS[item.status] || '#ccc' }]}>
-                                        <Text style={styles.statusText}>{item.status.toUpperCase()}</Text>
+                                        <Text style={styles.statusText}>{getOrderStatusLabel(item.status, t)}</Text>
                                     </View>
                                 </View>
                             </TouchableOpacity>
                         )}
-                        ListEmptyComponent={<Text style={{ color: '#64748b', textAlign: 'center' }}>No orders found.</Text>}
+                        ListEmptyComponent={<Text style={{ color: '#64748b', textAlign: 'center' }}>{TRANSLATIONS.emptyList || 'No orders found'}</Text>}
                     />
                 </View>
             </View>
@@ -1248,10 +1312,10 @@ export default function AdminDashboard({ navigation }) {
         // --- Needs Attention Orders ---
         const needsActionOrders = orders.filter(o =>
             o.is_disputed ||
-            o.status === 'completed' || // Awaiting payment
+            (o.status === 'completed' && o.payment_method === 'transfer' && o.payment_proof_url) ||
             (o.status?.includes('canceled')) ||
             (['claimed', 'started'].includes(o.status) &&
-                new Date() - new Date(o.updated_at) > 24 * 60 * 60 * 1000) // Stuck > 24h
+                new Date() - new Date(o.updated_at) > 24 * 60 * 60 * 1000)
         );
 
         // --- Needs Attention Section ---
@@ -1263,7 +1327,7 @@ export default function AdminDashboard({ navigation }) {
                 if (filterAttentionType === 'All') return true;
                 if (filterAttentionType === 'Stuck' && !o.is_disputed && o.status !== 'completed' && !o.status?.includes('canceled')) return true;
                 if (filterAttentionType === 'Disputed' && o.is_disputed) return true;
-                if (filterAttentionType === 'Payment' && o.status === 'completed') return true;
+                if (filterAttentionType === 'Payment' && o.status === 'completed' && o.payment_method === 'transfer' && o.payment_proof_url) return true;
                 if (filterAttentionType === 'Canceled' && o.status?.includes('canceled')) return true;
                 return false;
             });
@@ -1291,7 +1355,7 @@ export default function AdminDashboard({ navigation }) {
                     <View style={styles.attentionHeaderRow}>
                         <TouchableOpacity style={styles.attentionHeader} onPress={() => setShowNeedsAttention(!showNeedsAttention)}>
                             <Text style={[styles.attentionTitle, !isDark && { color: '#ef4444' }]}>! {TRANSLATIONS.needsAttention || 'Needs Attention'} ({needsActionOrders.length})</Text>
-                            <Text style={[styles.attentionChevron, !isDark && { color: '#64748b' }]}>{showNeedsAttention ? '▲' : '▼'}</Text>
+                            <Text style={[styles.attentionChevron, !isDark && { color: '#64748b' }]}>{showNeedsAttention ? '^' : 'v'}</Text>
                         </TouchableOpacity>
 
                         <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -1305,14 +1369,14 @@ export default function AdminDashboard({ navigation }) {
                                     onChange: setFilterAttentionType
                                 })}>
                                     <Text style={styles.miniFilterText}>{TRANSLATIONS[ATTENTION_FILTER_OPTIONS.find(o => o.id === filterAttentionType)?.label] || filterAttentionType}</Text>
-                                    <Text style={styles.miniFilterArrow}>▾</Text>
+                                    <Text style={styles.miniFilterArrow}>v</Text>
                                 </TouchableOpacity>
                             )}
 
                             {/* Sort Button */}
                             {showNeedsAttention && (
                                 <TouchableOpacity style={styles.cleanSortBtn} onPress={() => setSortOrder(prev => prev === 'newest' ? 'oldest' : 'newest')}>
-                                    <Text style={styles.cleanSortText}>{sortOrder === 'newest' ? (TRANSLATIONS.btnSortNewest || '↓ Newest') : (TRANSLATIONS.btnSortOldest || '↑ Oldest')}</Text>
+                                    <Text style={styles.cleanSortText}>{sortOrder === 'newest' ? (TRANSLATIONS.btnSortNewest || 'Newest') : (TRANSLATIONS.btnSortOldest || 'Oldest')}</Text>
                                 </TouchableOpacity>
                             )}
                         </View>
@@ -1323,11 +1387,12 @@ export default function AdminDashboard({ navigation }) {
                                 <TouchableOpacity key={o.id} style={[styles.attentionCard, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(o)}>
                                     <Text style={styles.attentionBadge}>
                                         {o.is_disputed ? (TRANSLATIONS.badgeDispute || 'Dispute') :
-                                            o.status === 'completed' ? (TRANSLATIONS.badgeUnpaid || 'Unpaid') :
+                                            (o.status === 'completed' && o.payment_method === 'transfer' && o.payment_proof_url)
+                                                ? (TRANSLATIONS.badgePaymentProof || TRANSLATIONS.badgeUnpaid || 'Payment Proof') :
                                                 o.status?.includes('canceled') ? (TRANSLATIONS.badgeCanceled || 'Canceled') :
                                                     (TRANSLATIONS.badgeStuck || 'Stuck')}
                                     </Text>
-                                    <Text style={[styles.attentionService, !isDark && styles.textDark]}>{getServiceLabel(o.service_type, language)}</Text>
+                                    <Text style={[styles.attentionService, !isDark && styles.textDark]}>{getServiceLabel(o.service_type, t)}</Text>
                                     <Text style={[styles.attentionAddr, !isDark && { color: '#64748b' }]} numberOfLines={1}>{o.full_address}</Text>
                                 </TouchableOpacity>
                             ))}
@@ -1341,27 +1406,21 @@ export default function AdminDashboard({ navigation }) {
         const renderCard = ({ item }) => (
             <TouchableOpacity style={[styles.orderCard, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(item)}>
                 <View style={styles.cardHeader}>
-                    <Text style={[styles.cardService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, language)}</Text>
+                    <Text style={[styles.cardService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, t)}</Text>
                     <View style={[styles.cardStatus, { backgroundColor: STATUS_COLORS[item.status] || '#64748b' }]}>
-                        <Text style={styles.cardStatusText}>{getOrderStatusLabel(item.status, language, TRANSLATIONS)}</Text>
+                        <Text style={styles.cardStatusText}>{getOrderStatusLabel(item.status, t)}</Text>
                     </View>
                 </View>
                 <Text style={[styles.cardAddr, !isDark && { color: '#64748b' }]} numberOfLines={2}>{item.full_address}</Text>
                 <View style={styles.cardFooter}>
                     <Text style={[styles.cardClient, !isDark && styles.textDark]}>{item.client?.full_name || 'N/A'}</Text>
-                    <Text style={styles.cardTime}>{getTimeAgo(item.created_at, language)}</Text>
+                    <Text style={styles.cardTime}>{getTimeAgo(item.created_at, t)}</Text>
                 </View>
                 {/* Urgency Badge */}
                 {item.urgency && item.urgency !== 'planned' && (
                     <View style={[styles.cardUrgencyBadge, item.urgency === 'emergency' && styles.cardUrgencyEmergency]}>
                         <Text style={styles.cardUrgencyText}>{TRANSLATIONS[`urgency${item.urgency.charAt(0).toUpperCase() + item.urgency.slice(1)}`] || item.urgency.toUpperCase()}</Text>
                     </View>
-                )}
-                {/* Pay Button for completed orders */}
-                {item.status === 'completed' && item.final_price && (
-                    <TouchableOpacity style={styles.cardPayBtn} onPress={(e) => { e.stopPropagation?.(); setDetailsOrder(item); setShowPaymentModal(true); }}>
-                        <Text style={styles.cardPayText}>{TRANSLATIONS.btnPay || 'Pay'} {item.final_price}c</Text>
-                    </TouchableOpacity>
                 )}
             </TouchableOpacity>
         );
@@ -1371,13 +1430,13 @@ export default function AdminDashboard({ navigation }) {
             <TouchableOpacity style={[styles.compactRow, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(item)}>
                 {/* Status indicator on LEFT */}
                 <View style={[styles.compactStatusBadge, { backgroundColor: STATUS_COLORS[item.status] || '#64748b' }]}>
-                    <Text style={styles.compactStatusText}>{getOrderStatusLabel(item.status, language, TRANSLATIONS)}</Text>
+                    <Text style={styles.compactStatusText}>{getOrderStatusLabel(item.status, t)}</Text>
                 </View>
                 {/* Main info */}
                 <View style={styles.compactMain}>
                     <View style={styles.compactTopRow}>
                         <Text style={[styles.compactId, !isDark && { color: '#64748b' }]}>#{item.id?.slice(-6)}</Text>
-                        <Text style={[styles.compactService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, language)}</Text>
+                        <Text style={[styles.compactService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, t)}</Text>
                         {item.urgency && item.urgency !== 'planned' && (
                             <Text style={[styles.compactUrgency, item.urgency === 'emergency' && styles.compactUrgencyEmergency]}>
                                 {TRANSLATIONS[`urgency${item.urgency.charAt(0).toUpperCase() + item.urgency.slice(1)}`] || item.urgency.toUpperCase()}
@@ -1387,13 +1446,13 @@ export default function AdminDashboard({ navigation }) {
                     <Text style={[styles.compactAddr, !isDark && { color: '#64748b' }]} numberOfLines={1}>{item.full_address}</Text>
                     <View style={styles.compactBottomRow}>
                         <Text style={[styles.compactClient, !isDark && styles.textDark]}>{item.client?.full_name || 'N/A'}</Text>
-                        {item.master && <Text style={styles.compactMaster}>→ {item.master.full_name}</Text>}
+                        {item.master && <Text style={styles.compactMaster}>-> {item.master.full_name}</Text>}
                         {item.final_price && <Text style={styles.compactPrice}>{item.final_price}c</Text>}
                     </View>
                 </View>
                 {/* Right side */}
                 <View style={styles.compactRight}>
-                    <Text style={styles.compactTime}>{getTimeAgo(item.created_at, language)}</Text>
+                    <Text style={styles.compactTime}>{getTimeAgo(item.created_at, t)}</Text>
                     <Text style={[styles.compactChevron, !isDark && { color: '#64748b' }]}>›</Text>
                 </View>
             </TouchableOpacity>
@@ -1686,11 +1745,11 @@ export default function AdminDashboard({ navigation }) {
                                                     claim_timeout_minutes: parseInt(tempSettings.claim_timeout_minutes) || 30,
                                                     order_expiry_hours: parseInt(tempSettings.order_expiry_hours) || 48
                                                 });
-                                                showToast('Settings saved', 'success');
+                                                showToast(TRANSLATIONS.settingsSaved || 'Settings saved', 'success');
                                                 loadSettings();
                                                 setIsEditing(false);
                                             } catch (error) {
-                                                showToast('Error saving settings', 'error');
+                                                showToast(TRANSLATIONS.errorSavingSettings || 'Error saving settings', 'error');
                                             } finally {
                                                 setActionLoading(false);
                                             }
@@ -1735,7 +1794,7 @@ export default function AdminDashboard({ navigation }) {
                         <View style={styles.settingsGrid}>
                             {/* Row 1 */}
                             <View style={styles.settingsGridItem}>
-                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.basePayout || 'Base Payout'}</Text>
+                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.basePayout || 'Default Call-out Fee'}</Text>
                                 <Text style={styles.settingsFieldHint}>{TRANSLATIONS.standardCallout || 'Standard Call-out Fee'}</Text>
                                 {isEditing ? (
                                     <View style={styles.settingsInputWrapper}>
@@ -1893,7 +1952,7 @@ export default function AdminDashboard({ navigation }) {
                                         {type[`name_${language}`] || type.name_en || type.id}
                                     </Text>
                                     <Text style={styles.serviceTypeRowMeta} numberOfLines={1}>
-                                        {language !== 'ru' && type.name_ru ? type.name_ru : (language !== 'en' && type.name_en ? type.name_en : type.name_kg)} • {TRANSLATIONS.code || 'Code:'} {type.code || type.id}
+                                        {language !== 'ru' && type.name_ru ? type.name_ru : (language !== 'en' && type.name_en ? type.name_en : type.name_kg)} - {TRANSLATIONS.code || 'Code:'} {type.code || type.id}
                                     </Text>
                                 </View>
                                 <View style={styles.serviceTypeRowActions}>
@@ -1983,7 +2042,7 @@ export default function AdminDashboard({ navigation }) {
                             {/* Code Field */}
                             <View style={styles.sidebarFormGroup}>
                                 <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
-                                    {TRANSLATIONS.codeUnique || 'Code (Unique ID)'} {serviceTypeModal.type && <Text style={{ color: '#64748b' }}>• {TRANSLATIONS.codeReadOnly || 'Read-only'}</Text>}
+                                    {TRANSLATIONS.codeUnique || 'Code (Unique ID)'} {serviceTypeModal.type && <Text style={{ color: '#64748b' }}>- {TRANSLATIONS.codeReadOnly || 'Read-only'}</Text>}
                                 </Text>
                                 <TextInput
                                     style={[
@@ -2113,19 +2172,45 @@ export default function AdminDashboard({ navigation }) {
     );
 
     // --- Ported Renderers ---
-    const renderCreateOrder = () => (
+    const renderCreateOrder = () => {
+        const serviceTypeOptions = serviceTypes.length
+            ? serviceTypes.map(st => ({
+                id: st.code || st.id,
+                label: st[`name_${language}`] || st.name_en || st.code || st.id
+            }))
+            : SERVICE_TYPES;
+        const selectedDistrictLabel = newOrder.area
+            ? (districts.find(d => d.id === newOrder.area)?.label || newOrder.area)
+            : (TRANSLATIONS.selectOption || 'Select');
+
+        return (
         <View style={styles.listViewContainer}>
             <View style={styles.headerRow}>
                 <TouchableOpacity onPress={() => setActiveTab('orders')} style={{ marginRight: 10 }}>
-                    <Text style={{ color: '#94a3b8', fontSize: 20 }}>←</Text>
+                    <Ionicons name="arrow-back" size={20} color="#94a3b8" />
                 </TouchableOpacity>
                 <Text style={[styles.pageTitle, !isDark && styles.textDark]}>{TRANSLATIONS.createNewOrder || 'Create New Order'}</Text>
             </View>
             <ScrollView style={{ flex: 1, marginTop: 20 }} showsVerticalScrollIndicator={false}>
                 {/* Client */}
                 <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.clientPhoneRequired || 'Client Phone *'}</Text>
-                <TextInput style={[styles.input, !isDark && styles.inputLight, { marginBottom: 15 }]} placeholder="+996..." placeholderTextColor="#64748b"
-                    value={newOrder.clientPhone} onChangeText={t => setNewOrder({ ...newOrder, clientPhone: t })} keyboardType="phone-pad" />
+                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 15 }}>
+                    <TextInput
+                        style={[styles.input, !isDark && styles.inputLight, { flex: 1 }]}
+                        placeholder="+996..."
+                        placeholderTextColor="#64748b"
+                        value={newOrder.clientPhone}
+                        onChangeText={t => setNewOrder({ ...newOrder, clientPhone: t })}
+                        onBlur={handlePhoneBlur}
+                        keyboardType="phone-pad"
+                    />
+                    <TouchableOpacity
+                        style={[styles.actionButton, { paddingHorizontal: 12, backgroundColor: 'rgba(59,130,246,0.2)' }]}
+                        onPress={handlePastePhone}
+                    >
+                        <Text style={styles.actionButtonText}>{TRANSLATIONS.btnCopy || 'Paste'}</Text>
+                    </TouchableOpacity>
+                </View>
 
                 <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.clientName || 'Client Name'}</Text>
                 <TextInput style={[styles.input, !isDark && styles.inputLight, { marginBottom: 15 }]} placeholder="Name" placeholderTextColor="#64748b"
@@ -2133,17 +2218,28 @@ export default function AdminDashboard({ navigation }) {
 
                 {/* Location */}
                 <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.districtRequired || 'District *'}</Text>
-                <TextInput style={[styles.input, !isDark && styles.inputLight, { marginBottom: 15 }]} placeholder="e.g. Leninsky" placeholderTextColor="#64748b"
-                    value={newOrder.area} onChangeText={t => setNewOrder({ ...newOrder, area: t })} />
+                <TouchableOpacity
+                    style={[styles.input, !isDark && styles.inputLight, { marginBottom: 15, justifyContent: 'center' }]}
+                    onPress={openDistrictPicker}
+                >
+                    <Text style={{ color: newOrder.area ? (isDark ? '#fff' : '#0f172a') : '#94a3b8' }}>
+                        {selectedDistrictLabel}
+                    </Text>
+                </TouchableOpacity>
 
                 <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.fullAddressRequired || 'Full Address *'}</Text>
                 <TextInput style={[styles.input, !isDark && styles.inputLight, { marginBottom: 15 }]} placeholder="Street, House, Apt" placeholderTextColor="#64748b"
                     value={newOrder.fullAddress} onChangeText={t => setNewOrder({ ...newOrder, fullAddress: t })} />
 
+                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.createOrientir || 'Landmark/Orientir'}</Text>
+                <TextInput style={[styles.input, !isDark && styles.inputLight, { marginBottom: 15 }]}
+                    placeholder={TRANSLATIONS.orientirPlaceholder || 'e.g. Near Beta Stores'} placeholderTextColor="#64748b"
+                    value={newOrder.orientir} onChangeText={t => setNewOrder({ ...newOrder, orientir: t })} />
+
                 {/* Service */}
                 <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.serviceType || 'Service Type'}</Text>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15 }}>
-                    {SERVICE_TYPES.map(s => (
+                    {serviceTypeOptions.map(s => (
                         <TouchableOpacity key={s.id}
                             style={[
                                 { padding: 8, borderRadius: 8, borderWidth: 1, borderColor: isDark ? '#334155' : '#e2e8f0' },
@@ -2155,15 +2251,77 @@ export default function AdminDashboard({ navigation }) {
                     ))}
                 </View>
 
+                {/* Urgency */}
+                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.filterUrgency || 'Urgency'}</Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 15 }}>
+                    {['emergency', 'urgent', 'planned'].map(u => (
+                        <TouchableOpacity
+                            key={u}
+                            style={[
+                                { flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: isDark ? '#334155' : '#e2e8f0', alignItems: 'center' },
+                                newOrder.urgency === u && { backgroundColor: '#3b82f6', borderColor: '#3b82f6' }
+                            ]}
+                            onPress={() => setNewOrder({ ...newOrder, urgency: u })}
+                        >
+                            <Text style={{ color: newOrder.urgency === u ? '#fff' : (isDark ? '#fff' : '#0f172a') }}>
+                                {TRANSLATIONS[`urgency${u.charAt(0).toUpperCase() + u.slice(1)}`] || u.toUpperCase()}
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
+                </View>
+
+                {/* Pricing */}
+                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.pricing || 'Pricing'}</Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+                    {['unknown', 'fixed'].map(p => (
+                        <TouchableOpacity
+                            key={p}
+                            style={[
+                                { flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: isDark ? '#334155' : '#e2e8f0', alignItems: 'center' },
+                                newOrder.pricingType === p && { backgroundColor: '#3b82f6', borderColor: '#3b82f6' }
+                            ]}
+                            onPress={() => setNewOrder({ ...newOrder, pricingType: p })}
+                        >
+                            <Text style={{ color: newOrder.pricingType === p ? '#fff' : (isDark ? '#fff' : '#0f172a') }}>
+                                {p === 'fixed' ? (TRANSLATIONS.pricingFixed || 'Fixed Price') : (TRANSLATIONS.priceOpen || 'Open')}
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
+                </View>
+                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 15 }}>
+                    <TextInput
+                        style={[styles.input, !isDark && styles.inputLight, { flex: 1 }]}
+                        placeholder={TRANSLATIONS.calloutFee || 'Call-out Fee'}
+                        placeholderTextColor="#64748b"
+                        keyboardType="numeric"
+                        value={newOrder.calloutFee}
+                        onChangeText={t => setNewOrder({ ...newOrder, calloutFee: sanitizeNumberInput(t) })}
+                    />
+                    <TextInput
+                        style={[styles.input, !isDark && styles.inputLight, { flex: 1 }]}
+                        placeholder={TRANSLATIONS.initialPrice || 'Initial Price'}
+                        placeholderTextColor="#64748b"
+                        keyboardType="numeric"
+                        editable={newOrder.pricingType === 'fixed'}
+                        value={newOrder.initialPrice}
+                        onChangeText={t => setNewOrder({ ...newOrder, initialPrice: sanitizeNumberInput(t) })}
+                    />
+                </View>
+
                 <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.problemRequired || 'Problem Description *'}</Text>
                 <TextInput style={[styles.input, !isDark && styles.inputLight, { height: 80, textAlignVertical: 'top', marginBottom: 15 }]}
                     placeholder={TRANSLATIONS.describeIssue || 'Describe the issue...'} placeholderTextColor="#64748b" multiline numberOfLines={3}
                     value={newOrder.problemDescription} onChangeText={t => setNewOrder({ ...newOrder, problemDescription: t })} />
 
+                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.sectionNote || 'Internal Note'}</Text>
+                <TextInput style={[styles.input, !isDark && styles.inputLight, { height: 80, textAlignVertical: 'top', marginBottom: 15 }]}
+                    placeholder={TRANSLATIONS.createInternalNote || 'Internal Note'} placeholderTextColor="#64748b" multiline numberOfLines={3}
+                    value={newOrder.dispatcherNote} onChangeText={t => setNewOrder({ ...newOrder, dispatcherNote: t })} />
+
                 {/* Confirm */}
                 <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }} onPress={() => setConfirmChecked(!confirmChecked)}>
                     <View style={{ width: 20, height: 20, borderRadius: 4, borderWidth: 1, borderColor: isDark ? '#fff' : '#0f172a', marginRight: 10, alignItems: 'center', justifyContent: 'center' }}>
-                        {confirmChecked && <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 12 }}>✓</Text>}
+                        {confirmChecked && <Ionicons name="checkmark" size={12} color={isDark ? '#fff' : '#0f172a'} />}
                     </View>
                     <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{TRANSLATIONS.confirmDetails || 'Confirm Details'}</Text>
                 </TouchableOpacity>
@@ -2177,24 +2335,32 @@ export default function AdminDashboard({ navigation }) {
                 <View style={{ height: 50 }} />
             </ScrollView>
         </View>
-    );
+        );
+    };
 
     const renderDetailsDrawer = () => {
         if (!detailsOrder) return null;
+        const drawerWidth = Math.min(500, SCREEN_WIDTH);
+        const districtLabel = detailsOrder.area
+            ? (districts.find(d => d.id === detailsOrder.area)?.label || detailsOrder.area)
+            : '-';
+        const editDistrictLabel = editForm.area
+            ? (districts.find(d => d.id === editForm.area)?.label || editForm.area)
+            : (TRANSLATIONS.selectOption || 'Select');
         return (
             <Modal visible={!!detailsOrder} transparent animationType="fade">
                 <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', flexDirection: 'row', justifyContent: 'flex-end' }}>
                     <TouchableOpacity style={{ flex: 1 }} onPress={() => setDetailsOrder(null)} />
-                    <View style={{ width: 500, backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
+                    <View style={{ width: drawerWidth, backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
                             <View>
                                 <Text style={[styles.pageTitle, !isDark && styles.textDark]}>Order #{detailsOrder.id.slice(0, 8)}</Text>
                                 <View style={[styles.statusBadge, { backgroundColor: STATUS_COLORS[detailsOrder.status], alignSelf: 'flex-start', marginTop: 5 }]}>
-                                    <Text style={styles.statusText}>{detailsOrder.status.toUpperCase()}</Text>
+                                    <Text style={styles.statusText}>{getOrderStatusLabel(detailsOrder.status, t)}</Text>
                                 </View>
                             </View>
                             <TouchableOpacity onPress={() => setDetailsOrder(null)}>
-                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>✕</Text>
+                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>X</Text>
                             </TouchableOpacity>
                         </View>
 
@@ -2202,22 +2368,85 @@ export default function AdminDashboard({ navigation }) {
                             {/* Client Info */}
                             <View style={[styles.card, !isDark && styles.cardLight]}>
                                 <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 10 }}>{TRANSLATIONS.client || 'CLIENT'}</Text>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                    <View style={[styles.avatarCircle, { backgroundColor: '#3b82f6' }]}>
-                                        <Text style={{ color: '#fff' }}>{detailsOrder.client?.full_name?.charAt(0) || 'C'}</Text>
+                                {isEditing ? (
+                                    <View style={{ gap: 10 }}>
+                                        <View>
+                                            <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 4 }}>{TRANSLATIONS.clientName || 'Client Name'}</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                value={editForm.client_name || ''}
+                                                onChangeText={t => setEditForm({ ...editForm, client_name: t })}
+                                            />
+                                        </View>
+                                        <View>
+                                            <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 4 }}>{TRANSLATIONS.clientPhone || 'Client Phone'}</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                value={editForm.client_phone || ''}
+                                                onChangeText={t => setEditForm({ ...editForm, client_phone: t })}
+                                                keyboardType="phone-pad"
+                                            />
+                                        </View>
                                     </View>
-                                    <View>
-                                        <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{detailsOrder.client?.full_name || 'Guest'}</Text>
-                                        <Text style={[styles.itemSubtitle, !isDark && { color: '#64748b' }]}>{detailsOrder.client?.phone}</Text>
+                                ) : (
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                        <View style={[styles.avatarCircle, { backgroundColor: '#3b82f6' }]}>
+                                            <Text style={{ color: '#fff' }}>{detailsOrder.client?.full_name?.charAt(0) || 'C'}</Text>
+                                        </View>
+                                        <View>
+                                            <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{detailsOrder.client?.full_name || detailsOrder.client_name || 'Guest'}</Text>
+                                            <Text style={[styles.itemSubtitle, !isDark && { color: '#64748b' }]}>{detailsOrder.client?.phone || detailsOrder.client_phone || '-'}</Text>
+                                        </View>
                                     </View>
-                                </View>
+                                )}
                             </View>
 
                             {/* Location */}
                             <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 10 }]}>
                                 <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.addressSection || 'ADDRESS'}</Text>
-                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 16 }}>{detailsOrder.full_address}</Text>
-                                <Text style={{ color: isDark ? '#64748b' : '#94a3b8' }}>{detailsOrder.area}</Text>
+                                {isEditing ? (
+                                    <View style={{ gap: 10 }}>
+                                        <View>
+                                            <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 4 }}>{TRANSLATIONS.createDistrict || 'District'}</Text>
+                                            <TouchableOpacity
+                                                style={[styles.input, !isDark && styles.inputLight, { justifyContent: 'center' }]}
+                                                onPress={openEditDistrictPicker}
+                                            >
+                                                <Text style={{ color: editForm.area ? (isDark ? '#fff' : '#0f172a') : '#94a3b8' }}>
+                                                    {editDistrictLabel}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                        <View>
+                                            <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 4 }}>{TRANSLATIONS.fullAddressRequired || 'Full Address *'}</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                value={editForm.full_address || ''}
+                                                onChangeText={t => setEditForm({ ...editForm, full_address: t })}
+                                            />
+                                        </View>
+                                        <View>
+                                            <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 4 }}>{TRANSLATIONS.createOrientir || 'Landmark/Orientir'}</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                value={editForm.orientir || ''}
+                                                onChangeText={t => setEditForm({ ...editForm, orientir: t })}
+                                                placeholder={TRANSLATIONS.orientirPlaceholder || 'e.g. Near Beta Stores'}
+                                                placeholderTextColor="#64748b"
+                                            />
+                                        </View>
+                                    </View>
+                                ) : (
+                                    <>
+                                        <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 16 }}>{detailsOrder.full_address}</Text>
+                                        <Text style={{ color: isDark ? '#64748b' : '#94a3b8' }}>{districtLabel}</Text>
+                                        {detailsOrder.orientir ? (
+                                            <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginTop: 6 }}>
+                                                {(TRANSLATIONS.labelOrientir || 'Landmark:')} {detailsOrder.orientir}
+                                            </Text>
+                                        ) : null}
+                                    </>
+                                )}
                             </View>
 
                             {/* Problem */}
@@ -2230,6 +2459,79 @@ export default function AdminDashboard({ navigation }) {
                                     <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 16 }}>{detailsOrder.problem_description}</Text>
                                 )}
                             </View>
+
+                            {/* Internal Note */}
+                            <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 10 }]}>
+                                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 5 }}>{TRANSLATIONS.sectionNote || 'INTERNAL NOTE'}</Text>
+                                {isEditing ? (
+                                    <TextInput
+                                        style={[styles.input, !isDark && styles.inputLight, { height: 80, textAlignVertical: 'top' }]}
+                                        multiline
+                                        value={editForm.dispatcher_note || ''}
+                                        onChangeText={t => setEditForm({ ...editForm, dispatcher_note: t })}
+                                    />
+                                ) : (
+                                    <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 16 }}>{detailsOrder.dispatcher_note || '-'}</Text>
+                                )}
+                            </View>
+
+                            {/* Financials */}
+                            <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 10 }]}>
+                                <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 8 }}>{TRANSLATIONS.sectionFinancials || 'FINANCIALS'}</Text>
+                                {isEditing ? (
+                                    <View style={{ gap: 10 }}>
+                                        <View>
+                                            <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 4 }}>{TRANSLATIONS.calloutFee || 'Call-out Fee'}</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                keyboardType="numeric"
+                                                value={String(editForm.callout_fee ?? '')}
+                                                onChangeText={v => setEditForm({ ...editForm, callout_fee: sanitizeNumberInput(v) })}
+                                            />
+                                        </View>
+                                        <View>
+                                            <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 4 }}>{TRANSLATIONS.initialPrice || 'Initial Price'}</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                keyboardType="numeric"
+                                                value={String(editForm.initial_price ?? '')}
+                                                onChangeText={v => setEditForm({ ...editForm, initial_price: sanitizeNumberInput(v) })}
+                                            />
+                                        </View>
+                                    </View>
+                                ) : (
+                                    <View style={{ gap: 6 }}>
+                                        <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>
+                                            {TRANSLATIONS.labelCallout || 'Call-out:'} {detailsOrder.callout_fee ?? '-'}
+                                        </Text>
+                                        <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>
+                                            {detailsOrder.final_price ? (TRANSLATIONS.labelFinal || 'Final:') : (TRANSLATIONS.labelInitial || 'Initial:')}{' '}
+                                            {detailsOrder.final_price ?? detailsOrder.initial_price ?? (TRANSLATIONS.priceOpen || 'Open')}
+                                        </Text>
+                                    </View>
+                                )}
+                            </View>
+
+                            {isEditing && detailsOrder?.master_id && (
+                                <View style={{ marginTop: 12, flexDirection: 'row', gap: 10 }}>
+                                    <TouchableOpacity
+                                        style={[styles.actionButton, { flex: 1, backgroundColor: '#8b5cf6' }]}
+                                        onPress={async () => {
+                                            const mastersData = await ordersService.getAvailableMasters();
+                                            setAvailableMasters(mastersData);
+                                            setShowAssignModal(true);
+                                        }}
+                                    >
+                                        <Text style={styles.actionButtonText}>{TRANSLATIONS.reassignMaster || 'Reassign Master'}</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.actionButton, { flex: 1, backgroundColor: '#ef4444' }]}
+                                        onPress={() => handleUnassignMaster(detailsOrder.id)}
+                                    >
+                                        <Text style={styles.actionButtonText}>{TRANSLATIONS.removeMaster || 'Remove Master'}</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
 
                             {/* Edit Actions */}
                             <View style={{ marginTop: 20, flexDirection: 'row', gap: 10 }}>
@@ -2244,7 +2546,18 @@ export default function AdminDashboard({ navigation }) {
                                     </>
                                 ) : (
                                     <TouchableOpacity style={[styles.actionButton, { flex: 1 }]} onPress={() => {
-                                        setEditForm({ ...detailsOrder });
+                                        setEditForm({
+                                            ...detailsOrder,
+                                            client_name: detailsOrder.client?.full_name || detailsOrder.client_name || '',
+                                            client_phone: detailsOrder.client?.phone || detailsOrder.client_phone || '',
+                                            area: detailsOrder.area || '',
+                                            full_address: detailsOrder.full_address || '',
+                                            orientir: detailsOrder.orientir || '',
+                                            dispatcher_note: detailsOrder.dispatcher_note || '',
+                                            problem_description: detailsOrder.problem_description || '',
+                                            callout_fee: detailsOrder.callout_fee ?? '',
+                                            initial_price: detailsOrder.initial_price ?? '',
+                                        });
                                         setIsEditing(true);
                                     }}>
                                         <Text style={styles.actionButtonText}>{TRANSLATIONS.editDetails || 'Edit Details'}</Text>
@@ -2297,14 +2610,14 @@ export default function AdminDashboard({ navigation }) {
                                             onPress={() => handleVerifyPaymentProof(detailsOrder.id, true)}
                                             disabled={actionLoading}
                                         >
-                                            <Text style={styles.actionButtonText}>✓ {TRANSLATIONS.approve || 'Approve'}</Text>
+                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.approve || 'Approve'}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={[styles.actionButton, { flex: 1, backgroundColor: '#ef4444' }]}
                                             onPress={() => handleVerifyPaymentProof(detailsOrder.id, false)}
                                             disabled={actionLoading}
                                         >
-                                            <Text style={styles.actionButtonText}>✗ {TRANSLATIONS.reject || 'Reject'}</Text>
+                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.reject || 'Reject'}</Text>
                                         </TouchableOpacity>
                                     </View>
                                 </View>
@@ -2355,50 +2668,6 @@ export default function AdminDashboard({ navigation }) {
                 {activeTab === 'settings' && renderSettingsPage()}
             </View>
 
-            {/* Payment Modal */}
-            <Modal
-                animationType="fade"
-                transparent={true}
-                visible={showPaymentModal}
-                onRequestClose={() => setShowPaymentModal(false)}
-            >
-                <View style={styles.modalOverlay}>
-                    <View style={[styles.modalContent, !isDark && styles.modalContentLight]}>
-                        <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>{TRANSLATIONS.recordCommissionPayment || 'Record Commission Payment'}</Text>
-                        <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 15 }}>
-                            {TRANSLATIONS.master || 'Master'}: {selectedMaster?.full_name}
-                        </Text>
-
-                        <TextInput
-                            style={[styles.input, !isDark && styles.inputLight]}
-                            placeholder={TRANSLATIONS.amountSom || 'Amount (сом)'}
-                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                            keyboardType="numeric"
-                            value={paymentData.amount}
-                            onChangeText={(text) => setPaymentData({ ...paymentData, amount: text })}
-                        />
-
-                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
-                            <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: '#334155' }]}
-                                onPress={() => setShowPaymentModal(false)}
-                            >
-                                <Text style={styles.actionButtonText}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={styles.actionButton}
-                                onPress={handleRecordPayment}
-                                disabled={actionLoading}
-                            >
-                                <Text style={styles.actionButtonText}>{actionLoading ? (TRANSLATIONS.saving || 'Saving...') : (TRANSLATIONS.confirmPayment || 'Confirm Payment')}</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
-            </Modal>
-
-
-
             {/* Ported Details Drawer */}
             {renderDetailsDrawer()}
             {renderPickerModal()}
@@ -2419,7 +2688,7 @@ export default function AdminDashboard({ navigation }) {
                         <ScrollView style={{ maxHeight: 300 }}>
                             {availableMasters.length === 0 ? (
                                 <Text style={{ color: '#64748b', textAlign: 'center', paddingVertical: 20 }}>
-                                    No available masters found
+                                    {TRANSLATIONS.noAvailableMasters || 'No available masters found'}
                                 </Text>
                             ) : (
                                 availableMasters.map(master => (
@@ -2434,7 +2703,7 @@ export default function AdminDashboard({ navigation }) {
                                             </View>
                                             <View style={{ flex: 1 }}>
                                                 <Text style={styles.itemTitle}>{master.full_name}</Text>
-                                                <Text style={styles.itemSubtitle}>{master.phone} • Rating: {master.rating || 'N/A'}</Text>
+                                                <Text style={styles.itemSubtitle}>{master.phone} - Rating: {master.rating || 'N/A'}</Text>
                                             </View>
                                             <Ionicons name="chevron-forward" size={16} color="#64748b" />
                                         </View>
@@ -2507,7 +2776,7 @@ export default function AdminDashboard({ navigation }) {
             <Modal visible={!!detailsPerson} transparent animationType="fade">
                 <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', flexDirection: 'row', justifyContent: 'flex-end' }}>
                     <TouchableOpacity style={{ flex: 1 }} onPress={() => setDetailsPerson(null)} />
-                    <View style={{ width: 500, backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
+                    <View style={{ width: Math.min(500, SCREEN_WIDTH), backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                                 <View style={[styles.avatarCircle, { width: 48, height: 48, borderRadius: 24, backgroundColor: detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? '#22c55e' : '#64748b') : (detailsPerson?.is_active ? '#3b82f6' : '#64748b') }]}>
@@ -2523,7 +2792,7 @@ export default function AdminDashboard({ navigation }) {
                                 </View>
                             </View>
                             <TouchableOpacity onPress={() => setDetailsPerson(null)}>
-                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>✕</Text>
+                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>X</Text>
                             </TouchableOpacity>
                         </View>
 
@@ -2737,14 +3006,14 @@ export default function AdminDashboard({ navigation }) {
             >
                 <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', flexDirection: 'row', justifyContent: 'flex-end' }}>
                     <TouchableOpacity style={{ flex: 1 }} onPress={() => setShowOrderHistoryModal(false)} />
-                    <View style={{ width: 500, backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
+                    <View style={{ width: Math.min(500, SCREEN_WIDTH), backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
                             <View>
                                 <Text style={[styles.pageTitle, !isDark && styles.textDark]}>{TRANSLATIONS.sectionHistory || 'Order History'}</Text>
                                 <Text style={{ color: '#64748b', marginTop: 4 }}>{selectedMaster?.full_name}</Text>
                             </View>
                             <TouchableOpacity onPress={() => setShowOrderHistoryModal(false)}>
-                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>✕</Text>
+                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>X</Text>
                             </TouchableOpacity>
                         </View>
 
@@ -2769,7 +3038,7 @@ export default function AdminDashboard({ navigation }) {
                                         >
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                                                 <View style={{ flex: 1 }}>
-                                                    <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{getServiceLabel(order.service_type, language)}</Text>
+                                                    <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{getServiceLabel(order.service_type, t)}</Text>
                                                     <Text style={styles.itemSubtitle}>{order.area || 'N/A'}</Text>
                                                     <Text style={{ color: '#64748b', fontSize: 11, marginTop: 4 }}>
                                                         {order.created_at ? new Date(order.created_at).toLocaleDateString() : 'N/A'}
@@ -2777,10 +3046,10 @@ export default function AdminDashboard({ navigation }) {
                                                 </View>
                                                 <View style={{ alignItems: 'flex-end' }}>
                                                     <Text style={{ color: '#22c55e', fontWeight: '700', fontSize: 14 }}>
-                                                        {order.final_price || order.initial_price || '-'} сом
+                                                        {order.final_price ?? order.initial_price ?? order.callout_fee ?? '-'} сом
                                                     </Text>
                                                     <View style={[styles.statusBadge, { backgroundColor: statusColor, marginTop: 6 }]}>
-                                                        <Text style={styles.statusText}>{getOrderStatusLabel(order.status, language)}</Text>
+                                                        <Text style={styles.statusText}>{getOrderStatusLabel(order.status, t)}</Text>
                                                     </View>
                                                 </View>
                                             </View>
