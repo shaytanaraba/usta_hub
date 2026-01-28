@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {
-    LogOut, ShieldCheck, Moon, Sun, MapPin, Check, X, Filter, ChevronDown, ChevronUp,
+    ArrowLeft, ArrowRight, LogOut, ShieldCheck, Moon, Sun, MapPin, Check, X, Filter, ChevronDown, ChevronUp,
     Inbox, ClipboardList, TrendingUp, AlertCircle, CheckCircle2, Phone, User, Clock,
     DollarSign, RotateCw, Wallet, Star, XCircle, CreditCard
 } from 'lucide-react-native';
@@ -25,6 +25,8 @@ import earningsService from '../services/earnings';
 import { useToast } from '../contexts/ToastContext';
 import { useLocalization, LocalizationProvider } from '../contexts/LocalizationContext';
 import { useTheme, ThemeProvider } from '../contexts/ThemeContext';
+import { useAuth } from '../contexts/AuthContext';
+import { useNavHistory } from '../contexts/NavigationHistoryContext';
 import deviceUtils from '../utils/device';
 import { getOrderStatusLabel, getServiceLabel } from '../utils/orderHelpers';
 
@@ -94,7 +96,7 @@ const Dropdown = ({ label, value, options, optionLabels = {}, onChange }) => {
 // ============================================
 // HEADER COMPONENT
 // ============================================
-const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, onRefresh }) => {
+const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, onRefresh, canGoBack, canGoForward, onBack, onForward }) => {
     const { t, language } = useLocalization();
     const { theme, isDark } = useTheme();
     const getFlagEmoji = () => ({ ru: '🇷🇺', kg: '🇰🇬' }[language] || '🇬🇧');
@@ -118,6 +120,20 @@ const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, o
                 ) : <View style={[styles.skeletonName, { backgroundColor: theme.borderSecondary }]} />}
             </View>
             <View style={styles.headerRight}>
+                <TouchableOpacity
+                    style={[styles.headerButton, { backgroundColor: theme.bgCard, opacity: canGoBack ? 1 : 0.4 }]}
+                    onPress={onBack}
+                    disabled={!canGoBack}
+                >
+                    <ArrowLeft size={18} color={theme.accentIndigo} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.headerButton, { backgroundColor: theme.bgCard, opacity: canGoForward ? 1 : 0.4 }]}
+                    onPress={onForward}
+                    disabled={!canGoForward}
+                >
+                    <ArrowRight size={18} color={theme.accentIndigo} />
+                </TouchableOpacity>
                 <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onRefresh}><RotateCw size={18} color={theme.accentIndigo} /></TouchableOpacity>
                 <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onLanguageToggle}><Text style={{ fontSize: 16 }}>{getFlagEmoji()}</Text></TouchableOpacity>
                 <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onThemeToggle}>{isDark ? <Sun size={18} color="#FFD700" /> : <Moon size={18} color={theme.accentIndigo} />}</TouchableOpacity>
@@ -486,6 +502,9 @@ const DashboardContent = ({ navigation }) => {
     const [completeData, setCompleteData] = useState({});
     const [refuseData, setRefuseData] = useState({});
 
+    const { logout } = useAuth();
+    const { canGoBack, canGoForward, goBack, goForward } = useNavHistory();
+
     useEffect(() => { loadData(); }, []);
     useEffect(() => { if (user) reloadPool(); }, [filters]);
 
@@ -526,7 +545,7 @@ const DashboardContent = ({ navigation }) => {
 
     const handleLogout = async () => {
         try {
-            await authService.logoutUser();
+            await logout({ scope: 'local' });
         } catch (e) {
             console.error('Logout failed', e);
         } finally {
@@ -631,7 +650,18 @@ const DashboardContent = ({ navigation }) => {
 
     return (
         <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
-            <Header user={user} financials={financials} onLogout={handleLogout} onLanguageToggle={cycleLanguage} onThemeToggle={toggleTheme} onRefresh={() => loadData(true)} />
+            <Header
+                user={user}
+                financials={financials}
+                onLogout={handleLogout}
+                onLanguageToggle={cycleLanguage}
+                onThemeToggle={toggleTheme}
+                onRefresh={() => loadData(true)}
+                canGoBack={canGoBack}
+                canGoForward={canGoForward}
+                onBack={goBack}
+                onForward={goForward}
+            />
 
             {activeTab === 'orders' && (
                 <>

@@ -8,6 +8,30 @@ import { normalizeKyrgyzPhone as normalizeKyrgyzPhoneUtil, validateKyrgyzPhone a
 
 const LOG_PREFIX = '[OrdersService]';
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const isTransientError = (error) => {
+  const message = error?.message?.toLowerCase?.() || '';
+  return message.includes('network request failed')
+    || message.includes('failed to fetch')
+    || message.includes('timeout')
+    || message.includes('temporarily unavailable')
+    || message.includes('econnreset')
+    || message.includes('eai_again');
+};
+
+const callWithRetry = async (fn, retries = 1, delayMs = 300) => {
+  let attempt = 0;
+  while (attempt <= retries) {
+    const result = await fn();
+    if (!result?.error || !isTransientError(result.error) || attempt >= retries) {
+      return result;
+    }
+    attempt += 1;
+    await sleep(delayMs);
+  }
+  return fn();
+};
+
 // Order status constants
 export const ORDER_STATUS = {
   PLACED: 'placed',
@@ -173,10 +197,10 @@ class OrdersService {
   claimOrder = async (orderId) => {
     console.log(`${LOG_PREFIX} Claiming order: ${orderId}`);
 
-    try {
-      const { data, error } = await supabase.rpc('claim_order', {
-        order_uuid: orderId
-      });
+      try {
+        const { data, error } = await callWithRetry(() => supabase.rpc('claim_order', {
+          order_uuid: orderId
+        }));
 
       if (error) {
         console.error(`${LOG_PREFIX} claimOrder RPC error:`, error);
@@ -217,21 +241,21 @@ class OrdersService {
   startJob = async (orderId, masterId) => {
     console.log(`${LOG_PREFIX} Starting job: ${orderId}`);
 
-    try {
-      const { data, error } = await supabase
-        .from('orders')
-        .update({
-          status: ORDER_STATUS.STARTED,
-          started_at: new Date().toISOString()
-        })
-        .eq('id', orderId)
-        .eq('master_id', masterId)
-        .eq('status', ORDER_STATUS.CLAIMED)
-        .select(`
-          *,
-          client:client_id(full_name, phone, email)
-        `)
-        .single();
+      try {
+        const { data, error } = await callWithRetry(() => supabase
+          .from('orders')
+          .update({
+            status: ORDER_STATUS.STARTED,
+            started_at: new Date().toISOString()
+          })
+          .eq('id', orderId)
+          .eq('master_id', masterId)
+          .eq('status', ORDER_STATUS.CLAIMED)
+          .select(`
+            *,
+            client:client_id(full_name, phone, email)
+          `)
+          .single());
 
       if (error) {
         console.error(`${LOG_PREFIX} startJob error:`, error);
@@ -259,11 +283,11 @@ class OrdersService {
         throw new Error('Final price is required');
       }
 
-      const { data: orderData, error: orderError } = await supabase
+      const { data: orderData, error: orderError } = await callWithRetry(() => supabase
         .from('orders')
         .select('callout_fee')
         .eq('id', orderId)
-        .single();
+        .single());
 
       if (orderError) throw orderError;
 
@@ -272,7 +296,7 @@ class OrdersService {
         throw new Error('Final price cannot be lower than call-out fee');
       }
 
-      const { data, error } = await supabase
+      const { data, error } = await callWithRetry(() => supabase
         .from('orders')
         .update({
           status: ORDER_STATUS.COMPLETED,
@@ -286,7 +310,7 @@ class OrdersService {
         .eq('master_id', masterId)
         .eq('status', ORDER_STATUS.STARTED)
         .select()
-        .single();
+        .single());
 
       if (error) throw error;
 
@@ -319,12 +343,12 @@ class OrdersService {
         throw new Error('Cancellation reason is required');
       }
 
-      const { data, error } = await supabase.rpc('refuse_job', {
+      const { data, error } = await callWithRetry(() => supabase.rpc('refuse_job', {
         p_order_id: orderId,
         p_master_id: masterId,
         p_reason: reason,
         p_notes: notes
-      });
+      }));
 
       if (error) {
         console.error(`${LOG_PREFIX} refuseJob RPC error:`, error);
@@ -873,7 +897,7 @@ class OrdersService {
   /**
    * Get all service types (admin)
    */
-  getServiceTypes = async () => {
+  getAllServiceTypes = async () => {
     try {
       const { data, error } = await supabase
         .from('service_types')
@@ -882,7 +906,7 @@ class OrdersService {
       if (error) throw error;
       return data;
     } catch (error) {
-      console.error(`${LOG_PREFIX} getServiceTypes failed:`, error);
+      console.error(`${LOG_PREFIX} getAllServiceTypes failed:`, error);
       return [];
     }
   }
@@ -1052,6 +1076,80 @@ class OrdersService {
     } catch (error) {
       console.error(`${LOG_PREFIX} getDistricts failed:`, error);
       return [];
+    }
+  }
+
+  /**
+   * Get all districts (admin management)
+   */
+  getAllDistricts = async () => {
+    console.log(`${LOG_PREFIX} Fetching all districts...`);
+    try {
+      const { data, error } = await supabase
+        .from('districts')
+        .select('*')
+        .order('sort_order', { ascending: true });
+
+      if (error) throw error;
+      console.log(`${LOG_PREFIX} Found ${data?.length || 0} districts`);
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getAllDistricts failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Add district
+   */
+  addDistrict = async (districtData) => {
+    try {
+      const { data, error } = await supabase
+        .from('districts')
+        .insert(districtData)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Update district
+   */
+  updateDistrict = async (id, updates) => {
+    try {
+      const { data, error } = await supabase
+        .from('districts')
+        .update(updates)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Delete district
+   */
+  deleteDistrict = async (id) => {
+    try {
+      const { error } = await supabase
+        .from('districts')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      return { success: true };
+    } catch (error) {
+      return { success: false, message: error.message };
     }
   }
 
@@ -1240,6 +1338,39 @@ class OrdersService {
       if (normalized.includes('order not found')) errorCode = 'ORDER_NOT_FOUND';
       if (normalized.includes('master not found')) errorCode = 'MASTER_NOT_FOUND';
       return { success: false, message: error?.message, error: errorCode };
+    }
+  }
+
+  /**
+   * Confirm payment (admin) - Transition: completed -> confirmed
+   */
+  confirmPaymentAdmin = async (orderId, paymentMethod = 'cash', paymentProofUrl = null) => {
+    console.log(`${LOG_PREFIX} Admin confirming payment for order: ${orderId}`);
+
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .update({
+          status: ORDER_STATUS.CONFIRMED,
+          confirmed_at: new Date().toISOString(),
+          payment_method: paymentMethod,
+          payment_proof_url: paymentProofUrl || null,
+        })
+        .eq('id', orderId)
+        .eq('status', ORDER_STATUS.COMPLETED)
+        .select()
+        .single();
+
+      if (error) {
+        console.error(`${LOG_PREFIX} confirmPaymentAdmin error:`, error);
+        throw error;
+      }
+
+      console.log(`${LOG_PREFIX} Admin payment confirmed for order:`, data?.id);
+      return { success: true, message: 'Payment confirmed!', order: data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} confirmPaymentAdmin failed:`, error);
+      return { success: false, message: error.message };
     }
   }
 
@@ -1908,6 +2039,33 @@ class OrdersService {
       return { success: true, message: 'Order reopened', order: data, canceled };
     } catch (error) {
       console.error(`${LOG_PREFIX} unassignMasterAdmin failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Cancel order (admin)
+   */
+  cancelOrderAdmin = async (orderId, reason = 'admin_cancel') => {
+    console.log(`${LOG_PREFIX} Admin canceling order: ${orderId}`);
+
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .update({
+          status: ORDER_STATUS.CANCELED_BY_CLIENT,
+          canceled_at: new Date().toISOString(),
+          cancellation_reason: reason,
+          cancellation_notes: 'Canceled by admin'
+        })
+        .eq('id', orderId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return { success: true, message: 'Order canceled', order: data };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} cancelOrderAdmin failed:`, error);
       return { success: false, message: error.message };
     }
   }

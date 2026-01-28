@@ -18,6 +18,8 @@ import ordersService, { ORDER_STATUS } from '../services/orders';
 import earningsService from '../services/earnings';
 import { useToast } from '../contexts/ToastContext';
 import { useLocalization } from '../contexts/LocalizationContext';
+import { useAuth } from '../contexts/AuthContext';
+import { useNavHistory } from '../contexts/NavigationHistoryContext';
 import { STATUS_COLORS, getOrderStatusLabel, getServiceLabel, getTimeAgo } from '../utils/orderHelpers';
 import { normalizeKyrgyzPhone, isValidKyrgyzPhone } from '../utils/phone';
 const LOG_PREFIX = '[DispatcherDashboard]';
@@ -120,6 +122,8 @@ export default function DispatcherDashboard({ navigation, route }) {
     const { showToast } = useToast();
     const { translations, language, cycleLanguage, t } = useLocalization();
     const TRANSLATIONS = translations;
+    const { logout } = useAuth();
+    const { canGoBack, canGoForward, goBack, goForward } = useNavHistory();
 
     // User & Data
     const [user, setUser] = useState(route.params?.user || null);
@@ -588,7 +592,8 @@ export default function DispatcherDashboard({ navigation, route }) {
     };
 
     const handleAssignMaster = async (master) => {
-        const targetId = assignTarget?.id || detailsOrder?.id;
+        const targetOrder = assignTarget || detailsOrder;
+        const targetId = targetOrder?.id;
         if (!targetId) {
             showToast?.(TRANSLATIONS[language].toastNoOrderSelected || 'No order selected', 'error');
             return;
@@ -604,6 +609,15 @@ export default function DispatcherDashboard({ navigation, route }) {
         const confirmAssign = async () => {
             setActionLoading(true);
             try {
+                const needsReassign = !!(targetOrder?.master_id || targetOrder?.master);
+                if (needsReassign) {
+                    const unassignRes = await ordersService.unassignMaster(targetId, user.id, 'dispatcher_reassign');
+                    if (!unassignRes.success) {
+                        showToast?.(TRANSLATIONS[language].toastAssignFail, 'error');
+                        setActionLoading(false);
+                        return;
+                    }
+                }
                 const result = await ordersService.forceAssignMaster(targetId, master.id, 'Dispatcher assignment');
                 if (result.success) {
                     showToast?.(TRANSLATIONS[language].toastMasterAssigned, 'success');
@@ -789,7 +803,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     const handleLogout = async () => {
         const doLogout = async () => {
             try {
-                await authService.logoutUser();
+                await logout({ scope: 'local' });
             } catch (e) {
                 console.error('Logout failed', e);
             } finally {
@@ -998,9 +1012,25 @@ export default function DispatcherDashboard({ navigation, route }) {
                 </TouchableOpacity>
                 <Text style={[styles.headerTitle, !isDark && styles.textDark]}>{activeTab === 'queue' ? TRANSLATIONS[language].ordersQueue : TRANSLATIONS[language].createOrder}</Text>
             </View>
-            <TouchableOpacity onPress={onRefresh} style={[styles.iconBtn, !isDark && styles.btnLight]}>
-                <Text style={[styles.iconText, !isDark && styles.textDark]}>↻</Text>
-            </TouchableOpacity>
+            <View style={styles.headerRight}>
+                <TouchableOpacity
+                    onPress={goBack}
+                    disabled={!canGoBack}
+                    style={[styles.iconBtn, !isDark && styles.btnLight, !canGoBack && { opacity: 0.4 }]}
+                >
+                    <Text style={[styles.iconText, !isDark && styles.textDark]}>{'<'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    onPress={goForward}
+                    disabled={!canGoForward}
+                    style={[styles.iconBtn, !isDark && styles.btnLight, !canGoForward && { opacity: 0.4 }]}
+                >
+                    <Text style={[styles.iconText, !isDark && styles.textDark]}>{'>'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={onRefresh} style={[styles.iconBtn, !isDark && styles.btnLight]}>
+                    <Text style={[styles.iconText, !isDark && styles.textDark]}>↻</Text>
+                </TouchableOpacity>
+            </View>
         </View>
     );
 
@@ -1911,7 +1941,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                         {atLimit && <Text style={styles.masterLimitBadge}>{TRANSLATIONS[language].labelLimitReached || 'Limit reached'}</Text>}
                                     </View>
                                     <Text style={[styles.masterInfo, atLimit && styles.masterInfoDisabled]}>
-                                        {TRANSLATIONS[language].labelRating}: {m.rating} • {activeJobs}/{maxJobs ?? '-'} {TRANSLATIONS[language].labelJobs}
+                                        {activeJobs}/{maxJobs ?? '-'} {TRANSLATIONS[language].labelJobs}
                                     </Text>
                                 </TouchableOpacity>
                             );
@@ -1949,10 +1979,6 @@ export default function DispatcherDashboard({ navigation, route }) {
                             <View style={styles.masterDetailsRow}>
                                 <Text style={styles.masterDetailsLabel}>{TRANSLATIONS[language].prepaidBalance || 'Balance'}</Text>
                                 <Text style={styles.masterDetailsValue}>{masterDetails?.summary?.prepaidBalance ?? 0}c</Text>
-                            </View>
-                            <View style={styles.masterDetailsRow}>
-                                <Text style={styles.masterDetailsLabel}>{TRANSLATIONS[language].labelRating || 'Rating'}</Text>
-                                <Text style={styles.masterDetailsValue}>{masterDetails?.summary?.rating ?? 0}</Text>
                             </View>
                             <View style={styles.masterDetailsRow}>
                                 <Text style={styles.masterDetailsLabel}>{TRANSLATIONS[language].labelJobs || 'Jobs'}</Text>

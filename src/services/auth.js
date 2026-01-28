@@ -7,6 +7,30 @@ import { supabase } from '../lib/supabase';
 
 const LOG_PREFIX = '[AuthService]';
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isAuthInvalidError = (error) => {
+  const message = error?.message?.toLowerCase?.() || '';
+  const status = error?.status;
+  return status === 401
+    || message.includes('jwt expired')
+    || message.includes('invalid jwt')
+    || message.includes('invalid token')
+    || message.includes('auth session missing')
+    || message.includes('token has expired')
+    || message.includes('refresh token');
+};
+
+const isTransientError = (error) => {
+  const message = error?.message?.toLowerCase?.() || '';
+  return message.includes('network request failed')
+    || message.includes('failed to fetch')
+    || message.includes('timeout')
+    || message.includes('temporarily unavailable')
+    || message.includes('econnreset')
+    || message.includes('eai_again');
+};
+
 class AuthService {
   constructor() {
     this.redirects = {
@@ -94,7 +118,7 @@ class AuthService {
   /**
    * Get current logged-in user with full profile
    */
-  async getCurrentUser() {
+  async getCurrentUser(options = {}) {
     console.log(`${LOG_PREFIX} Getting current user...`);
 
     try {
@@ -105,19 +129,36 @@ class AuthService {
         return null;
       }
 
-      const { data: profile, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', session.user.id)
-        .single();
+      const retries = Number.isInteger(options.retries) ? options.retries : 0;
+      const retryDelayMs = Number.isInteger(options.retryDelayMs) ? options.retryDelayMs : 300;
+      let attempt = 0;
 
-      if (error || !profile) {
-        console.error(`${LOG_PREFIX} Profile fetch error:`, error?.message);
+      while (attempt <= retries) {
+        const { data: profile, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+
+        if (!error && profile) {
+          console.log(`${LOG_PREFIX} Current user: ${profile.full_name} (${profile.role})`);
+          return { ...session.user, ...profile };
+        }
+
+        if (error) {
+          console.error(`${LOG_PREFIX} Profile fetch error:`, error?.message);
+          if (isAuthInvalidError(error)) {
+            await supabase.auth.signOut({ scope: 'local' });
+            return null;
+          }
+          if (attempt < retries && isTransientError(error)) {
+            attempt += 1;
+            await sleep(retryDelayMs);
+            continue;
+          }
+        }
         return null;
       }
-
-      console.log(`${LOG_PREFIX} Current user: ${profile.full_name} (${profile.role})`);
-      return { ...session.user, ...profile };
     } catch (error) {
       console.error(`${LOG_PREFIX} getCurrentUser error:`, error);
       return null;
@@ -127,16 +168,24 @@ class AuthService {
   /**
    * Logout user
    */
-  async logoutUser() {
+  async logoutUser(options = {}) {
     console.log(`${LOG_PREFIX} Logging out...`);
 
     try {
-      const { error } = await supabase.auth.signOut();
+      const scope = options.scope || 'local';
+      const { error } = await supabase.auth.signOut({ scope });
       if (error) throw error;
       console.log(`${LOG_PREFIX} Logout successful`);
       return { success: true };
     } catch (error) {
       console.error(`${LOG_PREFIX} Logout error:`, error);
+      if (options.scope && options.scope !== 'local') {
+        try {
+          await supabase.auth.signOut({ scope: 'local' });
+        } catch (localError) {
+          console.error(`${LOG_PREFIX} Logout local fallback error:`, localError);
+        }
+      }
       return { success: false, message: error.message };
     }
   }
