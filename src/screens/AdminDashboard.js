@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Admin Dashboard - V5 High Fidelity
  * Replicates the "Deep Navy" web dashboard look with sidebar navigation and rich charts.
  */
@@ -36,7 +36,6 @@ import earningsService from '../services/earnings';
 import { useToast } from '../contexts/ToastContext';
 import { useLocalization } from '../contexts/LocalizationContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useNavHistory } from '../contexts/NavigationHistoryContext';
 
 // Components - Removed external Sidebar, using inline hamburger
 import { StatCard } from '../components/ui/StatCard';
@@ -55,6 +54,193 @@ const sanitizeNumberInput = (value) => {
     const cleaned = String(value).replace(/[^0-9.]/g, '');
     const parts = cleaned.split('.');
     return parts.length <= 1 ? cleaned : `${parts[0]}.${parts.slice(1).join('')}`;
+};
+
+const formatNumber = (value) => (Number.isFinite(value) ? Number(value).toLocaleString() : '—');
+const formatMoney = (value) => (Number.isFinite(value) ? `${Math.round(value).toLocaleString()}` : '—');
+const formatPercent = (value) => (Number.isFinite(value) ? `${Math.round(value * 100)}%` : '—');
+const hoursSince = (dateValue) => {
+    if (!dateValue) return null;
+    const ts = new Date(dateValue).getTime();
+    if (Number.isNaN(ts)) return null;
+    return (Date.now() - ts) / 3600000;
+};
+const normalizeStatus = (status) => String(status || '').toLowerCase();
+const COMPLETED_STATUSES = new Set(['completed', 'confirmed']);
+const CANCELED_STATUSES = new Set(['canceled', 'cancelled', 'canceled_by_client', 'canceled_by_master', 'canceled_by_admin']);
+const getAnalyticsColumns = () => {
+    if (SCREEN_WIDTH >= 1024) return 3;
+    if (SCREEN_WIDTH >= 768) return 2;
+    return 1;
+};
+
+const AnalyticsMetricCard = ({ label, value, subLabel, onPress, isDark, sparkData }) => (
+    <TouchableOpacity
+        style={[styles.analyticsMetricCard, !isDark && styles.cardLight]}
+        onPress={onPress}
+        activeOpacity={onPress ? 0.8 : 1}
+    >
+        <View style={styles.analyticsMetricTopRow}>
+            <View style={{ flex: 1 }}>
+                <Text style={[styles.analyticsMetricLabel, { color: isDark ? '#94a3b8' : '#64748b' }]}>{label}</Text>
+                <Text style={[styles.analyticsMetricValue, !isDark && styles.textDark]}>{value}</Text>
+            </View>
+            {sparkData?.length ? <MiniBars data={sparkData} isDark={isDark} height={22} barWidth={5} /> : null}
+        </View>
+        {subLabel ? (
+            <Text style={[styles.analyticsMetricSub, { color: isDark ? '#94a3b8' : '#64748b' }]}>{subLabel}</Text>
+        ) : null}
+    </TouchableOpacity>
+);
+
+const AnalyticsListCard = ({ title, items, emptyLabel, onPress, isDark, actionLabel = 'View' }) => (
+    <TouchableOpacity
+        style={[styles.analyticsListCard, !isDark && styles.cardLight]}
+        onPress={onPress}
+        activeOpacity={onPress ? 0.8 : 1}
+    >
+        <View style={styles.analyticsListHeader}>
+            <Text style={[styles.analyticsListTitle, !isDark && styles.textDark]}>{title}</Text>
+            {onPress ? (
+                <Text style={[styles.analyticsListAction, { color: '#3b82f6' }]}>{actionLabel}</Text>
+            ) : null}
+        </View>
+        {items?.length ? (
+            items.slice(0, 4).map((item, idx) => (
+                <View key={`${item.label}-${idx}`} style={styles.analyticsListItem}>
+                    <View style={{ flex: 1 }}>
+                        <Text style={[styles.analyticsListLabel, { color: isDark ? '#cbd5e1' : '#0f172a' }]} numberOfLines={1}>{item.label}</Text>
+                        {Number.isFinite(item.ratio) && (
+                            <View style={styles.analyticsListBar}>
+                                <View style={[styles.analyticsListBarFill, { width: `${Math.min(100, Math.round(item.ratio * 100))}%` }]} />
+                            </View>
+                        )}
+                    </View>
+                    <Text style={[styles.analyticsListValue, { color: isDark ? '#fff' : '#0f172a' }]}>{item.value}</Text>
+                </View>
+            ))
+        ) : (
+            <Text style={[styles.analyticsListEmpty, { color: isDark ? '#94a3b8' : '#64748b' }]}>{emptyLabel}</Text>
+        )}
+    </TouchableOpacity>
+);
+
+const MiniBars = ({ data = [], isDark, height = 34, barWidth = 8 }) => {
+    const max = Math.max(...data, 1);
+    return (
+        <View style={styles.analyticsMiniBars}>
+            {data.map((value, idx) => {
+                const barHeight = 4 + Math.round((value / max) * (height - 6));
+                return (
+                    <View key={`bar-${idx}`} style={[styles.analyticsMiniBarTrack, { height, width: barWidth + 2 }]}>
+                        <View
+                            style={[
+                                styles.analyticsMiniBar,
+                                { height: barHeight, backgroundColor: isDark ? '#3b82f6' : '#2563eb', width: barWidth },
+                            ]}
+                        />
+                    </View>
+                );
+            })}
+        </View>
+    );
+};
+
+const DualMiniBars = ({ seriesA = [], seriesB = [], isDark }) => {
+    const max = Math.max(...seriesA, ...seriesB, 1);
+    return (
+        <View style={styles.analyticsDualBars}>
+            {seriesA.map((value, idx) => {
+                const secondary = seriesB[idx] || 0;
+                const heightA = 4 + Math.round((value / max) * 28);
+                const heightB = 4 + Math.round((secondary / max) * 28);
+                return (
+                    <View key={`dual-${idx}`} style={styles.analyticsDualBarTrack}>
+                        <View style={[styles.analyticsDualBarPrimary, { height: heightA, backgroundColor: isDark ? '#3b82f6' : '#2563eb' }]} />
+                        <View style={[styles.analyticsDualBarSecondary, { height: heightB, backgroundColor: isDark ? '#22c55e' : '#16a34a' }]} />
+                    </View>
+                );
+            })}
+        </View>
+    );
+};
+
+const StatusStrip = ({ segments = [], isDark }) => {
+    const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
+    return (
+        <View>
+            <View style={styles.analyticsStatusStrip}>
+                {segments.map((seg) => (
+                    <View
+                        key={seg.label}
+                        style={[
+                            styles.analyticsStatusSegment,
+                            { flex: Math.max(seg.value, 1), backgroundColor: seg.color },
+                        ]}
+                    />
+                ))}
+            </View>
+            <View style={styles.analyticsStatusLegend}>
+                {segments.map((seg) => (
+                    <View key={`${seg.label}-legend`} style={styles.analyticsStatusLegendItem}>
+                        <View style={[styles.analyticsStatusDot, { backgroundColor: seg.color }]} />
+                        <Text style={[styles.analyticsStatusLegendText, { color: isDark ? '#cbd5e1' : '#0f172a' }]}>{seg.label}</Text>
+                        <Text style={[styles.analyticsStatusLegendValue, { color: isDark ? '#94a3b8' : '#64748b' }]}>
+                            {Math.round((seg.value / total) * 100)}%
+                        </Text>
+                    </View>
+                ))}
+            </View>
+        </View>
+    );
+};
+
+const FunnelBars = ({ steps = [], isDark }) => {
+    const max = Math.max(...steps.map(step => step.count), 1);
+    return (
+        <View style={styles.analyticsFunnelRow}>
+            {steps.map(step => {
+                const height = 10 + Math.round((step.count / max) * 50);
+                return (
+                    <View key={step.label} style={styles.analyticsFunnelItem}>
+                        <View style={[styles.analyticsFunnelBar, { height, backgroundColor: isDark ? '#3b82f6' : '#2563eb' }]} />
+                        <Text style={[styles.analyticsFunnelLabel, { color: isDark ? '#cbd5e1' : '#0f172a' }]} numberOfLines={1}>{step.label}</Text>
+                        <Text style={[styles.analyticsFunnelValue, { color: isDark ? '#94a3b8' : '#64748b' }]}>{step.count}</Text>
+                    </View>
+                );
+            })}
+        </View>
+    );
+};
+
+const LabeledBarChart = ({ title, series, labels, formatter, isDark, color = '#3b82f6', subtitle }) => {
+    const max = Math.max(...series, 1);
+    return (
+        <View style={[styles.analyticsChartCard, !isDark && styles.cardLight]}>
+            <View style={styles.analyticsChartHeader}>
+                <Text style={[styles.analyticsChartTitle, !isDark && styles.textDark]}>{title}</Text>
+                {subtitle ? <Text style={[styles.analyticsChartSubtitle, !isDark && styles.textSecondary]}>{subtitle}</Text> : null}
+            </View>
+            <View style={styles.analyticsChartBars}>
+                {series.map((value, idx) => {
+                    const height = 8 + Math.round((value / max) * 70);
+                    return (
+                        <View key={`chart-${idx}`} style={styles.analyticsChartColumn}>
+                            <Text style={[styles.analyticsChartValue, !isDark && styles.textDark]} numberOfLines={1}>
+                                {formatter(value)}
+                            </Text>
+                            <View style={styles.analyticsChartTrack}>
+                                <View style={[styles.analyticsChartFill, { height, backgroundColor: color }]} />
+                            </View>
+                            <Text style={[styles.analyticsChartLabel, !isDark && styles.textSecondary]} numberOfLines={1}>
+                                {labels[idx]}
+                            </Text>
+                        </View>
+                    );
+                })}
+            </View>
+        </View>
+    );
 };
 
 
@@ -110,15 +296,23 @@ export default function AdminDashboard({ navigation }) {
     const { translations, language, cycleLanguage, t } = useLocalization();
     const TRANSLATIONS = translations[language] || translations['en'] || {};
     const { logout } = useAuth();
-    const { canGoBack, canGoForward, goBack, goForward } = useNavHistory();
 
     // UI State
-    const [activeTab, setActiveTab] = useState('overview');
+    const [activeTab, setActiveTab] = useState('analytics');
     const [isDark, setIsDark] = useState(true);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [stats, setStats] = useState({});
     const [commissionStats, setCommissionStats] = useState({});
+    const [analyticsRange, setAnalyticsRange] = useState('30d');
+    const [analyticsGranularity, setAnalyticsGranularity] = useState('day');
+    const [analyticsSection, setAnalyticsSection] = useState('overview');
+    const [analyticsFilters, setAnalyticsFilters] = useState({ urgency: 'all', service: 'all', area: 'all' });
+    const [analyticsCustomRange, setAnalyticsCustomRange] = useState({ start: null, end: null });
+    const [showAnalyticsStartPicker, setShowAnalyticsStartPicker] = useState(false);
+    const [showAnalyticsEndPicker, setShowAnalyticsEndPicker] = useState(false);
+    const [analyticsDetail, setAnalyticsDetail] = useState({ type: null });
+    const [analyticsUpdatedAt, setAnalyticsUpdatedAt] = useState(null);
 
     // Data State
     const [orders, setOrders] = useState([]);
@@ -240,6 +434,430 @@ export default function AdminDashboard({ navigation }) {
             label: st[`name_${language}`] || st.name_en || st.name_ru || st.name_kg || st.code || st.id,
         })),
     ]), [serviceTypes, language]);
+
+    const analyticsAreaOptions = useMemo(() => {
+        const areas = Array.from(new Set(orders.map(o => o.area).filter(Boolean))).sort();
+        return [
+            { id: 'all', label: TRANSLATIONS.filterAll || 'All' },
+            ...areas.map(area => ({ id: area, label: area })),
+        ];
+    }, [orders, language]);
+
+    const analyticsRangeWindow = useMemo(() => {
+        if (analyticsRange === 'all') return null;
+        const now = new Date();
+        if (analyticsRange === 'custom') {
+            if (!analyticsCustomRange.start || !analyticsCustomRange.end) return null;
+            const start = new Date(analyticsCustomRange.start);
+            const end = new Date(analyticsCustomRange.end);
+            start.setHours(0, 0, 0, 0);
+            end.setHours(23, 59, 59, 999);
+            return { start, end };
+        }
+        const start = new Date(now);
+        if (analyticsRange === 'today') start.setHours(0, 0, 0, 0);
+        else if (analyticsRange === '7d') start.setDate(start.getDate() - 7);
+        else if (analyticsRange === '30d') start.setDate(start.getDate() - 30);
+        else if (analyticsRange === '90d') start.setDate(start.getDate() - 90);
+        return { start, end: now };
+    }, [analyticsRange, analyticsCustomRange]);
+
+    const analyticsOrders = useMemo(() => {
+        return orders.filter(order => {
+            if (!order) return false;
+            if (analyticsFilters.urgency !== 'all' && order.urgency !== analyticsFilters.urgency) return false;
+            if (analyticsFilters.service !== 'all' && order.service_type !== analyticsFilters.service) return false;
+            if (analyticsFilters.area !== 'all' && order.area !== analyticsFilters.area) return false;
+            if (!analyticsRangeWindow) return true;
+            const stamp = order.completed_at || order.confirmed_at || order.updated_at || order.created_at;
+            if (!stamp) return true;
+            const ts = new Date(stamp);
+            if (Number.isNaN(ts.getTime())) return true;
+            return ts >= analyticsRangeWindow.start && ts <= analyticsRangeWindow.end;
+        });
+    }, [orders, analyticsFilters, analyticsRangeWindow]);
+
+    const analyticsStats = useMemo(() => {
+        const totalOrders = analyticsOrders.length;
+        const completedOrders = analyticsOrders.filter(o => COMPLETED_STATUSES.has(normalizeStatus(o.status))).length;
+        const canceledOrders = analyticsOrders.filter(o => CANCELED_STATUSES.has(normalizeStatus(o.status))).length;
+        const openOrders = analyticsOrders.filter(o => !COMPLETED_STATUSES.has(normalizeStatus(o.status)) && !CANCELED_STATUSES.has(normalizeStatus(o.status)));
+        const gmv = analyticsOrders.reduce((sum, o) => {
+            if (!COMPLETED_STATUSES.has(normalizeStatus(o.status))) return sum;
+            const price = Number(o.final_price ?? o.initial_price ?? o.callout_fee ?? 0);
+            return sum + (Number.isFinite(price) ? price : 0);
+        }, 0);
+        const avgTicket = completedOrders ? gmv / completedOrders : 0;
+        const cancelRate = totalOrders ? canceledOrders / totalOrders : 0;
+        const completionRate = totalOrders ? completedOrders / totalOrders : 0;
+        const urgentCount = analyticsOrders.filter(o => o.urgency === 'urgent').length;
+        const emergencyCount = analyticsOrders.filter(o => o.urgency === 'emergency').length;
+        const plannedCount = analyticsOrders.filter(o => o.urgency === 'planned').length;
+        const urgentShare = totalOrders ? (urgentCount + emergencyCount) / totalOrders : 0;
+        const openAges = openOrders.map(o => hoursSince(o.created_at)).filter(v => Number.isFinite(v));
+        const avgOpenAge = openAges.length ? openAges.reduce((a, b) => a + b, 0) / openAges.length : null;
+        const oldestOpenAge = openAges.length ? Math.max(...openAges) : null;
+        const openOlder24h = openAges.filter(age => age > 24).length;
+        const openOlder48h = openAges.filter(age => age > 48).length;
+        const claimedCount = analyticsOrders.filter(o => normalizeStatus(o.status) === 'claimed').length;
+        const startedCount = analyticsOrders.filter(o => normalizeStatus(o.status) === 'started').length;
+        const inProgress = claimedCount + startedCount;
+        const reopenedCount = analyticsOrders.filter(o => normalizeStatus(o.status) === 'reopened').length;
+        const reopenRate = totalOrders ? reopenedCount / totalOrders : 0;
+        const activeJobs = analyticsOrders.filter(o => ['claimed', 'started', 'wip'].includes(normalizeStatus(o.status))).length;
+        const availablePool = analyticsOrders.filter(o => ['placed', 'reopened'].includes(normalizeStatus(o.status))).length;
+        const statusBreakdown = {
+            open: availablePool,
+            active: activeJobs,
+            completed: completedOrders,
+            canceled: canceledOrders,
+        };
+
+        const totalBalances = masters.reduce((sum, m) => sum + (m.prepaid_balance || 0), 0);
+        const lowBalanceCount = masters.filter(m => (m.prepaid_balance || 0) < 500).length;
+
+        return {
+            totalOrders,
+            completedOrders,
+            canceledOrders,
+            openOrders: openOrders.length,
+            gmv,
+            avgTicket,
+            cancelRate,
+            completionRate,
+            urgentCount,
+            emergencyCount,
+            plannedCount,
+            urgentShare,
+            avgOpenAge,
+            oldestOpenAge,
+            openOlder24h,
+            openOlder48h,
+            claimedCount,
+            startedCount,
+            inProgress,
+            reopenedCount,
+            reopenRate,
+            activeJobs,
+            availablePool,
+            commissionCollected: Number(commissionStats.totalCollected || 0),
+            commissionOutstanding: Number(commissionStats.totalOutstanding || 0),
+            totalBalances,
+            lowBalanceCount,
+            statusBreakdown,
+        };
+    }, [analyticsOrders, commissionStats, masters]);
+
+    const analyticsLists = useMemo(() => {
+        const buildTopList = (entries) => {
+            const sorted = [...entries].sort((a, b) => b.count - a.count);
+            const sliced = sorted.slice(0, 6);
+            const max = Math.max(...sliced.map(item => item.count), 1);
+            return sliced.map(item => ({
+                label: item.label,
+                value: formatNumber(item.count),
+                ratio: item.count / max,
+                count: item.count,
+            }));
+        };
+
+        const areaCounts = {};
+        const serviceCounts = {};
+        const urgencyCounts = { emergency: 0, urgent: 0, planned: 0 };
+        analyticsOrders.forEach(order => {
+            if (order.area) areaCounts[order.area] = (areaCounts[order.area] || 0) + 1;
+            if (order.service_type) serviceCounts[order.service_type] = (serviceCounts[order.service_type] || 0) + 1;
+            if (order.urgency && urgencyCounts[order.urgency] !== undefined) urgencyCounts[order.urgency] += 1;
+        });
+
+        const topAreas = buildTopList(Object.entries(areaCounts).map(([label, count]) => ({ label, count })));
+        const topServices = buildTopList(Object.entries(serviceCounts).map(([label, count]) => ({
+            label: getServiceLabel(label, t),
+            count,
+        })));
+        const urgencyItems = [
+            { label: TRANSLATIONS.urgencyEmergency || 'Emergency', count: urgencyCounts.emergency },
+            { label: TRANSLATIONS.urgencyUrgent || 'Urgent', count: urgencyCounts.urgent },
+            { label: TRANSLATIONS.urgencyPlanned || 'Planned', count: urgencyCounts.planned },
+        ];
+        const maxUrgency = Math.max(...urgencyItems.map(item => item.count), 1);
+        const urgencyMix = urgencyItems.map(item => ({
+            label: item.label,
+            value: formatNumber(item.count),
+            ratio: item.count / maxUrgency,
+            count: item.count,
+        }));
+
+        const cancelCounts = {};
+        analyticsOrders.forEach(order => {
+            if (!CANCELED_STATUSES.has(normalizeStatus(order.status))) return;
+            const code = order.cancel_reason_code || order.cancel_reason || order.cancellation_reason || 'Unknown';
+            const label = code || (TRANSLATIONS.analyticsUnknown || 'Unknown');
+            cancelCounts[label] = (cancelCounts[label] || 0) + 1;
+        });
+        const cancelReasons = buildTopList(Object.entries(cancelCounts).map(([label, count]) => ({ label, count })));
+
+        const backlogOrders = analyticsOrders
+            .filter(order => !COMPLETED_STATUSES.has(normalizeStatus(order.status)) && !CANCELED_STATUSES.has(normalizeStatus(order.status)))
+            .map(order => {
+                const age = hoursSince(order.created_at);
+                return {
+                    label: `${getServiceLabel(order.service_type, t)} • ${order.area || '-'}`,
+                    value: age ? `${age.toFixed(1)}h` : '—',
+                    subLabel: order.urgency ? (TRANSLATIONS[`urgency${order.urgency.charAt(0).toUpperCase() + order.urgency.slice(1)}`] || order.urgency) : null,
+                    age: age ?? 0,
+                };
+            })
+            .sort((a, b) => b.age - a.age)
+            .slice(0, 12);
+
+        const funnelStatuses = ['placed', 'claimed', 'started', 'completed', 'confirmed', 'canceled'];
+        const funnel = funnelStatuses.map(status => {
+            const count = analyticsOrders.filter(order => normalizeStatus(order.status) === status || (status === 'canceled' && CANCELED_STATUSES.has(normalizeStatus(order.status)))).length;
+            return {
+                label: getOrderStatusLabel(status, t) || status,
+                value: formatNumber(count),
+                ratio: count,
+                count,
+            };
+        });
+        const maxFunnel = Math.max(...funnel.map(item => item.count), 1);
+        const funnelWithRatio = funnel.map(item => ({
+            ...item,
+            ratio: item.count / maxFunnel,
+        }));
+
+        return {
+            topAreas,
+            topServices,
+            urgencyMix,
+            cancelReasons,
+            backlogOrders,
+            funnel: funnelWithRatio,
+        };
+    }, [analyticsOrders, t, TRANSLATIONS]);
+
+    const analyticsDailySeries = useMemo(() => {
+        const ordersSeries = Array(7).fill(0);
+        const completedSeries = Array(7).fill(0);
+        const revenueSeries = Array(7).fill(0);
+        const commissionSeries = Array(7).fill(0);
+        const commissionRate = Number(settings?.commission_rate) || 0;
+        const now = new Date();
+        analyticsOrders.forEach(order => {
+            const stamp = order.created_at || order.updated_at;
+            if (!stamp) return;
+            const ts = new Date(stamp);
+            if (Number.isNaN(ts.getTime())) return;
+            const diffDays = Math.floor((now.getTime() - ts.getTime()) / 86400000);
+            if (diffDays >= 0 && diffDays < 7) {
+                const idx = 6 - diffDays;
+                ordersSeries[idx] += 1;
+                if (COMPLETED_STATUSES.has(normalizeStatus(order.status))) {
+                    completedSeries[idx] += 1;
+                    const price = Number(order.final_price ?? order.initial_price ?? 0);
+                    if (Number.isFinite(price)) {
+                        revenueSeries[idx] += price;
+                        commissionSeries[idx] += price * commissionRate;
+                    }
+                }
+            }
+        });
+        return { ordersSeries, completedSeries, revenueSeries, commissionSeries, commissionRate };
+    }, [analyticsOrders, settings]);
+
+    const analyticsChartSeries = useMemo(() => {
+        const locale = language === 'ru' ? 'ru-RU' : language === 'kg' ? 'ky-KG' : 'en-US';
+        const now = new Date();
+        const commissionRate = Number(settings?.commission_rate) || 0;
+
+        const startOfWeek = (date) => {
+            const d = new Date(date);
+            const day = d.getDay();
+            const diff = day === 0 ? -6 : 1 - day;
+            d.setDate(d.getDate() + diff);
+            d.setHours(0, 0, 0, 0);
+            return d;
+        };
+
+        const buildBuckets = () => {
+            const buckets = [];
+            if (analyticsGranularity === 'hour') {
+                const base = new Date(now);
+                base.setMinutes(0, 0, 0);
+                for (let i = 11; i >= 0; i -= 1) {
+                    const start = new Date(base);
+                    start.setHours(base.getHours() - i);
+                    const end = new Date(start);
+                    end.setHours(start.getHours() + 1);
+                    end.setMilliseconds(end.getMilliseconds() - 1);
+                    buckets.push({
+                        start: start.getTime(),
+                        end: end.getTime(),
+                        label: start.toLocaleTimeString(locale, { hour: '2-digit' }),
+                    });
+                }
+                return buckets;
+            }
+            if (analyticsGranularity === 'week') {
+                const base = startOfWeek(now);
+                for (let i = 7; i >= 0; i -= 1) {
+                    const start = new Date(base);
+                    start.setDate(base.getDate() - i * 7);
+                    const end = new Date(start);
+                    end.setDate(start.getDate() + 7);
+                    end.setMilliseconds(end.getMilliseconds() - 1);
+                    buckets.push({
+                        start: start.getTime(),
+                        end: end.getTime(),
+                        label: start.toLocaleDateString(locale, { month: 'short', day: 'numeric' }),
+                    });
+                }
+                return buckets;
+            }
+            if (analyticsGranularity === 'month') {
+                for (let i = 11; i >= 0; i -= 1) {
+                    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                    const end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+                    end.setMilliseconds(end.getMilliseconds() - 1);
+                    buckets.push({
+                        start: start.getTime(),
+                        end: end.getTime(),
+                        label: start.toLocaleDateString(locale, { month: 'short' }),
+                    });
+                }
+                return buckets;
+            }
+            if (analyticsGranularity === 'quarter') {
+                for (let i = 7; i >= 0; i -= 1) {
+                    const base = new Date(now.getFullYear(), now.getMonth() - i * 3, 1);
+                    const quarter = Math.floor(base.getMonth() / 3) + 1;
+                    const start = new Date(base.getFullYear(), (quarter - 1) * 3, 1);
+                    const end = new Date(start.getFullYear(), start.getMonth() + 3, 1);
+                    end.setMilliseconds(end.getMilliseconds() - 1);
+                    buckets.push({
+                        start: start.getTime(),
+                        end: end.getTime(),
+                        label: `Q${quarter} ${String(start.getFullYear()).slice(-2)}`,
+                    });
+                }
+                return buckets;
+            }
+            if (analyticsGranularity === 'year') {
+                for (let i = 4; i >= 0; i -= 1) {
+                    const start = new Date(now.getFullYear() - i, 0, 1);
+                    const end = new Date(start.getFullYear() + 1, 0, 1);
+                    end.setMilliseconds(end.getMilliseconds() - 1);
+                    buckets.push({
+                        start: start.getTime(),
+                        end: end.getTime(),
+                        label: String(start.getFullYear()),
+                    });
+                }
+                return buckets;
+            }
+
+            // default: day
+            for (let i = 6; i >= 0; i -= 1) {
+                const start = new Date(now);
+                start.setDate(now.getDate() - i);
+                start.setHours(0, 0, 0, 0);
+                const end = new Date(start);
+                end.setDate(start.getDate() + 1);
+                end.setMilliseconds(end.getMilliseconds() - 1);
+                buckets.push({
+                    start: start.getTime(),
+                    end: end.getTime(),
+                    label: start.toLocaleDateString(locale, { month: 'short', day: 'numeric' }),
+                });
+            }
+            return buckets;
+        };
+
+        const buckets = buildBuckets();
+        const ordersSeries = Array(buckets.length).fill(0);
+        const completedSeries = Array(buckets.length).fill(0);
+        const revenueSeries = Array(buckets.length).fill(0);
+        const commissionSeries = Array(buckets.length).fill(0);
+
+        const findBucketIndex = (timestamp) => buckets.findIndex(bucket => timestamp >= bucket.start && timestamp <= bucket.end);
+
+        analyticsOrders.forEach(order => {
+            const stamp = order.created_at || order.updated_at;
+            if (stamp) {
+                const ts = new Date(stamp).getTime();
+                const idx = findBucketIndex(ts);
+                if (idx >= 0) ordersSeries[idx] += 1;
+            }
+            if (COMPLETED_STATUSES.has(normalizeStatus(order.status))) {
+                const completedStamp = order.completed_at || order.confirmed_at || order.updated_at || order.created_at;
+                if (!completedStamp) return;
+                const ts = new Date(completedStamp).getTime();
+                const idx = findBucketIndex(ts);
+                if (idx >= 0) {
+                    completedSeries[idx] += 1;
+                    const price = Number(order.final_price ?? order.initial_price ?? 0);
+                    if (Number.isFinite(price)) {
+                        revenueSeries[idx] += price;
+                        commissionSeries[idx] += price * commissionRate;
+                    }
+                }
+            }
+        });
+
+        return {
+            labels: buckets.map(bucket => bucket.label),
+            ordersSeries,
+            completedSeries,
+            revenueSeries,
+            commissionSeries,
+        };
+    }, [analyticsOrders, analyticsGranularity, settings, language]);
+
+    const analyticsPeople = useMemo(() => {
+        const map = {};
+        analyticsOrders.forEach(order => {
+            const masterId = order.master?.id || order.master_id;
+            if (!masterId) return;
+            const key = String(masterId);
+            if (!map[key]) {
+                map[key] = {
+                    id: masterId,
+                    name: order.master?.full_name || order.master_name || `Master ${masterId}`,
+                    completed: 0,
+                    revenue: 0,
+                };
+            }
+            const entry = map[key];
+            if (COMPLETED_STATUSES.has(normalizeStatus(order.status))) {
+                entry.completed += 1;
+                const price = Number(order.final_price ?? order.initial_price ?? 0);
+                if (Number.isFinite(price)) entry.revenue += price;
+            }
+        });
+        const list = Object.values(map);
+        const byCompleted = [...list].sort((a, b) => b.completed - a.completed);
+        const byRevenue = [...list].sort((a, b) => b.revenue - a.revenue);
+
+        const buildList = (items, valueKey, formatter) => {
+            const max = Math.max(...items.map(item => item[valueKey] || 0), 1);
+            return items.slice(0, 5).map(item => ({
+                label: item.name,
+                value: formatter(item),
+                ratio: (item[valueKey] || 0) / max,
+            }));
+        };
+
+        return {
+            topByCompleted: buildList(byCompleted, 'completed', item => `${item.completed} ${TRANSLATIONS.analyticsJobs || 'jobs'}`),
+            topByRevenue: buildList(byRevenue, 'revenue', item => `${formatMoney(item.revenue)} ${TRANSLATIONS.currency || 'som'}`),
+        };
+    }, [analyticsOrders, TRANSLATIONS]);
+
+    useEffect(() => {
+        if (activeTab !== 'analytics') return;
+        setAnalyticsUpdatedAt(new Date());
+    }, [analyticsOrders.length, analyticsRange, analyticsFilters, analyticsGranularity, activeTab]);
 
     const needsActionOrders = useMemo(() => {
         const now = Date.now();
@@ -1309,7 +1927,7 @@ export default function AdminDashboard({ navigation }) {
 
     // Menu items for admin sidebar
     const MENU_ITEMS = [
-        { key: 'overview', label: TRANSLATIONS.overview || 'Overview', icon: 'bar-chart' },
+        { key: 'analytics', label: TRANSLATIONS.analytics || 'Analytics', icon: 'analytics' },
         { key: 'orders', label: TRANSLATIONS.orders || 'Orders', icon: 'list' },
         { key: 'people', label: TRANSLATIONS.people || 'People', icon: 'people' },
         { key: 'settings', label: TRANSLATIONS.settings || 'Settings', icon: 'settings' },
@@ -1417,20 +2035,6 @@ export default function AdminDashboard({ navigation }) {
                 <Text style={[styles.headerTitle, !isDark && styles.textDark]}>{title}</Text>
             </View>
             <View style={styles.headerRight}>
-                <TouchableOpacity
-                    onPress={goBack}
-                    disabled={!canGoBack}
-                    style={[styles.iconBtn, !isDark && styles.btnLight, !canGoBack && { opacity: 0.4 }]}
-                >
-                    <Ionicons name="chevron-back" size={20} color={isDark ? "#94a3b8" : "#0f172a"} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                    onPress={goForward}
-                    disabled={!canGoForward}
-                    style={[styles.iconBtn, !isDark && styles.btnLight, !canGoForward && { opacity: 0.4 }]}
-                >
-                    <Ionicons name="chevron-forward" size={20} color={isDark ? "#94a3b8" : "#0f172a"} />
-                </TouchableOpacity>
                 <TouchableOpacity onPress={onRefresh} style={[styles.iconBtn, !isDark && styles.btnLight]}>
                     <Text style={[styles.iconText, !isDark && styles.textDark]}>↻</Text>
                 </TouchableOpacity>
@@ -1462,144 +2066,678 @@ export default function AdminDashboard({ navigation }) {
         </View>
     );
 
-    const renderOverview = () => {
-        // Calculate balance stats from masters
-        const totalMasterBalances = masters.reduce((sum, m) => sum + (m.prepaid_balance || 0), 0);
-        const lowBalanceCount = masters.filter(m => (m.prepaid_balance || 0) < 500).length;
+
+
+    const renderAnalytics = () => {
+        const columns = getAnalyticsColumns();
+        const cardWidth = columns === 1 ? '100%' : columns === 2 ? '48%' : '31%';
+        const listWidth = columns === 1 ? '100%' : '48%';
+        const showClearFilters = analyticsFilters.urgency !== 'all' || analyticsFilters.service !== 'all' || analyticsFilters.area !== 'all';
+        const analyticsLocale = language === 'ru' ? 'ru-RU' : language === 'kg' ? 'ky-KG' : 'en-US';
+
+        const rangeOptions = [
+            { key: 'today', label: TRANSLATIONS.filterToday || 'Today' },
+            { key: '7d', label: '7D' },
+            { key: '30d', label: '30D' },
+            { key: '90d', label: '90D' },
+            { key: 'all', label: TRANSLATIONS.filterAll || 'All' },
+            { key: 'custom', label: TRANSLATIONS.filterCustom || 'Custom' },
+        ];
+
+        const granularityOptions = [
+            { key: 'hour', label: TRANSLATIONS.analyticsGranularityHour || 'Hours' },
+            { key: 'day', label: TRANSLATIONS.analyticsGranularityDay || 'Days' },
+            { key: 'week', label: TRANSLATIONS.analyticsGranularityWeek || 'Weeks' },
+            { key: 'month', label: TRANSLATIONS.analyticsGranularityMonth || 'Months' },
+            { key: 'quarter', label: TRANSLATIONS.analyticsGranularityQuarter || 'Quarters' },
+            { key: 'year', label: TRANSLATIONS.analyticsGranularityYear || 'Years' },
+        ];
+
+        const granularityLabel = granularityOptions.find(opt => opt.key === analyticsGranularity)?.label || analyticsGranularity;
+        const chartSubtitle = `${TRANSLATIONS.analyticsViewBy || 'View by'} ${granularityLabel}`;
+
+        const urgencyOptions = URGENCY_OPTIONS.map(opt => ({
+            id: opt.id,
+            label: TRANSLATIONS[opt.label] || opt.label,
+        }));
+
+        const currentUrgencyLabel = urgencyOptions.find(o => o.id === analyticsFilters.urgency)?.label || analyticsFilters.urgency;
+        const currentServiceLabel = serviceFilterOptions.find(o => o.id === analyticsFilters.service)?.label || analyticsFilters.service;
+        const currentAreaLabel = analyticsAreaOptions.find(o => o.id === analyticsFilters.area)?.label || analyticsFilters.area;
+
+        const detailTitleMap = {
+            topAreas: TRANSLATIONS.analyticsTopAreas || 'Top Areas',
+            topServices: TRANSLATIONS.analyticsTopServices || 'Top Services',
+            urgencyMix: TRANSLATIONS.analyticsUrgencyMix || 'Urgency Mix',
+            cancelReasons: TRANSLATIONS.analyticsCancelReasons || 'Cancellation Reasons',
+            backlog: TRANSLATIONS.analyticsBacklog || 'Backlog Orders',
+            funnel: TRANSLATIONS.analyticsOrderFunnel || 'Order Funnel',
+            topPerformersCompleted: TRANSLATIONS.analyticsTopByCompleted || 'Top by Completed Jobs',
+            topPerformersRevenue: TRANSLATIONS.analyticsTopByRevenue || 'Top by Revenue',
+        };
+
+        const detailItemsMap = {
+            topAreas: analyticsLists.topAreas,
+            topServices: analyticsLists.topServices,
+            urgencyMix: analyticsLists.urgencyMix,
+            cancelReasons: analyticsLists.cancelReasons,
+            backlog: analyticsLists.backlogOrders,
+            funnel: analyticsLists.funnel,
+            topPerformersCompleted: analyticsPeople.topByCompleted,
+            topPerformersRevenue: analyticsPeople.topByRevenue,
+        };
+
+        const handleCustomDateChange = (field, event, selectedDate) => {
+            if (Platform.OS !== 'ios') {
+                setShowAnalyticsStartPicker(false);
+                setShowAnalyticsEndPicker(false);
+            }
+            if (!selectedDate) return;
+            setAnalyticsCustomRange(prev => {
+                const next = { ...prev, [field]: selectedDate };
+                if (next.start && next.end && next.start > next.end) {
+                    if (field === 'start') next.end = selectedDate;
+                    else next.start = selectedDate;
+                }
+                return next;
+            });
+        };
+
+        const formatCustomDate = (date) => (
+            date ? date.toLocaleDateString(analyticsLocale) : (TRANSLATIONS.selectDate || 'Select date')
+        );
 
         return (
             <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
-                {renderHeader(TRANSLATIONS.overview || 'Overview')}
+                {renderHeader(TRANSLATIONS.analyticsTitle || 'Analytics')}
 
-                {/* Date Filter */}
-                <DateRangeFilter
-                    value={dashboardFilter}
-                    onChange={setDashboardFilter}
-                    isDark={isDark}
-                    translations={TRANSLATIONS}
-                />
+                <View style={[styles.analyticsFilterCard, !isDark && styles.cardLight]}>
+                    <View style={styles.analyticsFilterHeader}>
+                        <Text style={[styles.analyticsSectionLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.analyticsTimeRange || 'Time Range'}</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.analyticsRangeRow}>
+                            {rangeOptions.map((opt) => (
+                                <TouchableOpacity
+                                    key={opt.key}
+                                    style={[
+                                        styles.analyticsRangeChip,
+                                        analyticsRange === opt.key && styles.analyticsRangeChipActive,
+                                        !isDark && analyticsRange !== opt.key && styles.btnLight,
+                                    ]}
+                                    onPress={() => setAnalyticsRange(opt.key)}
+                                >
+                                    <Text style={[styles.analyticsRangeText, analyticsRange === opt.key && styles.analyticsRangeTextActive]}>
+                                        {opt.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    </View>
 
-                {/* Stats Grid */}
-                <View style={styles.statsGrid}>
-                    <StatCard
-                        label={TRANSLATIONS.totalOrders || 'Total Orders'}
-                        value={stats.totalOrders || 0}
-                        color="#3b82f6"
-                        onPress={() => handleStatClick('total')}
-                        isDark={isDark}
-                    />
-                    <StatCard
-                        label={TRANSLATIONS.activeJobs || 'Active Jobs'}
-                        value={stats.activeJobs || 0}
-                        color="#8b5cf6"
-                        onPress={() => handleStatClick('active')}
-                        isDark={isDark}
-                    />
-                    <StatCard
-                        label={TRANSLATIONS.pending || 'Pending'}
-                        value={stats.placedOrders || 0}
-                        color="#f59e0b"
-                        onPress={() => handleStatClick('pending')}
-                        isDark={isDark}
-                    />
-                    <StatCard
-                        label={TRANSLATIONS.confirmed || 'Confirmed'}
-                        value={stats.confirmedOrders || 0}
-                        color="#22c55e"
-                        onPress={() => handleStatClick('confirmed')}
-                        isDark={isDark}
-                    />
+                    <View style={styles.analyticsFilterRow}>
+                        <TouchableOpacity
+                            style={[
+                                styles.analyticsFilterPill,
+                                analyticsFilters.urgency !== 'all' && styles.analyticsFilterPillActive,
+                                !isDark && styles.analyticsFilterPillLight,
+                            ]}
+                            onPress={() => setPickerModal({
+                                visible: true,
+                                title: TRANSLATIONS.filterUrgency || 'Urgency',
+                                options: [{ id: 'all', label: TRANSLATIONS.filterAll || 'All' }, ...urgencyOptions],
+                                value: analyticsFilters.urgency,
+                                onChange: (v) => setAnalyticsFilters(prev => ({ ...prev, urgency: v })),
+                            })}
+                        >
+                            <View style={styles.analyticsFilterPillRow}>
+                                <Ionicons name="flash-outline" size={14} color={isDark ? '#cbd5e1' : '#0f172a'} />
+                                <Text style={[styles.analyticsFilterPillText, !isDark && styles.textDark]}>{currentUrgencyLabel}</Text>
+                            </View>
+                            <Ionicons name="chevron-down" size={14} color={isDark ? '#64748b' : '#475569'} />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[
+                                styles.analyticsFilterPill,
+                                analyticsFilters.service !== 'all' && styles.analyticsFilterPillActive,
+                                !isDark && styles.analyticsFilterPillLight,
+                            ]}
+                            onPress={() => setPickerModal({
+                                visible: true,
+                                title: TRANSLATIONS.filterService || 'Service',
+                                options: serviceFilterOptions,
+                                value: analyticsFilters.service,
+                                onChange: (v) => setAnalyticsFilters(prev => ({ ...prev, service: v })),
+                            })}
+                        >
+                            <View style={styles.analyticsFilterPillRow}>
+                                <Ionicons name="briefcase-outline" size={14} color={isDark ? '#cbd5e1' : '#0f172a'} />
+                                <Text style={[styles.analyticsFilterPillText, !isDark && styles.textDark]}>{currentServiceLabel}</Text>
+                            </View>
+                            <Ionicons name="chevron-down" size={14} color={isDark ? '#64748b' : '#475569'} />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[
+                                styles.analyticsFilterPill,
+                                analyticsFilters.area !== 'all' && styles.analyticsFilterPillActive,
+                                !isDark && styles.analyticsFilterPillLight,
+                            ]}
+                            onPress={() => setPickerModal({
+                                visible: true,
+                                title: TRANSLATIONS.filterArea || 'Area',
+                                options: analyticsAreaOptions,
+                                value: analyticsFilters.area,
+                                onChange: (v) => setAnalyticsFilters(prev => ({ ...prev, area: v })),
+                            })}
+                        >
+                            <View style={styles.analyticsFilterPillRow}>
+                                <Ionicons name="location-outline" size={14} color={isDark ? '#cbd5e1' : '#0f172a'} />
+                                <Text style={[styles.analyticsFilterPillText, !isDark && styles.textDark]}>{currentAreaLabel}</Text>
+                            </View>
+                            <Ionicons name="chevron-down" size={14} color={isDark ? '#64748b' : '#475569'} />
+                        </TouchableOpacity>
+
+                        {showClearFilters && (
+                            <TouchableOpacity style={styles.analyticsClearBtn} onPress={() => setAnalyticsFilters({ urgency: 'all', service: 'all', area: 'all' })}>
+                                <Text style={styles.analyticsClearBtnText}>{TRANSLATIONS.clear || 'Clear'}</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+
+                    {analyticsRange === 'custom' && (
+                        <View style={styles.analyticsCustomRow}>
+                            <TouchableOpacity
+                                style={[styles.analyticsCustomButton, !isDark && styles.analyticsCustomButtonLight]}
+                                onPress={() => setShowAnalyticsStartPicker(true)}
+                            >
+                                <Text style={styles.analyticsCustomLabel}>{TRANSLATIONS.startDate || 'Start'}</Text>
+                                <Text style={[styles.analyticsCustomValue, !isDark && styles.textDark]}>{formatCustomDate(analyticsCustomRange.start)}</Text>
+                            </TouchableOpacity>
+                            <Text style={[styles.analyticsCustomSeparator, !isDark && styles.textDark]}>→</Text>
+                            <TouchableOpacity
+                                style={[styles.analyticsCustomButton, !isDark && styles.analyticsCustomButtonLight]}
+                                onPress={() => setShowAnalyticsEndPicker(true)}
+                            >
+                                <Text style={styles.analyticsCustomLabel}>{TRANSLATIONS.endDate || 'End'}</Text>
+                                <Text style={[styles.analyticsCustomValue, !isDark && styles.textDark]}>{formatCustomDate(analyticsCustomRange.end)}</Text>
+                            </TouchableOpacity>
+
+                            {showAnalyticsStartPicker && (
+                                <DateTimePicker
+                                    value={analyticsCustomRange.start || new Date()}
+                                    mode="date"
+                                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                    onChange={(e, d) => handleCustomDateChange('start', e, d)}
+                                    maximumDate={new Date()}
+                                />
+                            )}
+
+                            {showAnalyticsEndPicker && (
+                                <DateTimePicker
+                                    value={analyticsCustomRange.end || new Date()}
+                                    mode="date"
+                                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                    onChange={(e, d) => handleCustomDateChange('end', e, d)}
+                                    maximumDate={new Date()}
+                                    minimumDate={analyticsCustomRange.start || undefined}
+                                />
+                            )}
+                        </View>
+                    )}
                 </View>
 
-                {/* Balance Stats Row */}
-                <View style={[styles.statsGrid, { marginTop: 8 }]}>
-                    <StatCard
-                        label={TRANSLATIONS.totalBalances || 'Total Balances'}
-                        value={`${totalMasterBalances.toLocaleString()} сом`}
-                        color="#22c55e"
-                        subtitle={`${masters.length} ${TRANSLATIONS.mastersCount || 'masters'}`}
-                        isDark={isDark}
-                    />
-                    <StatCard
-                        label={TRANSLATIONS.lowBalance || 'Low Balance'}
-                        value={lowBalanceCount}
-                        color="#ef4444"
-                        subtitle={TRANSLATIONS.below500 || 'Below 500 сом'}
-                        onPress={() => { setActiveTab('people'); setPeopleView('masters'); }}
-                        isDark={isDark}
-                    />
-                </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.analyticsSectionTabs}>
+                    {[
+                        { key: 'overview', label: TRANSLATIONS.analyticsOverview || 'Overview' },
+                        { key: 'operations', label: TRANSLATIONS.analyticsOperations || 'Operations' },
+                        { key: 'financial', label: TRANSLATIONS.analyticsFinancial || 'Financial' },
+                        { key: 'quality', label: TRANSLATIONS.analyticsQuality || 'Quality' },
+                        { key: 'people', label: TRANSLATIONS.analyticsPeople || 'People' },
+                    ].map(section => {
+                        const isActive = analyticsSection === section.key;
+                        return (
+                            <TouchableOpacity
+                                key={section.key}
+                                style={[styles.analyticsSectionTab, isActive && styles.analyticsSectionTabActive]}
+                                onPress={() => setAnalyticsSection(section.key)}
+                            >
+                                <Text style={[styles.analyticsSectionTabText, isActive && styles.analyticsSectionTabTextActive]}>
+                                    {section.label}
+                                </Text>
+                            </TouchableOpacity>
+                        );
+                    })}
+                </ScrollView>
 
-                {/* Main Charts Row */}
-                <View style={styles.chartsRow}>
-                    {/* Revenue Trend */}
-                    <View style={[styles.chartCard, !isDark && styles.chartCardLight, { flex: 2, marginRight: 16, minWidth: 350 }]}>
-                        <Text style={[styles.chartTitle, !isDark && styles.textDark]}>{TRANSLATIONS.revenueTrendTitle || 'Revenue Trend'}</Text>
-                        <Text style={styles.chartSubtitle}>{TRANSLATIONS.selectedPeriod || 'Selected Period'}</Text>
+                {(analyticsSection === 'overview' || analyticsSection === 'financial') && (
+                    <View style={styles.analyticsGranularityRow}>
+                        <Text style={[styles.analyticsGranularityLabel, !isDark && styles.textSecondary]}>
+                            {TRANSLATIONS.analyticsViewBy || 'View by'}
+                        </Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.analyticsGranularityChips}>
+                            {granularityOptions.map(opt => {
+                                const isActive = analyticsGranularity === opt.key;
+                                return (
+                                    <TouchableOpacity
+                                        key={opt.key}
+                                        style={[styles.analyticsGranularityChip, isActive && styles.analyticsGranularityChipActive]}
+                                        onPress={() => setAnalyticsGranularity(opt.key)}
+                                    >
+                                        <Text style={[styles.analyticsGranularityText, isActive && styles.analyticsGranularityTextActive]}>{opt.label}</Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </ScrollView>
+                    </View>
+                )}
 
-                        <View style={{ alignItems: 'center' }}>
-                            <BarChart
-                                data={{
-                                    labels: ['6d', '5d', '4d', '3d', '2d', 'Yest', 'Today'],
-                                    datasets: [{
-                                        data: stats.revenueData || [0, 0, 0, 0, 0, 0, 0]
-                                    }]
-                                }}
-                                width={SCREEN_WIDTH > 768 ? SCREEN_WIDTH * 0.45 : SCREEN_WIDTH - 80}
-                                height={220}
-                                yAxisLabel=""
-                                yAxisSuffix=""
-                                chartConfig={{
-                                    backgroundColor: isDark ? '#1e293b' : '#ffffff',
-                                    backgroundGradientFrom: isDark ? '#1e293b' : '#ffffff',
-                                    backgroundGradientTo: isDark ? '#1e293b' : '#ffffff',
-                                    decimalPlaces: 0,
-                                    color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
-                                    labelColor: (opacity = 1) => isDark ? `rgba(148, 163, 184, ${opacity})` : `rgba(15, 23, 42, ${opacity})`,
-                                    barPercentage: 0.7,
-                                    propsForBackgroundLines: {
-                                        strokeWidth: 1,
-                                        stroke: isDark ? '#334155' : '#e2e8f0',
-                                        strokeDasharray: '0',
-                                    },
-                                }}
-                                style={{
-                                    marginVertical: 8,
-                                    borderRadius: 0,
-                                }}
-                                withInnerLines={true}
-                                segments={4}
-                                showValuesOnTopOfBars={true}
-                                fromZero
+                {analyticsSection === 'overview' && (
+                    <View style={styles.analyticsChartGrid}>
+                        <View style={{ width: listWidth }}>
+                            <LabeledBarChart
+                                title={TRANSLATIONS.analyticsDailyOrders || 'Daily Orders'}
+                                subtitle={chartSubtitle}
+                                series={analyticsChartSeries.ordersSeries}
+                                labels={analyticsChartSeries.labels}
+                                formatter={formatNumber}
+                                isDark={isDark}
+                                color="#3b82f6"
+                            />
+                        </View>
+                        <View style={{ width: listWidth }}>
+                            <LabeledBarChart
+                                title={TRANSLATIONS.analyticsDailyGMV || 'Daily GMV'}
+                                subtitle={chartSubtitle}
+                                series={analyticsChartSeries.revenueSeries}
+                                labels={analyticsChartSeries.labels}
+                                formatter={formatMoney}
+                                isDark={isDark}
+                                color="#22c55e"
                             />
                         </View>
                     </View>
+                )}
 
-                    {/* Orders by Service */}
-                    <View style={{ flex: 1, minWidth: 320 }}>
-                        <OrdersByService data={stats.serviceBreakdown || {}} isDark={isDark} translations={TRANSLATIONS} />
+                {analyticsSection === 'financial' && (
+                    <View style={styles.analyticsChartGrid}>
+                        <View style={{ width: listWidth }}>
+                            <LabeledBarChart
+                                title={TRANSLATIONS.analyticsDailyGMV || 'Daily GMV'}
+                                subtitle={chartSubtitle}
+                                series={analyticsChartSeries.revenueSeries}
+                                labels={analyticsChartSeries.labels}
+                                formatter={formatMoney}
+                                isDark={isDark}
+                                color="#22c55e"
+                            />
+                        </View>
+                        <View style={{ width: listWidth }}>
+                            <LabeledBarChart
+                                title={TRANSLATIONS.analyticsDailyCommission || 'Daily Commission'}
+                                subtitle={chartSubtitle}
+                                series={analyticsChartSeries.commissionSeries}
+                                labels={analyticsChartSeries.labels}
+                                formatter={formatMoney}
+                                isDark={isDark}
+                                color="#f59e0b"
+                            />
+                        </View>
+                    </View>
+                )}
+
+                <View style={styles.analyticsVisualGrid}>
+                    <View style={{ width: listWidth }}>
+                        <View style={[styles.analyticsVisualCard, !isDark && styles.cardLight]}>
+                            <Text style={[styles.analyticsVisualTitle, !isDark && styles.textDark]}>
+                                {TRANSLATIONS.analyticsStatusMix || 'Status Mix'}
+                            </Text>
+                            <StatusStrip
+                                segments={[
+                                    { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: analyticsStats.statusBreakdown.open, color: '#38bdf8' },
+                                    { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: analyticsStats.statusBreakdown.active, color: '#3b82f6' },
+                                    { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: analyticsStats.statusBreakdown.completed, color: '#22c55e' },
+                                    { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: analyticsStats.statusBreakdown.canceled, color: '#ef4444' },
+                                ]}
+                                isDark={isDark}
+                            />
+                        </View>
+                    </View>
+                    <View style={{ width: listWidth }}>
+                        <View style={[styles.analyticsVisualCard, !isDark && styles.cardLight]}>
+                            <Text style={[styles.analyticsVisualTitle, !isDark && styles.textDark]}>
+                                {TRANSLATIONS.analyticsOrderFunnel || 'Order Funnel'}
+                            </Text>
+                            <FunnelBars
+                                steps={(analyticsLists.funnel || []).map(step => ({ label: step.label, count: step.count || 0 }))}
+                                isDark={isDark}
+                            />
+                        </View>
                     </View>
                 </View>
 
-                {/* Bottom Charts Row */}
-                <View style={styles.chartsRow}>
-                    {/* Order Status Bar Chart */}
-                    <View style={{ flex: 1, marginRight: 16, minWidth: 300 }}>
-                        <StatusChart data={stats.statusBreakdown || {}} isDark={isDark} translations={TRANSLATIONS} />
-                    </View>
+                <View style={styles.analyticsMetricGrid}>
+                    {analyticsSection === 'overview' && (
+                        <>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsTotalOrders || 'Total Orders'}
+                                    value={formatNumber(analyticsStats.totalOrders)}
+                                    subLabel={`${formatPercent(analyticsStats.completionRate)} ${TRANSLATIONS.analyticsCompletionRate || 'completion rate'}`}
+                                    sparkData={analyticsDailySeries.ordersSeries}
+                                    onPress={() => openAnalyticsOrdersModal(TRANSLATIONS.totalOrders || TRANSLATIONS.analyticsTotalOrders || 'Total Orders')}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsCompleted || 'Completed'}
+                                    value={formatNumber(analyticsStats.completedOrders)}
+                                    subLabel={`${formatPercent(analyticsStats.cancelRate)} ${TRANSLATIONS.analyticsCancelRate || 'cancel rate'}`}
+                                    sparkData={analyticsDailySeries.completedSeries}
+                                    onPress={() => openAnalyticsOrdersModal(TRANSLATIONS.analyticsCompleted || 'Completed', o => COMPLETED_STATUSES.has(normalizeStatus(o.status)))}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsOpenBacklog || 'Open Backlog'}
+                                    value={formatNumber(analyticsStats.openOrders)}
+                                    subLabel={`${formatNumber(analyticsStats.openOlder24h)} ${TRANSLATIONS.analyticsOlder24h || 'older than 24h'}`}
+                                    onPress={() => setAnalyticsDetail({ type: 'backlog' })}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsGMVFull || 'Gross Merchandise Value (GMV)'}
+                                    value={formatMoney(analyticsStats.gmv)}
+                                    subLabel={`${TRANSLATIONS.analyticsAvgOrderValue || 'Average Order Value'} ${formatMoney(analyticsStats.avgTicket)}`}
+                                    sparkData={analyticsDailySeries.revenueSeries}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsActiveJobs || 'Active Jobs'}
+                                    value={formatNumber(analyticsStats.activeJobs)}
+                                    subLabel={`${formatPercent(analyticsStats.urgentShare)} ${TRANSLATIONS.analyticsUrgentShare || 'urgent share'}`}
+                                    isDark={isDark}
+                                />
+                            </View>
+                        </>
+                    )}
 
-                    {/* Commission Donut */}
-                    <View style={{ flex: 1, minWidth: 300 }}>
-                        <CommissionWidget
-                            collected={commissionStats.totalCollected || 0}
-                            outstanding={commissionStats.totalOutstanding || 0}
-                            isDark={isDark}
-                            translations={TRANSLATIONS}
-                        />
-                    </View>
+                    {analyticsSection === 'operations' && (
+                        <>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsAvailablePool || 'Available Pool'}
+                                    value={formatNumber(analyticsStats.availablePool)}
+                                    subLabel={`${formatNumber(analyticsStats.claimedCount)} ${TRANSLATIONS.analyticsClaimed || 'claimed'}`}
+                                    onPress={() => openAnalyticsOrdersModal(TRANSLATIONS.analyticsAvailablePool || 'Available Pool', o => ['placed', 'reopened'].includes(normalizeStatus(o.status)))}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsInProgress || 'In Progress'}
+                                    value={formatNumber(analyticsStats.inProgress)}
+                                    subLabel={`${formatNumber(analyticsStats.startedCount)} ${TRANSLATIONS.analyticsStarted || 'started'}`}
+                                    onPress={() => openAnalyticsOrdersModal(TRANSLATIONS.analyticsInProgress || 'In Progress', o => ['claimed', 'started'].includes(normalizeStatus(o.status)))}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsOldestOpen || 'Oldest Open'}
+                                    value={analyticsStats.oldestOpenAge ? `${analyticsStats.oldestOpenAge.toFixed(1)}h` : '—'}
+                                    subLabel={`${TRANSLATIONS.analyticsAvgAge || 'Average Age'} ${analyticsStats.avgOpenAge ? `${analyticsStats.avgOpenAge.toFixed(1)}h` : '—'}`}
+                                    onPress={() => setAnalyticsDetail({ type: 'backlog' })}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsUrgentOrders || 'Urgent Orders'}
+                                    value={formatNumber(analyticsStats.urgentCount)}
+                                    subLabel={`${formatNumber(analyticsStats.emergencyCount)} ${TRANSLATIONS.urgencyEmergency || 'Emergency'}`}
+                                    onPress={() => setAnalyticsDetail({ type: 'urgencyMix' })}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsServiceLevelRisk || 'Service Level Risk'}
+                                    value={formatNumber(analyticsStats.openOlder48h)}
+                                    subLabel={TRANSLATIONS.analyticsOver48h || 'open > 48h'}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsReopened || 'Reopened'}
+                                    value={formatNumber(analyticsStats.reopenedCount)}
+                                    subLabel={`${formatPercent(analyticsStats.reopenRate)} ${TRANSLATIONS.analyticsReopenRate || 'reopen rate'}`}
+                                    isDark={isDark}
+                                />
+                            </View>
+                        </>
+                    )}
+
+                    {analyticsSection === 'financial' && (
+                        <>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsGMVFull || 'Gross Merchandise Value (GMV)'}
+                                    value={formatMoney(analyticsStats.gmv)}
+                                    subLabel={`${TRANSLATIONS.analyticsAvgOrderValue || 'Average Order Value'} ${formatMoney(analyticsStats.avgTicket)}`}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsCommissionCollectedFull || 'Commission Collected'}
+                                    value={formatMoney(analyticsStats.commissionCollected)}
+                                    subLabel={`${TRANSLATIONS.analyticsOutstandingCommission || 'Outstanding Commission'} ${formatMoney(analyticsStats.commissionOutstanding)}`}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsTotalBalances || 'Total Balances'}
+                                    value={formatMoney(analyticsStats.totalBalances)}
+                                    subLabel={`${analyticsStats.lowBalanceCount} ${TRANSLATIONS.analyticsLowBalance || 'low balance'}`}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsCommissionRate || 'Commission Rate'}
+                                    value={formatPercent(analyticsDailySeries.commissionRate || 0)}
+                                    subLabel={TRANSLATIONS.analyticsPlatformRate || 'Platform rate'}
+                                    isDark={isDark}
+                                />
+                            </View>
+                        </>
+                    )}
+
+                    {analyticsSection === 'quality' && (
+                        <>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsCancelRate || 'Cancel Rate'}
+                                    value={formatPercent(analyticsStats.cancelRate)}
+                                    subLabel={`${formatNumber(analyticsStats.canceledOrders)} ${TRANSLATIONS.analyticsCanceled || 'canceled'}`}
+                                    onPress={() => setAnalyticsDetail({ type: 'cancelReasons' })}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsCompletionRate || 'Completion Rate'}
+                                    value={formatPercent(analyticsStats.completionRate)}
+                                    subLabel={`${formatNumber(analyticsStats.completedOrders)} ${TRANSLATIONS.analyticsCompleted || 'completed'}`}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsRepeatClients || 'Repeat Clients'}
+                                    value={formatPercent(analyticsStats.repeatRate)}
+                                    subLabel={`${formatNumber(analyticsStats.repeatClients)} ${TRANSLATIONS.analyticsClients || 'clients'}`}
+                                    isDark={isDark}
+                                />
+                            </View>
+                            <View style={{ width: cardWidth }}>
+                                <AnalyticsMetricCard
+                                    label={TRANSLATIONS.analyticsReopenRate || 'Reopen Rate'}
+                                    value={formatPercent(analyticsStats.reopenRate)}
+                                    subLabel={`${formatNumber(analyticsStats.reopenedCount)} ${TRANSLATIONS.analyticsReopened || 'reopened'}`}
+                                    isDark={isDark}
+                                />
+                            </View>
+                        </>
+                    )}
+
+                    {analyticsSection === 'people' && (
+                        <>
+                            <View style={{ width: listWidth }}>
+                                <AnalyticsListCard
+                                    title={TRANSLATIONS.analyticsTopByCompleted || 'Top by Completed Jobs'}
+                                    items={analyticsPeople.topByCompleted}
+                                    emptyLabel={TRANSLATIONS.emptyList || 'No data'}
+                                    onPress={() => setAnalyticsDetail({ type: 'topPerformersCompleted' })}
+                                    isDark={isDark}
+                                    actionLabel={TRANSLATIONS.view || 'View'}
+                                />
+                            </View>
+                            <View style={{ width: listWidth }}>
+                                <AnalyticsListCard
+                                    title={TRANSLATIONS.analyticsTopByRevenue || 'Top by Revenue'}
+                                    items={analyticsPeople.topByRevenue}
+                                    emptyLabel={TRANSLATIONS.emptyList || 'No data'}
+                                    onPress={() => setAnalyticsDetail({ type: 'topPerformersRevenue' })}
+                                    isDark={isDark}
+                                    actionLabel={TRANSLATIONS.view || 'View'}
+                                />
+                            </View>
+                        </>
+                    )}
                 </View>
+
+                {analyticsSection === 'financial' && (
+                    <View style={styles.analyticsVisualGrid}>
+                        <View style={{ width: listWidth }}>
+                            <View style={[styles.analyticsVisualCard, !isDark && styles.cardLight]}>
+                                <Text style={[styles.analyticsVisualTitle, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS.analyticsGMVvsCommission || 'Gross Merchandise Value vs Commission'}
+                                </Text>
+                                <DualMiniBars
+                                    seriesA={analyticsDailySeries.revenueSeries}
+                                    seriesB={analyticsDailySeries.commissionSeries}
+                                    isDark={isDark}
+                                />
+                                <Text style={[styles.analyticsTrendHint, !isDark && styles.textSecondary]}>
+                                    {TRANSLATIONS.analyticsLast7d || 'Last 7 days'}
+                                </Text>
+                            </View>
+                        </View>
+                    </View>
+                )}
+
+                {analyticsSection !== 'people' && (
+                    <View style={styles.analyticsListGrid}>
+                        <View style={{ width: listWidth }}>
+                            <AnalyticsListCard
+                                title={TRANSLATIONS.analyticsTopAreas || 'Top Areas'}
+                                items={analyticsLists.topAreas}
+                                emptyLabel={TRANSLATIONS.emptyList || 'No area data'}
+                                onPress={() => setAnalyticsDetail({ type: 'topAreas' })}
+                                isDark={isDark}
+                                actionLabel={TRANSLATIONS.view || 'View'}
+                            />
+                        </View>
+                        <View style={{ width: listWidth }}>
+                            <AnalyticsListCard
+                                title={TRANSLATIONS.analyticsTopServices || 'Top Services'}
+                                items={analyticsLists.topServices}
+                                emptyLabel={TRANSLATIONS.emptyList || 'No service data'}
+                                onPress={() => setAnalyticsDetail({ type: 'topServices' })}
+                                isDark={isDark}
+                                actionLabel={TRANSLATIONS.view || 'View'}
+                            />
+                        </View>
+                        <View style={{ width: listWidth }}>
+                            <AnalyticsListCard
+                                title={TRANSLATIONS.analyticsUrgencyMix || 'Urgency Mix'}
+                                items={analyticsLists.urgencyMix}
+                                emptyLabel={TRANSLATIONS.emptyList || 'No urgency data'}
+                                onPress={() => setAnalyticsDetail({ type: 'urgencyMix' })}
+                                isDark={isDark}
+                                actionLabel={TRANSLATIONS.view || 'View'}
+                            />
+                        </View>
+                        <View style={{ width: listWidth }}>
+                            <AnalyticsListCard
+                                title={TRANSLATIONS.analyticsCancelReasons || 'Cancellation Reasons'}
+                                items={analyticsLists.cancelReasons}
+                                emptyLabel={TRANSLATIONS.emptyList || 'No cancellations'}
+                                onPress={() => setAnalyticsDetail({ type: 'cancelReasons' })}
+                                isDark={isDark}
+                                actionLabel={TRANSLATIONS.view || 'View'}
+                            />
+                        </View>
+                    </View>
+                )}
 
                 <View style={{ height: 100 }} />
+
+                {analyticsDetail.type && (
+                    <Modal visible transparent animationType="fade" onRequestClose={() => setAnalyticsDetail({ type: null })}>
+                        <View style={styles.modalOverlay}>
+                            <View style={[styles.analyticsModalCard, !isDark && styles.cardLight]}>
+                                <Text style={[styles.analyticsModalTitle, !isDark && styles.textDark]}>
+                                    {detailTitleMap[analyticsDetail.type]}
+                                </Text>
+                                <ScrollView style={{ maxHeight: 360 }}>
+                                    {(detailItemsMap[analyticsDetail.type] || []).length === 0 ? (
+                                        <Text style={[styles.analyticsListEmpty, { color: isDark ? '#94a3b8' : '#64748b', textAlign: 'center' }]}>
+                                            {TRANSLATIONS.emptyList || 'No data for this range.'}
+                                        </Text>
+                                    ) : (
+                                        detailItemsMap[analyticsDetail.type].map((item, idx) => (
+                                            <View key={`${analyticsDetail.type}-${idx}`} style={styles.analyticsDetailRow}>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a', fontWeight: '600' }} numberOfLines={1}>{item.label}</Text>
+                                                    {item.subLabel ? (
+                                                        <Text style={{ color: isDark ? '#94a3b8' : '#64748b', fontSize: 11 }}>{item.subLabel}</Text>
+                                                    ) : null}
+                                                </View>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontWeight: '600' }}>{item.value}</Text>
+                                            </View>
+                                        ))
+                                    )}
+                                </ScrollView>
+                                <View style={styles.analyticsModalActions}>
+                                    {analyticsDetail.type === 'backlog' && (
+                                        <TouchableOpacity
+                                            style={styles.analyticsModalPrimary}
+                                            onPress={() => {
+                                                setAnalyticsDetail({ type: null });
+                                                openAnalyticsOrdersModal(TRANSLATIONS.analyticsBacklog || 'Backlog Orders', o => ['placed', 'reopened', 'claimed', 'started'].includes(normalizeStatus(o.status)));
+                                            }}
+                                        >
+                                            <Text style={styles.analyticsModalPrimaryText}>{TRANSLATIONS.orders || 'Orders'}</Text>
+                                        </TouchableOpacity>
+                                    )}
+                                    <TouchableOpacity style={styles.analyticsModalSecondary} onPress={() => setAnalyticsDetail({ type: null })}>
+                                        <Text style={styles.analyticsModalSecondaryText}>{TRANSLATIONS.close || 'Close'}</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                        </View>
+                    </Modal>
+                )}
             </ScrollView>
         );
     };
@@ -1631,6 +2769,13 @@ export default function AdminDashboard({ navigation }) {
 
         setStatModalTitle(title);
         setStatFilteredOrders(filtered);
+        setStatModalVisible(true);
+    };
+
+    const openAnalyticsOrdersModal = (title, predicate) => {
+        const list = predicate ? analyticsOrders.filter(predicate) : analyticsOrders;
+        setStatModalTitle(title);
+        setStatFilteredOrders(list);
         setStatModalVisible(true);
     };
 
@@ -2201,296 +3346,378 @@ export default function AdminDashboard({ navigation }) {
             );
 
         return (
-        <View style={{ flex: 1 }}>
-            {renderHeader(TRANSLATIONS.settingsTitle || 'Platform Settings')}
-            <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
+            <View style={{ flex: 1 }}>
+                {renderHeader(TRANSLATIONS.settingsTitle || 'Platform Settings')}
+                <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
-                {/* ============================================ */}
-                {/* CONFIGURATION SECTION */}
-                {/* ============================================ */}
-                <View style={[styles.settingsSection, !isDark && styles.settingsSectionLight]}>
-                    {/* Section Header */}
-                    <View style={styles.settingsSectionHeader}>
-                        <View style={styles.settingsSectionTitleRow}>
-                            <View style={[styles.settingsSectionIcon, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
-                                <Ionicons name="settings" size={20} color="#3b82f6" />
-                            </View>
-                            <View>
-                                <Text style={[styles.settingsSectionTitle, !isDark && styles.textDark]}>
-                                    {TRANSLATIONS.configurationTitle || 'Configuration'}
-                                </Text>
-                                <Text style={styles.settingsSectionSubtitle}>
-                                    {TRANSLATIONS.configurationSubtitle || 'Platform-wide settings and parameters'}
-                                </Text>
-                            </View>
-                        </View>
-
-                        {/* Edit/Save Buttons - Now on the left within section flow */}
-                        <View style={styles.settingsActionRow}>
-                            {isEditing ? (
-                                <View style={{ flexDirection: 'row', gap: 10 }}>
-                                    <TouchableOpacity
-                                        onPress={() => setIsEditing(false)}
-                                        style={[styles.settingsBtn, styles.settingsBtnSecondary, !isDark && styles.settingsBtnSecondaryLight]}
-                                    >
-                                        <Ionicons name="close" size={16} color={isDark ? '#94a3b8' : '#64748b'} />
-                                        <Text style={[styles.settingsBtnText, !isDark && { color: '#64748b' }]}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        onPress={async () => {
-                                            setActionLoading(true);
-                                            try {
-                                                await ordersService.updatePlatformSettings({
-                                                    default_guaranteed_payout: parseFloat(tempSettings.default_guaranteed_payout) || 0,
-                                                    commission_rate: (parseFloat(tempSettings.commission_rate) || 0) / 100,
-                                                    price_deviation_threshold: (parseFloat(tempSettings.price_deviation_threshold) || 0) / 100,
-                                                    claim_timeout_minutes: parseInt(tempSettings.claim_timeout_minutes) || 30,
-                                                    order_expiry_hours: parseInt(tempSettings.order_expiry_hours) || 48
-                                                });
-                                                showToast(TRANSLATIONS.settingsSaved || 'Settings saved', 'success');
-                                                loadSettings();
-                                                setIsEditing(false);
-                                            } catch (error) {
-                                                showToast(TRANSLATIONS.errorSavingSettings || 'Error saving settings', 'error');
-                                            } finally {
-                                                setActionLoading(false);
-                                            }
-                                        }}
-                                        style={[styles.settingsBtn, styles.settingsBtnPrimary]}
-                                        disabled={actionLoading}
-                                    >
-                                        {actionLoading ? (
-                                            <ActivityIndicator color="#fff" size="small" />
-                                        ) : (
-                                            <>
-                                                <Ionicons name="checkmark" size={16} color="#fff" />
-                                                <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.saveChanges || 'Save Changes'}</Text>
-                                            </>
-                                        )}
-                                    </TouchableOpacity>
+                    {/* ============================================ */}
+                    {/* CONFIGURATION SECTION */}
+                    {/* ============================================ */}
+                    <View style={[styles.settingsSection, !isDark && styles.settingsSectionLight]}>
+                        {/* Section Header */}
+                        <View style={styles.settingsSectionHeader}>
+                            <View style={styles.settingsSectionTitleRow}>
+                                <View style={[styles.settingsSectionIcon, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+                                    <Ionicons name="settings" size={20} color="#3b82f6" />
                                 </View>
-                            ) : (
-                                <TouchableOpacity
-                                    onPress={() => {
-                                        setTempSettings({
-                                            ...settings,
-                                            default_guaranteed_payout: String(settings.default_guaranteed_payout || ''),
-                                            commission_rate: settings.commission_rate ? (settings.commission_rate * 100).toFixed(0) : '',
-                                            price_deviation_threshold: settings.price_deviation_threshold ? (settings.price_deviation_threshold * 100).toFixed(0) : '',
-                                            claim_timeout_minutes: String(settings.claim_timeout_minutes || ''),
-                                            order_expiry_hours: String(settings.order_expiry_hours || '')
-                                        });
-                                        setIsEditing(true);
-                                    }}
-                                    style={[styles.settingsBtn, styles.settingsBtnOutline, !isDark && styles.settingsBtnOutlineLight]}
-                                >
-                                    <Ionicons name="pencil" size={16} color="#3b82f6" />
-                                    <Text style={[styles.settingsBtnText, { color: '#3b82f6' }]}>{TRANSLATIONS.editSettings || 'Edit Settings'}</Text>
-                                </TouchableOpacity>
-                            )}
-                        </View>
-                    </View>
-
-                    {/* Configuration Grid */}
-                    <View style={[styles.settingsCard, !isDark && styles.settingsCardLight]}>
-                        <View style={styles.settingsGrid}>
-                            {/* Row 1 */}
-                            <View style={styles.settingsGridItem}>
-                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.basePayout || 'Default Call-out Fee'}</Text>
-                                <Text style={styles.settingsFieldHint}>{TRANSLATIONS.standardCallout || 'Standard Call-out Fee'}</Text>
-                                {isEditing ? (
-                                    <View style={styles.settingsInputWrapper}>
-                                        <TextInput
-                                            style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
-                                            keyboardType="numeric"
-                                            value={tempSettings.default_guaranteed_payout}
-                                            onChangeText={v => setTempSettings({ ...tempSettings, default_guaranteed_payout: v })}
-                                            placeholder="0"
-                                            placeholderTextColor="#64748b"
-                                        />
-                                        <Text style={styles.settingsInputSuffix}>сом</Text>
-                                    </View>
-                                ) : (
-                                    <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
-                                        {settings.default_guaranteed_payout || 0} <Text style={styles.settingsFieldUnit}>сом</Text>
+                                <View>
+                                    <Text style={[styles.settingsSectionTitle, !isDark && styles.textDark]}>
+                                        {TRANSLATIONS.configurationTitle || 'Configuration'}
                                     </Text>
-                                )}
-                            </View>
-
-                            <View style={styles.settingsGridItem}>
-                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.commissionRate || 'Commission Rate'}</Text>
-                                <Text style={styles.settingsFieldHint}>{TRANSLATIONS.platformCommission || 'Platform commission percentage'}</Text>
-                                {isEditing ? (
-                                    <View style={styles.settingsInputWrapper}>
-                                        <TextInput
-                                            style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
-                                            keyboardType="numeric"
-                                            value={tempSettings.commission_rate}
-                                            onChangeText={v => setTempSettings({ ...tempSettings, commission_rate: v })}
-                                            placeholder="0"
-                                            placeholderTextColor="#64748b"
-                                        />
-                                        <Text style={styles.settingsInputSuffix}>%</Text>
-                                    </View>
-                                ) : (
-                                    <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
-                                        {(settings.commission_rate * 100).toFixed(0)}<Text style={styles.settingsFieldUnit}>%</Text>
+                                    <Text style={styles.settingsSectionSubtitle}>
+                                        {TRANSLATIONS.configurationSubtitle || 'Platform-wide settings and parameters'}
                                     </Text>
-                                )}
+                                </View>
                             </View>
 
-                            {/* Row 2 */}
-                            <View style={styles.settingsGridItem}>
-                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.priceDeviation || 'Price Deviation'}</Text>
-                                <Text style={styles.settingsFieldHint}>{TRANSLATIONS.thresholdAlerts || 'Threshold for price alerts'}</Text>
+                            {/* Edit/Save Buttons - Now on the left within section flow */}
+                            <View style={styles.settingsActionRow}>
                                 {isEditing ? (
-                                    <View style={styles.settingsInputWrapper}>
-                                        <TextInput
-                                            style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
-                                            keyboardType="numeric"
-                                            value={tempSettings.price_deviation_threshold}
-                                            onChangeText={v => setTempSettings({ ...tempSettings, price_deviation_threshold: v })}
-                                            placeholder="0"
-                                            placeholderTextColor="#64748b"
-                                        />
-                                        <Text style={styles.settingsInputSuffix}>%</Text>
-                                    </View>
-                                ) : (
-                                    <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
-                                        {(settings.price_deviation_threshold * 100).toFixed(0)}<Text style={styles.settingsFieldUnit}>%</Text>
-                                    </Text>
-                                )}
-                            </View>
-
-                            <View style={styles.settingsGridItem}>
-                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.autoClaimTimeout || 'Auto-Claim Timeout'}</Text>
-                                <Text style={styles.settingsFieldHint}>{TRANSLATIONS.minutesExpire || 'Minutes before order expires'}</Text>
-                                {isEditing ? (
-                                    <View style={styles.settingsInputWrapper}>
-                                        <TextInput
-                                            style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
-                                            keyboardType="numeric"
-                                            value={tempSettings.claim_timeout_minutes}
-                                            onChangeText={v => setTempSettings({ ...tempSettings, claim_timeout_minutes: v })}
-                                            placeholder="30"
-                                            placeholderTextColor="#64748b"
-                                        />
-                                        <Text style={styles.settingsInputSuffix}>min</Text>
-                                    </View>
-                                ) : (
-                                    <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
-                                        {settings.claim_timeout_minutes || 30} <Text style={styles.settingsFieldUnit}>min</Text>
-                                    </Text>
-                                )}
-                            </View>
-
-                            {/* Row 3 */}
-                            <View style={styles.settingsGridItem}>
-                                <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.orderExpiry || 'Order Expiry'}</Text>
-                                <Text style={styles.settingsFieldHint}>{TRANSLATIONS.hoursExpire || 'Hours until unclaimed orders expire'}</Text>
-                                {isEditing ? (
-                                    <View style={styles.settingsInputWrapper}>
-                                        <TextInput
-                                            style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
-                                            keyboardType="numeric"
-                                            value={tempSettings.order_expiry_hours}
-                                            onChangeText={v => setTempSettings({ ...tempSettings, order_expiry_hours: v })}
-                                            placeholder="48"
-                                            placeholderTextColor="#64748b"
-                                        />
-                                        <Text style={styles.settingsInputSuffix}>hours</Text>
-                                    </View>
-                                ) : (
-                                    <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
-                                        {settings.order_expiry_hours || 48} <Text style={styles.settingsFieldUnit}>hours</Text>
-                                    </Text>
-                                )}
-                            </View>
-
-                            <View style={[styles.settingsGridItem, { opacity: 0 }]} />
-                        </View>
-                    </View>
-                </View>
-
-                {/* Section Divider */}
-                <View style={[styles.settingsDivider, !isDark && styles.settingsDividerLight]} />
-
-                {/* ============================================ */}
-                {/* DISTRICTS SECTION */}
-                {/* ============================================ */}
-                <View style={[styles.settingsSection, !isDark && styles.settingsSectionLight]}>
-                    <View style={styles.settingsSectionHeader}>
-                        <View style={styles.settingsSectionTitleRow}>
-                            <View style={[styles.settingsSectionIcon, { backgroundColor: 'rgba(14, 165, 233, 0.15)' }]}>
-                                <Ionicons name="map" size={20} color="#0ea5e9" />
-                            </View>
-                            <View>
-                                <Text style={[styles.settingsSectionTitle, !isDark && styles.textDark]}>
-                                    {TRANSLATIONS.districtsTitle || 'Districts'}
-                                </Text>
-                                <Text style={styles.settingsSectionSubtitle}>
-                                    {TRANSLATIONS.districtsSubtitle || 'Manage available districts'}
-                                </Text>
-                            </View>
-                        </View>
-
-                        <View style={styles.settingsActionRow}>
-                            <TouchableOpacity
-                                onPress={() => setDistrictModal({ visible: true, district: null })}
-                                style={[styles.settingsBtn, styles.settingsBtnPrimary]}
-                            >
-                                <Ionicons name="add" size={18} color="#fff" />
-                                <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.addDistrict || 'Add District'}</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                onPress={() => setDistrictsCollapsed(prev => !prev)}
-                                style={[styles.collapseBtn, !isDark && styles.collapseBtnLight]}
-                            >
-                                <Ionicons name={districtsCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-
-                    {!districtsCollapsed && (
-                        <>
-                            <View style={styles.settingsSearchRow}>
-                                <View style={[styles.searchInputWrapper, !isDark && styles.searchInputWrapperLight]}>
-                                    <Ionicons name="search" size={16} color="#64748b" style={{ marginRight: 8 }} />
-                                    <TextInput
-                                        style={[styles.searchInput, !isDark && styles.searchInputTextLight]}
-                                        placeholder={TRANSLATIONS.searchDistricts || 'Search districts...'}
-                                        placeholderTextColor="#64748b"
-                                        value={districtSearch}
-                                        onChangeText={setDistrictSearch}
-                                    />
-                                    {districtSearch ? (
-                                        <TouchableOpacity onPress={() => setDistrictSearch('')} style={styles.searchClear}>
-                                            <Ionicons name="close-circle" size={16} color="#64748b" />
+                                    <View style={{ flexDirection: 'row', gap: 10 }}>
+                                        <TouchableOpacity
+                                            onPress={() => setIsEditing(false)}
+                                            style={[styles.settingsBtn, styles.settingsBtnSecondary, !isDark && styles.settingsBtnSecondaryLight]}
+                                        >
+                                            <Ionicons name="close" size={16} color={isDark ? '#94a3b8' : '#64748b'} />
+                                            <Text style={[styles.settingsBtnText, !isDark && { color: '#64748b' }]}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                                         </TouchableOpacity>
-                                    ) : null}
+                                        <TouchableOpacity
+                                            onPress={async () => {
+                                                setActionLoading(true);
+                                                try {
+                                                    await ordersService.updatePlatformSettings({
+                                                        default_guaranteed_payout: parseFloat(tempSettings.default_guaranteed_payout) || 0,
+                                                        commission_rate: (parseFloat(tempSettings.commission_rate) || 0) / 100,
+                                                        price_deviation_threshold: (parseFloat(tempSettings.price_deviation_threshold) || 0) / 100,
+                                                        claim_timeout_minutes: parseInt(tempSettings.claim_timeout_minutes) || 30,
+                                                        order_expiry_hours: parseInt(tempSettings.order_expiry_hours) || 48
+                                                    });
+                                                    showToast(TRANSLATIONS.settingsSaved || 'Settings saved', 'success');
+                                                    loadSettings();
+                                                    setIsEditing(false);
+                                                } catch (error) {
+                                                    showToast(TRANSLATIONS.errorSavingSettings || 'Error saving settings', 'error');
+                                                } finally {
+                                                    setActionLoading(false);
+                                                }
+                                            }}
+                                            style={[styles.settingsBtn, styles.settingsBtnPrimary]}
+                                            disabled={actionLoading}
+                                        >
+                                            {actionLoading ? (
+                                                <ActivityIndicator color="#fff" size="small" />
+                                            ) : (
+                                                <>
+                                                    <Ionicons name="checkmark" size={16} color="#fff" />
+                                                    <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.saveChanges || 'Save Changes'}</Text>
+                                                </>
+                                            )}
+                                        </TouchableOpacity>
+                                    </View>
+                                ) : (
+                                    <TouchableOpacity
+                                        onPress={() => {
+                                            setTempSettings({
+                                                ...settings,
+                                                default_guaranteed_payout: String(settings.default_guaranteed_payout || ''),
+                                                commission_rate: settings.commission_rate ? (settings.commission_rate * 100).toFixed(0) : '',
+                                                price_deviation_threshold: settings.price_deviation_threshold ? (settings.price_deviation_threshold * 100).toFixed(0) : '',
+                                                claim_timeout_minutes: String(settings.claim_timeout_minutes || ''),
+                                                order_expiry_hours: String(settings.order_expiry_hours || '')
+                                            });
+                                            setIsEditing(true);
+                                        }}
+                                        style={[styles.settingsBtn, styles.settingsBtnOutline, !isDark && styles.settingsBtnOutlineLight]}
+                                    >
+                                        <Ionicons name="pencil" size={16} color="#3b82f6" />
+                                        <Text style={[styles.settingsBtnText, { color: '#3b82f6' }]}>{TRANSLATIONS.editSettings || 'Edit Settings'}</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                        </View>
+
+                        {/* Configuration Grid */}
+                        <View style={[styles.settingsCard, !isDark && styles.settingsCardLight]}>
+                            <View style={styles.settingsGrid}>
+                                {/* Row 1 */}
+                                <View style={styles.settingsGridItem}>
+                                    <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.basePayout || 'Default Call-out Fee'}</Text>
+                                    <Text style={styles.settingsFieldHint}>{TRANSLATIONS.standardCallout || 'Standard Call-out Fee'}</Text>
+                                    {isEditing ? (
+                                        <View style={styles.settingsInputWrapper}>
+                                            <TextInput
+                                                style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
+                                                keyboardType="numeric"
+                                                value={tempSettings.default_guaranteed_payout}
+                                                onChangeText={v => setTempSettings({ ...tempSettings, default_guaranteed_payout: v })}
+                                                placeholder="0"
+                                                placeholderTextColor="#64748b"
+                                            />
+                                            <Text style={styles.settingsInputSuffix}>сом</Text>
+                                        </View>
+                                    ) : (
+                                        <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
+                                            {settings.default_guaranteed_payout || 0} <Text style={styles.settingsFieldUnit}>сом</Text>
+                                        </Text>
+                                    )}
+                                </View>
+
+                                <View style={styles.settingsGridItem}>
+                                    <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.commissionRate || 'Commission Rate'}</Text>
+                                    <Text style={styles.settingsFieldHint}>{TRANSLATIONS.platformCommission || 'Platform commission percentage'}</Text>
+                                    {isEditing ? (
+                                        <View style={styles.settingsInputWrapper}>
+                                            <TextInput
+                                                style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
+                                                keyboardType="numeric"
+                                                value={tempSettings.commission_rate}
+                                                onChangeText={v => setTempSettings({ ...tempSettings, commission_rate: v })}
+                                                placeholder="0"
+                                                placeholderTextColor="#64748b"
+                                            />
+                                            <Text style={styles.settingsInputSuffix}>%</Text>
+                                        </View>
+                                    ) : (
+                                        <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
+                                            {(settings.commission_rate * 100).toFixed(0)}<Text style={styles.settingsFieldUnit}>%</Text>
+                                        </Text>
+                                    )}
+                                </View>
+
+                                {/* Row 2 */}
+                                <View style={styles.settingsGridItem}>
+                                    <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.priceDeviation || 'Price Deviation'}</Text>
+                                    <Text style={styles.settingsFieldHint}>{TRANSLATIONS.thresholdAlerts || 'Threshold for price alerts'}</Text>
+                                    {isEditing ? (
+                                        <View style={styles.settingsInputWrapper}>
+                                            <TextInput
+                                                style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
+                                                keyboardType="numeric"
+                                                value={tempSettings.price_deviation_threshold}
+                                                onChangeText={v => setTempSettings({ ...tempSettings, price_deviation_threshold: v })}
+                                                placeholder="0"
+                                                placeholderTextColor="#64748b"
+                                            />
+                                            <Text style={styles.settingsInputSuffix}>%</Text>
+                                        </View>
+                                    ) : (
+                                        <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
+                                            {(settings.price_deviation_threshold * 100).toFixed(0)}<Text style={styles.settingsFieldUnit}>%</Text>
+                                        </Text>
+                                    )}
+                                </View>
+
+                                <View style={styles.settingsGridItem}>
+                                    <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.autoClaimTimeout || 'Auto-Claim Timeout'}</Text>
+                                    <Text style={styles.settingsFieldHint}>{TRANSLATIONS.minutesExpire || 'Minutes before order expires'}</Text>
+                                    {isEditing ? (
+                                        <View style={styles.settingsInputWrapper}>
+                                            <TextInput
+                                                style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
+                                                keyboardType="numeric"
+                                                value={tempSettings.claim_timeout_minutes}
+                                                onChangeText={v => setTempSettings({ ...tempSettings, claim_timeout_minutes: v })}
+                                                placeholder="30"
+                                                placeholderTextColor="#64748b"
+                                            />
+                                            <Text style={styles.settingsInputSuffix}>min</Text>
+                                        </View>
+                                    ) : (
+                                        <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
+                                            {settings.claim_timeout_minutes || 30} <Text style={styles.settingsFieldUnit}>min</Text>
+                                        </Text>
+                                    )}
+                                </View>
+
+                                {/* Row 3 */}
+                                <View style={styles.settingsGridItem}>
+                                    <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.orderExpiry || 'Order Expiry'}</Text>
+                                    <Text style={styles.settingsFieldHint}>{TRANSLATIONS.hoursExpire || 'Hours until unclaimed orders expire'}</Text>
+                                    {isEditing ? (
+                                        <View style={styles.settingsInputWrapper}>
+                                            <TextInput
+                                                style={[styles.settingsInput, !isDark && styles.settingsInputLight]}
+                                                keyboardType="numeric"
+                                                value={tempSettings.order_expiry_hours}
+                                                onChangeText={v => setTempSettings({ ...tempSettings, order_expiry_hours: v })}
+                                                placeholder="48"
+                                                placeholderTextColor="#64748b"
+                                            />
+                                            <Text style={styles.settingsInputSuffix}>hours</Text>
+                                        </View>
+                                    ) : (
+                                        <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
+                                            {settings.order_expiry_hours || 48} <Text style={styles.settingsFieldUnit}>hours</Text>
+                                        </Text>
+                                    )}
+                                </View>
+
+                                <View style={[styles.settingsGridItem, { opacity: 0 }]} />
+                            </View>
+                        </View>
+                    </View>
+
+                    {/* Section Divider */}
+                    <View style={[styles.settingsDivider, !isDark && styles.settingsDividerLight]} />
+
+                    {/* ============================================ */}
+                    {/* DISTRICTS SECTION */}
+                    {/* ============================================ */}
+                    <View style={[styles.settingsSection, !isDark && styles.settingsSectionLight]}>
+                        <View style={styles.settingsSectionHeader}>
+                            <View style={styles.settingsSectionTitleRow}>
+                                <View style={[styles.settingsSectionIcon, { backgroundColor: 'rgba(14, 165, 233, 0.15)' }]}>
+                                    <Ionicons name="map" size={20} color="#0ea5e9" />
+                                </View>
+                                <View>
+                                    <Text style={[styles.settingsSectionTitle, !isDark && styles.textDark]}>
+                                        {TRANSLATIONS.districtsTitle || 'Districts'}
+                                    </Text>
+                                    <Text style={styles.settingsSectionSubtitle}>
+                                        {TRANSLATIONS.districtsSubtitle || 'Manage available districts'}
+                                    </Text>
                                 </View>
                             </View>
 
+                            <View style={styles.settingsActionRow}>
+                                <TouchableOpacity
+                                    onPress={() => setDistrictModal({ visible: true, district: null })}
+                                    style={[styles.settingsBtn, styles.settingsBtnPrimary]}
+                                >
+                                    <Ionicons name="add" size={18} color="#fff" />
+                                    <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.addDistrict || 'Add District'}</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    onPress={() => setDistrictsCollapsed(prev => !prev)}
+                                    style={[styles.collapseBtn, !isDark && styles.collapseBtnLight]}
+                                >
+                                    <Ionicons name={districtsCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+
+                        {!districtsCollapsed && (
+                            <>
+                                <View style={styles.settingsSearchRow}>
+                                    <View style={[styles.searchInputWrapper, !isDark && styles.searchInputWrapperLight]}>
+                                        <Ionicons name="search" size={16} color="#64748b" style={{ marginRight: 8 }} />
+                                        <TextInput
+                                            style={[styles.searchInput, !isDark && styles.searchInputTextLight]}
+                                            placeholder={TRANSLATIONS.searchDistricts || 'Search districts...'}
+                                            placeholderTextColor="#64748b"
+                                            value={districtSearch}
+                                            onChangeText={setDistrictSearch}
+                                        />
+                                        {districtSearch ? (
+                                            <TouchableOpacity onPress={() => setDistrictSearch('')} style={styles.searchClear}>
+                                                <Ionicons name="close-circle" size={16} color="#64748b" />
+                                            </TouchableOpacity>
+                                        ) : null}
+                                    </View>
+                                </View>
+
+                                <ScrollView style={styles.compactList} showsVerticalScrollIndicator={false}>
+                                    {filteredDistricts.map((district) => (
+                                        <View key={district.id} style={[styles.serviceTypeRow, !isDark && styles.serviceTypeRowLight]}>
+                                            <View style={styles.serviceTypeRowInfo}>
+                                                <Text style={[styles.serviceTypeRowName, !isDark && styles.textDark]} numberOfLines={1}>
+                                                    {district[`name_${language}`] || district.name_en || district.code}
+                                                </Text>
+                                                <Text style={styles.serviceTypeRowMeta} numberOfLines={1}>
+                                                    {TRANSLATIONS.code || 'Code:'} {district.code} • {district.region || (TRANSLATIONS.region || 'Region')}: {district.region || '-'} • {district.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
+                                                </Text>
+                                            </View>
+                                            <View style={styles.serviceTypeRowActions}>
+                                                <TouchableOpacity
+                                                    onPress={() => setDistrictModal({ visible: true, district })}
+                                                    style={[styles.serviceTypeRowBtn, styles.serviceTypeEditBtn, !isDark && styles.serviceTypeActionBtnLight]}
+                                                >
+                                                    <Ionicons name="pencil" size={16} color="#3b82f6" />
+                                                </TouchableOpacity>
+                                                <TouchableOpacity
+                                                    onPress={() => handleDeleteDistrict(district.id)}
+                                                    style={[styles.serviceTypeRowBtn, styles.serviceTypeDeleteBtn]}
+                                                >
+                                                    <Ionicons name="trash" size={16} color="#ef4444" />
+                                                </TouchableOpacity>
+                                            </View>
+                                        </View>
+                                    ))}
+
+                                    {filteredDistricts.length === 0 && (
+                                        <View style={[styles.settingsEmptyState, !isDark && styles.settingsEmptyStateLight]}>
+                                            <Ionicons name="map-outline" size={48} color="#64748b" />
+                                            <Text style={styles.settingsEmptyText}>{TRANSLATIONS.noDistricts || 'No districts configured'}</Text>
+                                            <Text style={styles.settingsEmptyHint}>{TRANSLATIONS.addFirstDistrict || 'Add your first district to get started'}</Text>
+                                        </View>
+                                    )}
+                                </ScrollView>
+                            </>
+                        )}
+                    </View>
+
+                    {/* Section Divider */}
+                    <View style={[styles.settingsDivider, !isDark && styles.settingsDividerLight]} />
+
+                    {/* ============================================ */}
+                    {/* SERVICE TYPES SECTION */}
+                    {/* ============================================ */}
+                    <View style={[styles.settingsSection, !isDark && styles.settingsSectionLight]}>
+                        {/* Section Header */}
+                        <View style={styles.settingsSectionHeader}>
+                            <View style={styles.settingsSectionTitleRow}>
+                                <View style={[styles.settingsSectionIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
+                                    <Ionicons name="construct" size={20} color="#22c55e" />
+                                </View>
+                                <View>
+                                    <Text style={[styles.settingsSectionTitle, !isDark && styles.textDark]}>
+                                        {TRANSLATIONS.serviceTypesTitle || 'Service Types'}
+                                    </Text>
+                                    <Text style={styles.settingsSectionSubtitle}>
+                                        {TRANSLATIONS.serviceTypesSubtitle || 'Manage available service categories'}
+                                    </Text>
+                                </View>
+                            </View>
+
+                            <View style={styles.settingsActionRow}>
+                                {/* Add Service Type Button */}
+                                <TouchableOpacity
+                                    onPress={() => setServiceTypeModal({ visible: true, type: null })}
+                                    style={[styles.settingsBtn, styles.settingsBtnPrimary]}
+                                >
+                                    <Ionicons name="add" size={18} color="#fff" />
+                                    <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.addServiceType || 'Add Service Type'}</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    onPress={() => setServiceTypesCollapsed(prev => !prev)}
+                                    style={[styles.collapseBtn, !isDark && styles.collapseBtnLight]}
+                                >
+                                    <Ionicons name={serviceTypesCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+
+                        {!serviceTypesCollapsed && (
                             <ScrollView style={styles.compactList} showsVerticalScrollIndicator={false}>
-                                {filteredDistricts.map((district) => (
-                                    <View key={district.id} style={[styles.serviceTypeRow, !isDark && styles.serviceTypeRowLight]}>
+                                {serviceTypes.map((type) => (
+                                    <View key={type.id} style={[styles.serviceTypeRow, !isDark && styles.serviceTypeRowLight]}>
                                         <View style={styles.serviceTypeRowInfo}>
                                             <Text style={[styles.serviceTypeRowName, !isDark && styles.textDark]} numberOfLines={1}>
-                                                {district[`name_${language}`] || district.name_en || district.code}
+                                                {type[`name_${language}`] || type.name_en || type.id}
                                             </Text>
                                             <Text style={styles.serviceTypeRowMeta} numberOfLines={1}>
-                                                {TRANSLATIONS.code || 'Code:'} {district.code} • {district.region || (TRANSLATIONS.region || 'Region')}: {district.region || '-'} • {district.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
+                                                {language !== 'ru' && type.name_ru ? type.name_ru : (language !== 'en' && type.name_en ? type.name_en : type.name_kg)} - {TRANSLATIONS.code || 'Code:'} {type.code || type.id}
                                             </Text>
                                         </View>
                                         <View style={styles.serviceTypeRowActions}>
                                             <TouchableOpacity
-                                                onPress={() => setDistrictModal({ visible: true, district })}
+                                                onPress={() => setServiceTypeModal({ visible: true, type })}
                                                 style={[styles.serviceTypeRowBtn, styles.serviceTypeEditBtn, !isDark && styles.serviceTypeActionBtnLight]}
                                             >
                                                 <Ionicons name="pencil" size={16} color="#3b82f6" />
                                             </TouchableOpacity>
                                             <TouchableOpacity
-                                                onPress={() => handleDeleteDistrict(district.id)}
+                                                onPress={() => handleDeleteServiceType(type.id)}
                                                 style={[styles.serviceTypeRowBtn, styles.serviceTypeDeleteBtn]}
                                             >
                                                 <Ionicons name="trash" size={16} color="#ef4444" />
@@ -2499,107 +3726,25 @@ export default function AdminDashboard({ navigation }) {
                                     </View>
                                 ))}
 
-                                {filteredDistricts.length === 0 && (
+                                {serviceTypes.length === 0 && (
                                     <View style={[styles.settingsEmptyState, !isDark && styles.settingsEmptyStateLight]}>
-                                        <Ionicons name="map-outline" size={48} color="#64748b" />
-                                        <Text style={styles.settingsEmptyText}>{TRANSLATIONS.noDistricts || 'No districts configured'}</Text>
-                                        <Text style={styles.settingsEmptyHint}>{TRANSLATIONS.addFirstDistrict || 'Add your first district to get started'}</Text>
+                                        <Ionicons name="construct-outline" size={48} color="#64748b" />
+                                        <Text style={styles.settingsEmptyText}>{TRANSLATIONS.noServiceTypes || 'No service types configured'}</Text>
+                                        <Text style={styles.settingsEmptyHint}>{TRANSLATIONS.addFirstService || 'Add your first service type to get started'}</Text>
                                     </View>
                                 )}
                             </ScrollView>
-                        </>
-                    )}
-                </View>
-
-                {/* Section Divider */}
-                <View style={[styles.settingsDivider, !isDark && styles.settingsDividerLight]} />
-
-                {/* ============================================ */}
-                {/* SERVICE TYPES SECTION */}
-                {/* ============================================ */}
-                <View style={[styles.settingsSection, !isDark && styles.settingsSectionLight]}>
-                    {/* Section Header */}
-                    <View style={styles.settingsSectionHeader}>
-                        <View style={styles.settingsSectionTitleRow}>
-                            <View style={[styles.settingsSectionIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
-                                <Ionicons name="construct" size={20} color="#22c55e" />
-                            </View>
-                            <View>
-                                <Text style={[styles.settingsSectionTitle, !isDark && styles.textDark]}>
-                                    {TRANSLATIONS.serviceTypesTitle || 'Service Types'}
-                                </Text>
-                                <Text style={styles.settingsSectionSubtitle}>
-                                    {TRANSLATIONS.serviceTypesSubtitle || 'Manage available service categories'}
-                                </Text>
-                            </View>
-                        </View>
-
-                        <View style={styles.settingsActionRow}>
-                            {/* Add Service Type Button */}
-                            <TouchableOpacity
-                                onPress={() => setServiceTypeModal({ visible: true, type: null })}
-                                style={[styles.settingsBtn, styles.settingsBtnPrimary]}
-                            >
-                                <Ionicons name="add" size={18} color="#fff" />
-                                <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.addServiceType || 'Add Service Type'}</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                onPress={() => setServiceTypesCollapsed(prev => !prev)}
-                                style={[styles.collapseBtn, !isDark && styles.collapseBtnLight]}
-                            >
-                                <Ionicons name={serviceTypesCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />
-                            </TouchableOpacity>
-                        </View>
+                        )}
                     </View>
 
-                    {!serviceTypesCollapsed && (
-                        <ScrollView style={styles.compactList} showsVerticalScrollIndicator={false}>
-                            {serviceTypes.map((type) => (
-                                <View key={type.id} style={[styles.serviceTypeRow, !isDark && styles.serviceTypeRowLight]}>
-                                    <View style={styles.serviceTypeRowInfo}>
-                                        <Text style={[styles.serviceTypeRowName, !isDark && styles.textDark]} numberOfLines={1}>
-                                            {type[`name_${language}`] || type.name_en || type.id}
-                                        </Text>
-                                        <Text style={styles.serviceTypeRowMeta} numberOfLines={1}>
-                                            {language !== 'ru' && type.name_ru ? type.name_ru : (language !== 'en' && type.name_en ? type.name_en : type.name_kg)} - {TRANSLATIONS.code || 'Code:'} {type.code || type.id}
-                                        </Text>
-                                    </View>
-                                    <View style={styles.serviceTypeRowActions}>
-                                        <TouchableOpacity
-                                            onPress={() => setServiceTypeModal({ visible: true, type })}
-                                            style={[styles.serviceTypeRowBtn, styles.serviceTypeEditBtn, !isDark && styles.serviceTypeActionBtnLight]}
-                                        >
-                                            <Ionicons name="pencil" size={16} color="#3b82f6" />
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            onPress={() => handleDeleteServiceType(type.id)}
-                                            style={[styles.serviceTypeRowBtn, styles.serviceTypeDeleteBtn]}
-                                        >
-                                            <Ionicons name="trash" size={16} color="#ef4444" />
-                                        </TouchableOpacity>
-                                    </View>
-                                </View>
-                            ))}
+                    <View style={{ height: 100 }} />
+                </ScrollView>
 
-                            {serviceTypes.length === 0 && (
-                                <View style={[styles.settingsEmptyState, !isDark && styles.settingsEmptyStateLight]}>
-                                    <Ionicons name="construct-outline" size={48} color="#64748b" />
-                                    <Text style={styles.settingsEmptyText}>{TRANSLATIONS.noServiceTypes || 'No service types configured'}</Text>
-                                    <Text style={styles.settingsEmptyHint}>{TRANSLATIONS.addFirstService || 'Add your first service type to get started'}</Text>
-                                </View>
-                            )}
-                        </ScrollView>
-                    )}
-                </View>
-
-                <View style={{ height: 100 }} />
-            </ScrollView>
-
-            {/* Service Type Sidebar Drawer */}
-            {renderServiceTypeSidebar()}
-            {renderDistrictSidebar()}
-        </View>
-    );
+                {/* Service Type Sidebar Drawer */}
+                {renderServiceTypeSidebar()}
+                {renderDistrictSidebar()}
+            </View>
+        );
     };
 
     // Service Type Sidebar (Right-side drawer instead of modal)
@@ -3504,7 +4649,7 @@ export default function AdminDashboard({ navigation }) {
                                     <Text style={styles.drawerSectionTitle}>{TRANSLATIONS.sectionFinancials || 'Financials'}</Text>
                                     <View style={styles.finRow}>
                                         <Text style={styles.finLabel}>{TRANSLATIONS.labelCallout || 'Call-out'}</Text>
-                                        <Text style={[styles.finValue, !isDark && styles.textDark]}>{calloutValue ?? '-' }{calloutValue !== null && calloutValue !== undefined ? 'c' : ''}</Text>
+                                        <Text style={[styles.finValue, !isDark && styles.textDark]}>{calloutValue ?? '-'}{calloutValue !== null && calloutValue !== undefined ? 'c' : ''}</Text>
                                     </View>
                                     <View style={styles.finRow}>
                                         <Text style={styles.finLabel}>{detailsOrder.final_price ? (TRANSLATIONS.labelFinal || 'Final') : (TRANSLATIONS.labelInitial || 'Initial')}</Text>
@@ -3693,7 +4838,8 @@ export default function AdminDashboard({ navigation }) {
 
             {/* Main Content Area */}
             <View style={[styles.mainContent, !isDark && styles.mainContentLight]}>
-                {activeTab === 'overview' && renderOverview()}
+
+                {activeTab === 'analytics' && renderAnalytics()}
                 {activeTab === 'orders' && renderOrders()}
                 {activeTab === 'people' && renderPeople()}
                 {activeTab === 'create_order' && renderCreateOrder()}
@@ -3734,22 +4880,22 @@ export default function AdminDashboard({ navigation }) {
                                         ? `${activeJobs}/${maxJobs}`
                                         : String(activeJobs);
                                     return (
-                                    <TouchableOpacity
-                                        key={masterId || master.id}
-                                        style={[styles.listItemCard, { marginBottom: 8 }]}
-                                        onPress={() => handleForceAssignMaster(assignOrderId || detailsOrder?.id, masterId, master.full_name || master.name || 'Master')}
-                                    >
-                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                                            <View style={[styles.avatarCircle, { backgroundColor: master.is_verified ? '#22c55e' : '#64748b' }]}>
-                                                <Text style={{ color: '#fff' }}>{master.full_name?.charAt(0)}</Text>
+                                        <TouchableOpacity
+                                            key={masterId || master.id}
+                                            style={[styles.listItemCard, { marginBottom: 8 }]}
+                                            onPress={() => handleForceAssignMaster(assignOrderId || detailsOrder?.id, masterId, master.full_name || master.name || 'Master')}
+                                        >
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                                <View style={[styles.avatarCircle, { backgroundColor: master.is_verified ? '#22c55e' : '#64748b' }]}>
+                                                    <Text style={{ color: '#fff' }}>{master.full_name?.charAt(0)}</Text>
+                                                </View>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.itemTitle}>{master.full_name}</Text>
+                                                    <Text style={styles.itemSubtitle}>{master.phone || 'N/A'} • {(TRANSLATIONS.labelJobs || TRANSLATIONS.orders || 'Jobs')}: {jobsLabel}</Text>
+                                                </View>
+                                                <Ionicons name="chevron-forward" size={16} color="#64748b" />
                                             </View>
-                                            <View style={{ flex: 1 }}>
-                                                <Text style={styles.itemTitle}>{master.full_name}</Text>
-                                                <Text style={styles.itemSubtitle}>{master.phone || 'N/A'} • {(TRANSLATIONS.labelJobs || TRANSLATIONS.orders || 'Jobs')}: {jobsLabel}</Text>
-                                            </View>
-                                            <Ionicons name="chevron-forward" size={16} color="#64748b" />
-                                        </View>
-                                    </TouchableOpacity>
+                                        </TouchableOpacity>
                                     );
                                 })
                             )}
@@ -5553,5 +6699,507 @@ const styles = StyleSheet.create({
     sidebarDrawerBtnText: {
         fontSize: 15,
         fontWeight: '600',
+    },
+    // ============================================
+    // ANALYTICS STYLES
+    // ============================================
+    analyticsFilterCard: {
+        backgroundColor: '#1e293b',
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    analyticsFilterHeader: {
+        marginBottom: 12,
+    },
+    analyticsSectionLabel: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: '#64748b',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+        marginBottom: 8,
+    },
+    analyticsRangeRow: {
+        flexDirection: 'row',
+        gap: 6,
+    },
+    analyticsRangeChip: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 8,
+        backgroundColor: 'rgba(71, 85, 105, 0.3)',
+    },
+    analyticsRangeChipActive: {
+        backgroundColor: '#3b82f6',
+    },
+    analyticsRangeText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#94a3b8',
+    },
+    analyticsRangeTextActive: {
+        color: '#fff',
+    },
+    analyticsFilterRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+    },
+    analyticsFilterPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 8,
+        backgroundColor: 'rgba(71, 85, 105, 0.3)',
+        minWidth: 100,
+    },
+    analyticsFilterPillActive: {
+        backgroundColor: 'rgba(59, 130, 246, 0.2)',
+        borderWidth: 1,
+        borderColor: '#3b82f6',
+    },
+    analyticsFilterPillLight: {
+        backgroundColor: '#f1f5f9',
+    },
+    analyticsFilterPillRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    analyticsFilterPillText: {
+        fontSize: 12,
+        fontWeight: '500',
+        color: '#cbd5e1',
+    },
+    analyticsClearBtn: {
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 8,
+    },
+    analyticsClearBtnText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#ef4444',
+    },
+    analyticsCustomRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        marginTop: 12,
+    },
+    analyticsCustomButton: {
+        flex: 1,
+        backgroundColor: 'rgba(71, 85, 105, 0.3)',
+        borderRadius: 8,
+        padding: 12,
+    },
+    analyticsCustomButtonLight: {
+        backgroundColor: '#f1f5f9',
+    },
+    analyticsCustomLabel: {
+        fontSize: 10,
+        color: '#64748b',
+        marginBottom: 4,
+    },
+    analyticsCustomValue: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    analyticsCustomSeparator: {
+        fontSize: 16,
+        color: '#64748b',
+    },
+    analyticsSectionTabs: {
+        flexDirection: 'row',
+        gap: 6,
+        marginBottom: 16,
+    },
+    analyticsSectionTab: {
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 10,
+        backgroundColor: 'rgba(71, 85, 105, 0.3)',
+    },
+    analyticsSectionTabActive: {
+        backgroundColor: '#3b82f6',
+    },
+    analyticsSectionTabText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#94a3b8',
+    },
+    analyticsSectionTabTextActive: {
+        color: '#fff',
+    },
+    analyticsGranularityRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 16,
+        gap: 12,
+    },
+    analyticsGranularityLabel: {
+        fontSize: 12,
+        color: '#64748b',
+    },
+    analyticsGranularityChips: {
+        flexDirection: 'row',
+        gap: 6,
+    },
+    analyticsGranularityChip: {
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 6,
+        backgroundColor: 'rgba(71, 85, 105, 0.3)',
+    },
+    analyticsGranularityChipActive: {
+        backgroundColor: '#22c55e',
+    },
+    analyticsGranularityText: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: '#94a3b8',
+    },
+    analyticsGranularityTextActive: {
+        color: '#fff',
+    },
+    analyticsChartGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 16,
+        marginBottom: 16,
+    },
+    analyticsVisualGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 16,
+        marginBottom: 16,
+    },
+    analyticsVisualCard: {
+        backgroundColor: '#1e293b',
+        borderRadius: 12,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    analyticsVisualTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+        marginBottom: 12,
+    },
+    analyticsMetricGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 12,
+        marginBottom: 16,
+    },
+    analyticsMetricCard: {
+        backgroundColor: '#1e293b',
+        borderRadius: 12,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: '#334155',
+        minHeight: 90,
+    },
+    analyticsMetricTopRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+    },
+    analyticsMetricLabel: {
+        fontSize: 12,
+        fontWeight: '500',
+        color: '#94a3b8',
+        marginBottom: 4,
+    },
+    analyticsMetricValue: {
+        fontSize: 22,
+        fontWeight: '700',
+        color: '#fff',
+    },
+    analyticsMetricSub: {
+        fontSize: 11,
+        color: '#94a3b8',
+        marginTop: 6,
+    },
+    analyticsListGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 16,
+        marginBottom: 16,
+    },
+    analyticsListCard: {
+        backgroundColor: '#1e293b',
+        borderRadius: 12,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    analyticsListHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    analyticsListTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    analyticsListAction: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#3b82f6',
+    },
+    analyticsListItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 8,
+        borderTopWidth: 1,
+        borderTopColor: '#334155',
+    },
+    analyticsListLabel: {
+        fontSize: 13,
+        fontWeight: '500',
+        color: '#cbd5e1',
+    },
+    analyticsListBar: {
+        height: 4,
+        backgroundColor: '#334155',
+        borderRadius: 2,
+        marginTop: 4,
+        overflow: 'hidden',
+    },
+    analyticsListBarFill: {
+        height: 4,
+        backgroundColor: '#3b82f6',
+        borderRadius: 2,
+    },
+    analyticsListValue: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#fff',
+        marginLeft: 12,
+    },
+    analyticsListEmpty: {
+        fontSize: 12,
+        color: '#64748b',
+        textAlign: 'center',
+        paddingVertical: 16,
+    },
+    analyticsMiniBars: {
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        gap: 2,
+    },
+    analyticsMiniBarTrack: {
+        justifyContent: 'flex-end',
+        alignItems: 'center',
+    },
+    analyticsMiniBar: {
+        borderRadius: 2,
+    },
+    analyticsDualBars: {
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        gap: 4,
+    },
+    analyticsDualBarTrack: {
+        width: 16,
+        height: 40,
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        gap: 2,
+    },
+    analyticsDualBarPrimary: {
+        width: 6,
+        borderRadius: 2,
+    },
+    analyticsDualBarSecondary: {
+        width: 6,
+        borderRadius: 2,
+    },
+    analyticsStatusStrip: {
+        flexDirection: 'row',
+        height: 8,
+        borderRadius: 4,
+        overflow: 'hidden',
+        marginBottom: 12,
+    },
+    analyticsStatusSegment: {
+        minWidth: 4,
+    },
+    analyticsStatusLegend: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 12,
+    },
+    analyticsStatusLegendItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+    },
+    analyticsStatusDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+    },
+    analyticsStatusLegendText: {
+        fontSize: 11,
+        fontWeight: '500',
+        color: '#cbd5e1',
+    },
+    analyticsStatusLegendValue: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: '#94a3b8',
+    },
+    analyticsFunnelRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        alignItems: 'flex-end',
+        gap: 8,
+    },
+    analyticsFunnelItem: {
+        alignItems: 'center',
+        flex: 1,
+    },
+    analyticsFunnelBar: {
+        width: '80%',
+        borderRadius: 4,
+        marginBottom: 6,
+    },
+    analyticsFunnelLabel: {
+        fontSize: 9,
+        fontWeight: '500',
+        color: '#cbd5e1',
+        textAlign: 'center',
+    },
+    analyticsFunnelValue: {
+        fontSize: 10,
+        fontWeight: '600',
+        color: '#94a3b8',
+    },
+    analyticsChartCard: {
+        backgroundColor: '#1e293b',
+        borderRadius: 12,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    analyticsChartHeader: {
+        marginBottom: 12,
+    },
+    analyticsChartTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    analyticsChartSubtitle: {
+        fontSize: 11,
+        color: '#64748b',
+        marginTop: 2,
+    },
+    analyticsChartBars: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        alignItems: 'flex-end',
+        height: 100,
+        gap: 4,
+    },
+    analyticsChartColumn: {
+        flex: 1,
+        alignItems: 'center',
+    },
+    analyticsChartValue: {
+        fontSize: 10,
+        fontWeight: '600',
+        color: '#fff',
+        marginBottom: 4,
+    },
+    analyticsChartTrack: {
+        width: '80%',
+        backgroundColor: '#334155',
+        borderRadius: 4,
+        justifyContent: 'flex-end',
+        alignItems: 'center',
+        overflow: 'hidden',
+        height: 78,
+    },
+    analyticsChartFill: {
+        width: '100%',
+        borderRadius: 4,
+    },
+    analyticsChartLabel: {
+        fontSize: 9,
+        color: '#64748b',
+        marginTop: 6,
+        textAlign: 'center',
+    },
+    analyticsTrendHint: {
+        fontSize: 10,
+        color: '#64748b',
+        marginTop: 8,
+        textAlign: 'center',
+    },
+    analyticsModalCard: {
+        backgroundColor: '#1e293b',
+        borderRadius: 16,
+        padding: 20,
+        width: 400,
+        maxWidth: '90%',
+        maxHeight: '80%',
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    analyticsModalTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#fff',
+        marginBottom: 16,
+    },
+    analyticsDetailRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 10,
+        borderTopWidth: 1,
+        borderTopColor: '#334155',
+    },
+    analyticsModalActions: {
+        flexDirection: 'row',
+        gap: 10,
+        marginTop: 16,
+    },
+    analyticsModalPrimary: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 8,
+        backgroundColor: '#3b82f6',
+        alignItems: 'center',
+    },
+    analyticsModalPrimaryText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    analyticsModalSecondary: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 8,
+        backgroundColor: 'rgba(71, 85, 105, 0.3)',
+        alignItems: 'center',
+    },
+    analyticsModalSecondaryText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#94a3b8',
     },
 });

@@ -480,6 +480,8 @@ sequenceDiagram
 | File | Purpose |
 |------|---------|
 | `ToastContext.js` | Global toast notifications |
+| `AuthContext.js` | Centralized auth/session state, refresh + retry |
+| `NavigationHistoryContext.js` | In-app back/forward navigation history |
 
 ### Utils (`src/utils/`)
 | File | Purpose |
@@ -559,6 +561,19 @@ npx expo start --clear
 ---
 
 # 5. Version History & Changelog
+
+## v5.3.0 - Auth Stability, Navigation History, and Retries (January 28, 2026)
+
+### Auth & Session Reliability
+- **Auth Context**: Added centralized `AuthContext` that manages session/user state, retries profile fetch, and refreshes on app resume (web visibility + native `AppState`).
+- **Route Sync**: `AppNavigator` now resets to the correct dashboard based on current auth state and shows a loading screen while session/user rehydrates.
+- **Multi-Session Safe Logout**: Logout defaults to `scope: 'local'` to avoid invalidating other sessions on the same account.
+
+### Navigation
+- **Back/Forward History**: Added `NavigationHistoryContext` and wired back/forward controls into Master, Dispatcher, and Admin headers for in-app navigation history.
+
+### Action Reliability
+- **Retries for Critical Actions**: Added small retry wrapper for transient network errors on master order actions (claim/start/complete/refuse) in `orders.js`.
 
 ## v5.1.0 - Stability & Dispatcher Enhancements (January 25, 2026)
 

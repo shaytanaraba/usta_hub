@@ -15,8 +15,8 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {
     ArrowLeft, ArrowRight, LogOut, ShieldCheck, Moon, Sun, MapPin, Check, X, Filter, ChevronDown, ChevronUp,
-    Inbox, ClipboardList, TrendingUp, AlertCircle, CheckCircle2, Phone, User, Clock,
-    DollarSign, RotateCw, Wallet, Star, XCircle, CreditCard
+    Inbox, ClipboardList, AlertCircle, CheckCircle2, Phone, User, Clock,
+    DollarSign, RotateCw, Wallet, CreditCard
 } from 'lucide-react-native';
 
 import authService from '../services/auth';
@@ -612,6 +612,7 @@ const DashboardContent = ({ navigation }) => {
         return labels;
     }, [availableServices, language]);
 
+
     const handleClaim = async (orderId) => {
         // Find the order to estimate commission
         const order = availableOrders.find(o => o.id === orderId);
@@ -645,7 +646,6 @@ const DashboardContent = ({ navigation }) => {
         } catch (e) { showToast?.('Action failed', 'error'); }
         finally { setActionLoading(false); }
     };
-
     const activeJobsCount = myOrders.filter(o => o.status !== 'confirmed').length;
 
     return (
