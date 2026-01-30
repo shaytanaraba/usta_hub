@@ -27,7 +27,18 @@ const translations = {
         online: "Online",
         offline: "Offline",
         logout: "Logout",
-        logoutConfirm: "Are you sure you want to logout?",
+        logoutConfirm: "Are you sure you want to logout?",        // Login
+        loginTitle: "Partner Login",
+        loginEmail: "Email",
+        loginEmailPlaceholder: "email@example.com",
+        loginPassword: "Password",
+        loginPasswordPlaceholder: "********",
+        loginButton: "Sign In",
+        loginSupport: "Support",
+        loginFooter: "(c) 2024 Master.kg",
+        loginErrorGeneric: "An unexpected error occurred",
+        loginErrorInvalidCredentials: "Invalid email or password",
+        loginSuccess: "Login successful!",
 
         // Tabs & Navigation
         tabOrders: "Orders",
@@ -677,6 +688,19 @@ const translations = {
 
         logoutConfirm: "Вы уверены, что хотите выйти?",
 
+        // Login
+        loginTitle: "Вход для партнеров",
+        loginEmail: "Эл. почта",
+        loginEmailPlaceholder: "email@example.com",
+        loginPassword: "Пароль",
+        loginPasswordPlaceholder: "********",
+        loginButton: "Войти",
+        loginSupport: "Поддержка",
+        loginFooter: "(c) 2024 Master.kg",
+        loginErrorMissing: "Введите email и пароль",
+        loginErrorGeneric: "Произошла непредвиденная ошибка",
+        loginErrorInvalidCredentials: "Неверный email или пароль",
+        loginSuccess: "Вход выполнен!",
         // Tabs & Navigation
         tabOrders: "Заказы",
         tabMyAccount: "Мой аккаунт",
@@ -1324,6 +1348,18 @@ const translations = {
         logout: "Чыгуу",
         logoutConfirm: "Чыгууну каалайсызбы?",
 
+        // Login
+        loginTitle: "Өнөктөштөр үчүн кирүү",
+        loginEmail: "Э-почта",
+        loginEmailPlaceholder: "email@example.com",
+        loginPassword: "Купуя сөз",
+        loginPasswordPlaceholder: "********",
+        loginButton: "Кирүү",
+        loginSupport: "Колдоо",
+        loginFooter: "(c) 2024 Master.kg",
+        loginErrorMissing: "Э-почта жана купуя сөздү жазыңыз",
+        loginErrorGeneric: "Күтүлбөгөн ката кетти",
+        loginSuccess: "Ийгиликтүү кирдиңиз!",
         // Tabs & Navigation
         tabOrders: "Буйрутмалар",
         tabMyAccount: "Менин аккаунтум",
@@ -1766,6 +1802,9 @@ const translations = {
         errorFinalBelowCallout: "Акыркы баа чыгуу акысынан төмөн боло албайт",
         errorGeneric: "Бир нерсе туура эмес болду",
         errorNetwork: "Тармак катасы",
+        loginErrorGeneric: "Бир нерсе туура эмес болду",
+        loginErrorInvalidCredentials: "Эл. почта же сырсөз туура эмес",
+        loginSuccess: "Кирүү ийгиликтүү!",
         errorLoadFailed: "Маалыматты жүктөө ишке ашкан жок",
 
         // Create Order
@@ -1992,3 +2031,4 @@ export const LocalizationProvider = ({ children }) => {
 };
 
 export const useLocalization = () => useContext(LocalizationContext);
+
