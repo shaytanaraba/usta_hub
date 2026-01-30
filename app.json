@@ -23,7 +23,7 @@
       "edgeToEdgeEnabled": true
     },
     "web": {
-      "favicon": "./assets/circle.svg"
+      "favicon": "./assets/circle.png"
     },
     "plugins": [
       "@react-native-community/datetimepicker"
