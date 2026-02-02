@@ -1388,6 +1388,21 @@ export default function AdminDashboard({ navigation }) {
         setShowTimePicker(false);
     };
 
+    const keepLocationAndReset = () => {
+        const defaultCallout = settings?.default_guaranteed_payout ? String(settings.default_guaranteed_payout) : '';
+        setNewOrder(prev => ({
+            ...INITIAL_ORDER_STATE,
+            calloutFee: defaultCallout,
+            area: prev.area,
+            fullAddress: prev.fullAddress
+        }));
+        setConfirmChecked(false);
+        setPhoneError('');
+        setCreationSuccess(null);
+        setShowDatePicker(false);
+        setShowTimePicker(false);
+    };
+
     const handlePhoneBlur = () => {
         const normalized = normalizeKyrgyzPhone(newOrder.clientPhone);
         const nextValue = normalized || newOrder.clientPhone;
@@ -2875,7 +2890,7 @@ export default function AdminDashboard({ navigation }) {
                 {/* Search */}
                 <View style={styles.searchRow}>
                     <View style={[styles.searchInputWrapper, !isDark && styles.btnLight]}>
-                        <Text style={styles.searchIcon}>⌕</Text>
+                        <Text style={styles.searchIcon}>??</Text>
                         <TextInput
                             style={[styles.searchInput, !isDark && styles.textDark]}
                             placeholder={TRANSLATIONS.placeholderSearch || 'Search...'}
@@ -2897,7 +2912,7 @@ export default function AdminDashboard({ navigation }) {
                     <TouchableOpacity
                         style={[styles.viewToggleBtn, !isDark && styles.btnLight]}
                         onPress={() => setViewMode(prev => prev === 'cards' ? 'compact' : 'cards')}>
-                        <Text style={[styles.viewToggleBtnText, !isDark && styles.textDark]}>{viewMode === 'cards' ? '≡' : '⊞'}</Text>
+                        <Text style={[styles.viewToggleBtnText, !isDark && styles.textDark]}>{viewMode === 'cards' ? '▦' : '☰'}</Text>
                     </TouchableOpacity>
 
                     {/* Filter Toggle */}
@@ -2923,7 +2938,7 @@ export default function AdminDashboard({ navigation }) {
                             <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                                 {currentStatusLabel} ({currentStatusCount})
                             </Text>
-                            <Text style={styles.filterDropdownArrow}>▾</Text>
+                            <Text style={styles.filterDropdownArrow}>▼</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
@@ -2936,7 +2951,7 @@ export default function AdminDashboard({ navigation }) {
                             <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                                 {currentDispatcherLabel}
                             </Text>
-                            <Text style={styles.filterDropdownArrow}>▾</Text>
+                            <Text style={styles.filterDropdownArrow}>▼</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
@@ -2949,7 +2964,7 @@ export default function AdminDashboard({ navigation }) {
                             <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                                 {currentUrgencyLabel}
                             </Text>
-                            <Text style={styles.filterDropdownArrow}>▾</Text>
+                            <Text style={styles.filterDropdownArrow}>▼</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
@@ -2962,7 +2977,7 @@ export default function AdminDashboard({ navigation }) {
                             <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                                 {currentServiceLabel}
                             </Text>
-                            <Text style={styles.filterDropdownArrow}>▾</Text>
+                            <Text style={styles.filterDropdownArrow}>▼</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
@@ -2975,7 +2990,7 @@ export default function AdminDashboard({ navigation }) {
                             <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                                 {currentSortLabel}
                             </Text>
-                            <Text style={styles.filterDropdownArrow}>▾</Text>
+                            <Text style={styles.filterDropdownArrow}>▼</Text>
                         </TouchableOpacity>
 
                         {/* Clear Filters Button */}
@@ -3030,7 +3045,7 @@ export default function AdminDashboard({ navigation }) {
                             onChange: setFilterAttentionType
                         })}>
                             <Text style={styles.miniFilterText}>{TRANSLATIONS[attentionFilterLabel] || filterAttentionType}</Text>
-                            <Text style={styles.miniFilterArrow}>▾</Text>
+                            <Text style={styles.miniFilterArrow}>▼</Text>
                         </TouchableOpacity>
                     </View>
                     <Text style={{ color: '#94a3b8', textAlign: 'center', padding: 10 }}>{TRANSLATIONS.msgNoMatch || 'No matching orders'}</Text>
@@ -3042,7 +3057,7 @@ export default function AdminDashboard({ navigation }) {
                     <View style={styles.attentionHeaderRow}>
                         <TouchableOpacity style={styles.attentionHeader} onPress={() => setShowNeedsAttention(!showNeedsAttention)}>
                             <Text style={[styles.attentionTitle, !isDark && { color: '#ef4444' }]}>! {TRANSLATIONS.needsAttention || 'Needs Attention'} ({needsActionOrders.length})</Text>
-                            <Text style={[styles.attentionChevron, !isDark && styles.textSecondary]}>{showNeedsAttention ? '▲' : '▼'}</Text>
+                            <Text style={[styles.attentionChevron, !isDark && styles.textSecondary]}>{showNeedsAttention ? '^' : '▼'}</Text>
                         </TouchableOpacity>
 
                         <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -3056,7 +3071,7 @@ export default function AdminDashboard({ navigation }) {
                                     onChange: setFilterAttentionType
                                 })}>
                                     <Text style={styles.miniFilterText}>{TRANSLATIONS[attentionFilterLabel] || filterAttentionType}</Text>
-                                    <Text style={styles.miniFilterArrow}>▾</Text>
+                                    <Text style={styles.miniFilterArrow}>▼</Text>
                                 </TouchableOpacity>
                             )}
 
@@ -3135,7 +3150,7 @@ export default function AdminDashboard({ navigation }) {
                     <Text style={[styles.compactAddr, !isDark && styles.textSecondary]} numberOfLines={1}>{item.full_address}</Text>
                     <View style={styles.compactBottomRow}>
                         <Text style={[styles.compactClient, !isDark && styles.textDark]}>{item.client?.full_name || 'N/A'}</Text>
-                        {item.master && <Text style={styles.compactMaster}>{TRANSLATIONS.labelMasterPrefix || '→ '}{item.master.full_name}</Text>}
+                        {item.master && <Text style={styles.compactMaster}>{TRANSLATIONS.labelMasterPrefix || '? '}{item.master.full_name}</Text>}
                         {item.final_price && <Text style={styles.compactPrice}>{item.final_price}c</Text>}
                         {['placed', 'reopened'].includes(item.status) && (
                             <TouchableOpacity
@@ -3222,7 +3237,7 @@ export default function AdminDashboard({ navigation }) {
                                 <View style={{ alignItems: 'flex-end' }}>
                                     <View style={{ marginBottom: 6, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderRadius: 4, borderWidth: 1, borderColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)' }}>
                                         <Text style={{ fontSize: 11, color: (item.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '600' }}>
-                                            {TRANSLATIONS.prepaidBalance || 'Balance'}: {item.prepaid_balance || 0} сом
+                                            {TRANSLATIONS.prepaidBalance || 'Balance'}: {item.prepaid_balance || 0} ???
                                         </Text>
                                     </View>
 
@@ -3453,11 +3468,11 @@ export default function AdminDashboard({ navigation }) {
                                                 placeholder="0"
                                                 placeholderTextColor="#64748b"
                                             />
-                                            <Text style={styles.settingsInputSuffix}>сом</Text>
+                                            <Text style={styles.settingsInputSuffix}>???</Text>
                                         </View>
                                     ) : (
                                         <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
-                                            {settings.default_guaranteed_payout || 0} <Text style={styles.settingsFieldUnit}>сом</Text>
+                                            {settings.default_guaranteed_payout || 0} <Text style={styles.settingsFieldUnit}>???</Text>
                                         </Text>
                                     )}
                                 </View>
@@ -3624,7 +3639,7 @@ export default function AdminDashboard({ navigation }) {
                                                     {district[`name_${language}`] || district.name_en || district.code}
                                                 </Text>
                                                 <Text style={styles.serviceTypeRowMeta} numberOfLines={1}>
-                                                    {TRANSLATIONS.code || 'Code:'} {district.code} • {district.region || (TRANSLATIONS.region || 'Region')}: {district.region || '-'} • {district.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
+                                                    {TRANSLATIONS.code || 'Code:'} {district.code} ? {district.region || (TRANSLATIONS.region || 'Region')}: {district.region || '-'} ? {district.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
                                                 </Text>
                                             </View>
                                             <View style={styles.serviceTypeRowActions}>
@@ -3841,7 +3856,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempServiceType.name_ru}
                                         onChangeText={v => setTempServiceType({ ...tempServiceType, name_ru: v })}
-                                        placeholder="Название услуги"
+                                        placeholder="???????? ??????"
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -3854,7 +3869,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempServiceType.name_kg}
                                         onChangeText={v => setTempServiceType({ ...tempServiceType, name_kg: v })}
-                                        placeholder="Кызматтын аты"
+                                        placeholder="????????? ???"
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -3978,7 +3993,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempDistrict.name_ru || ''}
                                         onChangeText={v => setTempDistrict({ ...tempDistrict, name_ru: v })}
-                                        placeholder="Название района"
+                                        placeholder="???????? ??????"
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -3991,7 +4006,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempDistrict.name_kg || ''}
                                         onChangeText={v => setTempDistrict({ ...tempDistrict, name_kg: v })}
-                                        placeholder="Аймактын аты"
+                                        placeholder="???????? ???"
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -4110,291 +4125,355 @@ export default function AdminDashboard({ navigation }) {
 
         const publishDisabled = !confirmChecked || actionLoading;
 
+        const renderSuccess = () => (
+            <View style={styles.successContainer}>
+                <Text style={styles.successIcon}>✓</Text>
+                <Text style={[styles.successTitle, !isDark && styles.textDark]}>
+                    {TRANSLATIONS.createSuccess || TRANSLATIONS.toastOrderCreated || 'Order created!'}
+                </Text>
+                <Text style={styles.successId}>#{creationSuccess.id}</Text>
+                <TouchableOpacity
+                    style={styles.successBtn}
+                    onPress={() => {
+                        setActiveTab('orders');
+                        setCreationSuccess(null);
+                        clearCreateOrderForm();
+                    }}
+                >
+                    <Text style={styles.successBtnText}>
+                        {TRANSLATIONS.createViewQueue || TRANSLATIONS.ordersQueue || TRANSLATIONS.orders || 'View orders'}
+                    </Text>
+                </TouchableOpacity>
+                <View style={styles.successDivider}>
+                    <Text style={styles.successDividerText}>
+                        {TRANSLATIONS.createAnotherOrder || 'Create another order'}
+                    </Text>
+                </View>
+                <View style={styles.successButtonRow}>
+                    <TouchableOpacity style={styles.successKeepLocationBtn} onPress={keepLocationAndReset}>
+                        <Text style={styles.successKeepLocationText}>
+                            {TRANSLATIONS.keepLocation || 'Keep location'} →
+                        </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={styles.successBtnAlt}
+                        onPress={() => {
+                            setCreationSuccess(null);
+                            clearCreateOrderForm();
+                        }}
+                    >
+                        <Text style={styles.successBtnAltText}>
+                            {TRANSLATIONS.startFresh || TRANSLATIONS.createClear || 'Start fresh'}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+        );
+
+        const renderForm = () => (
+            <View style={styles.createSections}>
+                {/* Client */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.createClientDetails || 'Client'}</Text>
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.createPhone || 'Phone'} *</Text>
+                    <View style={styles.inputWithIcon}>
+                        <TextInput
+                            style={[styles.input, styles.inputWithPaste, phoneError && styles.inputError, !isDark && styles.inputLight]}
+                            placeholder="+996..."
+                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                            value={newOrder.clientPhone}
+                            onChangeText={t => setNewOrder({ ...newOrder, clientPhone: t })}
+                            onBlur={handlePhoneBlur}
+                            keyboardType="phone-pad"
+                        />
+                        <TouchableOpacity style={styles.inFieldBtn} onPress={handlePastePhone}>
+                            <Text style={styles.inFieldBtnText}>⎘</Text>
+                        </TouchableOpacity>
+                    </View>
+                    {phoneError ? <Text style={styles.errorText}>{phoneError}</Text> : null}
+
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.createName || 'Name'}</Text>
+                    <TextInput
+                        style={[styles.input, !isDark && styles.inputLight]}
+                        placeholder={TRANSLATIONS.createName || 'Name'}
+                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                        value={newOrder.clientName}
+                        onChangeText={t => setNewOrder({ ...newOrder, clientName: t })}
+                    />
+                </View>
+
+                {/* Location */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.createLocation || 'Location'}</Text>
+
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.createDistrict || 'District'} *</Text>
+                    <TouchableOpacity
+                        style={[styles.input, styles.pickerInput, !isDark && styles.inputLight]}
+                        onPress={openDistrictPicker}
+                    >
+                        <Text style={[styles.pickerBtnText, !newOrder.area && styles.placeholderText, !isDark && styles.textDark]}>
+                            {selectedDistrictLabel}
+                        </Text>
+                        <Text style={{ color: '#94a3b8', fontSize: 12 }}>▼</Text>
+                    </TouchableOpacity>
+
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.createFullAddress || 'Full Address'} *</Text>
+                    <TextInput
+                        style={[styles.input, !isDark && styles.inputLight]}
+                        placeholder={TRANSLATIONS.createFullAddress || 'Full Address'}
+                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                        value={newOrder.fullAddress}
+                        onChangeText={t => setNewOrder({ ...newOrder, fullAddress: t })}
+                    />
+
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.createOrientir || 'Landmark/Orientir'}</Text>
+                    <TextInput
+                        style={[styles.input, !isDark && styles.inputLight]}
+                        placeholder={TRANSLATIONS.orientirPlaceholder || 'e.g. Near Beta Stores'}
+                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                        value={newOrder.orientir}
+                        onChangeText={t => setNewOrder({ ...newOrder, orientir: t })}
+                    />
+                </View>
+
+                {/* Service */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.createServiceType || 'Service Type'}</Text>
+                    <View style={styles.serviceGrid}>
+                        {serviceTypeOptions.map(s => (
+                            <TouchableOpacity
+                                key={s.id}
+                                style={[styles.serviceBtn, newOrder.serviceType === s.id && styles.serviceBtnActive, !isDark && newOrder.serviceType !== s.id && styles.btnLight]}
+                                onPress={() => setNewOrder({ ...newOrder, serviceType: s.id })}
+                            >
+                                <Text style={[styles.serviceBtnText, !isDark && newOrder.serviceType !== s.id && styles.textDark, newOrder.serviceType === s.id && styles.serviceBtnTextActive]}>{s.label}</Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.problemDesc || 'Problem Description'} *</Text>
+                    <View style={{ position: 'relative' }}>
+                        <TextInput
+                            style={[styles.input, styles.textArea, !isDark && styles.inputLight]}
+                            placeholder="..."
+                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                            value={newOrder.problemDescription}
+                            onChangeText={t => setNewOrder({ ...newOrder, problemDescription: t.substring(0, 500) })}
+                            multiline
+                            numberOfLines={3}
+                            maxLength={500}
+                        />
+                        <Text style={styles.charCounter}>{(newOrder.problemDescription || '').length}/500</Text>
+                    </View>
+                </View>
+
+                {/* Schedule */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.schedule || 'Schedule'}</Text>
+                    <View style={styles.urgencyRow}>
+                        <TouchableOpacity
+                            style={[styles.urgencyBtn, newOrder.urgency === 'planned' && styles.urgencyBtnActive, !isDark && newOrder.urgency !== 'planned' && styles.btnLight]}
+                            onPress={() => setNewOrder({ ...newOrder, urgency: 'planned' })}
+                        >
+                            <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'planned' && styles.textDark, newOrder.urgency === 'planned' && styles.urgencyTextActive]}>{TRANSLATIONS.urgencyPlanned || 'Planned'}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.urgencyBtn, newOrder.urgency === 'urgent' && styles.urgencyBtnActive, !isDark && newOrder.urgency !== 'urgent' && styles.btnLight]}
+                            onPress={() => setNewOrder({ ...newOrder, urgency: 'urgent' })}
+                        >
+                            <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'urgent' && styles.textDark, newOrder.urgency === 'urgent' && styles.urgencyTextActive]}>{TRANSLATIONS.urgencyUrgent || 'Urgent'}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.urgencyBtn, newOrder.urgency === 'emergency' && styles.urgencyBtnActive, { borderColor: '#ef4444' }, !isDark && newOrder.urgency !== 'emergency' && styles.btnLight]}
+                            onPress={() => setNewOrder({ ...newOrder, urgency: 'emergency' })}
+                        >
+                            <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'emergency' && styles.textDark, newOrder.urgency === 'emergency' && styles.urgencyTextActive]}>{TRANSLATIONS.urgencyEmergency || 'Emergency'}</Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    {newOrder.urgency === 'planned' ? (
+                        <View style={styles.plannedPickerContainer}>
+                            <View style={styles.plannedTimeRow}>
+                                <View style={styles.plannedDateInput}>
+                                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.preferredDate || 'Date'}</Text>
+                                    {Platform.OS === 'web' ? (
+                                        <View style={[styles.input, styles.webPickerInput, !isDark && styles.inputLight]}>
+                                            {React.createElement('input', {
+                                                type: 'date',
+                                                value: newOrder.preferredDate ? newOrder.preferredDate.split('.').reverse().join('-') : '',
+                                                onChange: (e) => {
+                                                    const val = e.target.value;
+                                                    if (val) {
+                                                        const [y, m, d] = val.split('-');
+                                                        setNewOrder({ ...newOrder, preferredDate: `${d}.${m}.${y}` });
+                                                    } else {
+                                                        setNewOrder({ ...newOrder, preferredDate: '' });
+                                                    }
+                                                },
+                                                style: { border: 'none', background: 'transparent', color: isDark ? '#fff' : '#0f172a', width: '100%' }
+                                            })}
+                                        </View>
+                                    ) : (
+                                        <TouchableOpacity
+                                            style={[styles.input, styles.datePickerButton, !isDark && styles.inputLight]}
+                                            onPress={() => setShowDatePicker(true)}
+                                        >
+                                            <Text style={[styles.datePickerText, !newOrder.preferredDate && styles.placeholderText, !isDark && styles.textDark]}>
+                                                {newOrder.preferredDate || (TRANSLATIONS.selectOption || 'Select')}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
+
+                                <View style={styles.plannedTimeInput}>
+                                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.preferredTime || 'Time'}</Text>
+                                    {Platform.OS === 'web' ? (
+                                        <View style={[styles.input, styles.webPickerInput, !isDark && styles.inputLight]}>
+                                            {React.createElement('input', {
+                                                type: 'time',
+                                                value: newOrder.preferredTime || '',
+                                                onChange: (e) => setNewOrder({ ...newOrder, preferredTime: e.target.value || '' }),
+                                                style: { border: 'none', background: 'transparent', color: isDark ? '#fff' : '#0f172a', width: '100%' }
+                                            })}
+                                        </View>
+                                    ) : (
+                                        <TouchableOpacity
+                                            style={[styles.input, styles.datePickerButton, !isDark && styles.inputLight]}
+                                            onPress={() => setShowTimePicker(true)}
+                                        >
+                                            <Text style={[styles.datePickerText, !newOrder.preferredTime && styles.placeholderText, !isDark && styles.textDark]}>
+                                                {newOrder.preferredTime || (TRANSLATIONS.selectOption || 'Select')}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
+                            </View>
+
+                            {showDatePicker ? (
+                                <DateTimePicker
+                                    value={newOrder.preferredDate ? new Date(newOrder.preferredDate.split('.').reverse().join('-')) : new Date()}
+                                    mode="date"
+                                    display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                                    onChange={onDateChange}
+                                />
+                            ) : null}
+                            {showTimePicker ? (
+                                <DateTimePicker
+                                    value={newOrder.preferredTime ? new Date(`1970-01-01T${newOrder.preferredTime}:00`) : new Date()}
+                                    mode="time"
+                                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                    onChange={onTimeChange}
+                                />
+                            ) : null}
+                        </View>
+                    ) : null}
+                </View>
+
+                {/* Pricing */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.pricing || 'Pricing'}</Text>
+                    <View style={styles.pricingRow}>
+                        <TouchableOpacity
+                            style={[styles.pricingBtn, newOrder.pricingType === 'unknown' && styles.pricingBtnActive, !isDark && newOrder.pricingType !== 'unknown' && styles.btnLight]}
+                            onPress={() => setNewOrder({ ...newOrder, pricingType: 'unknown' })}
+                        >
+                            <Text style={styles.pricingBtnText}>{TRANSLATIONS.priceOpen || 'Open'}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.pricingBtn, newOrder.pricingType === 'fixed' && styles.pricingBtnActive, !isDark && newOrder.pricingType !== 'fixed' && styles.btnLight]}
+                            onPress={() => setNewOrder({ ...newOrder, pricingType: 'fixed' })}
+                        >
+                            <Text style={styles.pricingBtnText}>{TRANSLATIONS.pricingFixed || 'Fixed Price'}</Text>
+                        </TouchableOpacity>
+                    </View>
+                    {newOrder.pricingType === 'fixed' ? (
+                        <View style={{ flexDirection: 'row', gap: 8 }}>
+                            <TextInput
+                                style={[styles.input, !isDark && styles.inputLight, { flex: 1 }]}
+                                placeholder={TRANSLATIONS.calloutFee || 'Call-out Fee'}
+                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                keyboardType="numeric"
+                                value={newOrder.calloutFee}
+                                onChangeText={t => setNewOrder({ ...newOrder, calloutFee: sanitizeNumberInput(t) })}
+                            />
+                            <TextInput
+                                style={[styles.input, !isDark && styles.inputLight, { flex: 1 }]}
+                                placeholder={TRANSLATIONS.initialPrice || 'Initial Price'}
+                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                keyboardType="numeric"
+                                value={newOrder.initialPrice}
+                                onChangeText={t => setNewOrder({ ...newOrder, initialPrice: sanitizeNumberInput(t) })}
+                            />
+                        </View>
+                    ) : (
+                        <TextInput
+                            style={[styles.input, !isDark && styles.inputLight]}
+                            placeholder={TRANSLATIONS.calloutFee || 'Call-out Fee'}
+                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                            keyboardType="numeric"
+                            value={newOrder.calloutFee}
+                            onChangeText={t => setNewOrder({ ...newOrder, calloutFee: sanitizeNumberInput(t) })}
+                        />
+                    )}
+                </View>
+
+                {/* Internal Note */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.sectionNote || 'Internal Note'}</Text>
+                    <TextInput
+                        style={[styles.input, styles.textArea, !isDark && styles.inputLight]}
+                        placeholder={TRANSLATIONS.createInternalNote || 'Internal Note'}
+                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                        value={newOrder.dispatcherNote}
+                        onChangeText={t => setNewOrder({ ...newOrder, dispatcherNote: t })}
+                        multiline
+                        numberOfLines={3}
+                        maxLength={500}
+                    />
+                </View>
+
+                <View style={{ height: 120 }} />
+            </View>
+        );
+
         return (
-            <View style={{ flex: 1, paddingHorizontal: 16 }}>
+            <View style={styles.createWrapper}>
                 {renderHeader(TRANSLATIONS.createOrder || 'Create Order')}
                 <ScrollView
                     style={styles.createContainer}
                     showsVerticalScrollIndicator={false}
                     contentContainerStyle={styles.createScrollContent}
                 >
-                    <View style={styles.createSections}>
-                        {/* Client */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.createClientDetails || 'Client'}</Text>
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.createPhone || 'Phone'} *</Text>
-                            <View style={styles.inputWithIcon}>
-                                <TextInput
-                                    style={[styles.input, styles.inputWithPaste, phoneError && styles.inputError, !isDark && styles.inputLight]}
-                                    placeholder="+996..."
-                                    placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                    value={newOrder.clientPhone}
-                                    onChangeText={t => setNewOrder({ ...newOrder, clientPhone: t })}
-                                    onBlur={handlePhoneBlur}
-                                    keyboardType="phone-pad"
-                                />
-                                <TouchableOpacity style={styles.inFieldBtn} onPress={handlePastePhone}>
-                                    <Text style={styles.inFieldBtnText}>⎘</Text>
-                                </TouchableOpacity>
-                            </View>
-                            {phoneError && <Text style={styles.errorText}>{phoneError}</Text>}
+                    {creationSuccess ? renderSuccess() : renderForm()}
+                </ScrollView>
 
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.createName || 'Name'}</Text>
-                            <TextInput
-                                style={[styles.input, !isDark && styles.inputLight]}
-                                placeholder={TRANSLATIONS.createName || 'Name'}
-                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                value={newOrder.clientName}
-                                onChangeText={t => setNewOrder({ ...newOrder, clientName: t })}
-                            />
-                        </View>
-
-                        {/* Location */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.createLocation || 'Location'}</Text>
-
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.createDistrict || 'District'} *</Text>
-                            <TouchableOpacity
-                                style={[styles.input, styles.pickerInput, !isDark && styles.inputLight]}
-                                onPress={openDistrictPicker}
-                            >
-                                <Text style={[styles.pickerBtnText, !newOrder.area && styles.placeholderText, !isDark && styles.textDark]}>
-                                    {selectedDistrictLabel}
-                                </Text>
-                                <Text style={{ color: '#94a3b8', fontSize: 12 }}>▼</Text>
-                            </TouchableOpacity>
-
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.createFullAddress || 'Full Address'} *</Text>
-                            <TextInput
-                                style={[styles.input, !isDark && styles.inputLight]}
-                                placeholder={TRANSLATIONS.createFullAddress || 'Full Address'}
-                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                value={newOrder.fullAddress}
-                                onChangeText={t => setNewOrder({ ...newOrder, fullAddress: t })}
-                            />
-
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.createOrientir || 'Landmark/Orientir'}</Text>
-                            <TextInput
-                                style={[styles.input, !isDark && styles.inputLight]}
-                                placeholder={TRANSLATIONS.orientirPlaceholder || 'e.g. Near Beta Stores'}
-                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                value={newOrder.orientir}
-                                onChangeText={t => setNewOrder({ ...newOrder, orientir: t })}
-                            />
-                        </View>
-
-                        {/* Service */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.createServiceType || 'Service Type'}</Text>
-                            <View style={styles.serviceGrid}>
-                                {serviceTypeOptions.map(s => (
-                                    <TouchableOpacity
-                                        key={s.id}
-                                        style={[styles.serviceBtn, newOrder.serviceType === s.id && styles.serviceBtnActive, !isDark && newOrder.serviceType !== s.id && styles.btnLight]}
-                                        onPress={() => setNewOrder({ ...newOrder, serviceType: s.id })}
-                                    >
-                                        <Text style={[styles.serviceBtnText, !isDark && newOrder.serviceType !== s.id && styles.textDark, newOrder.serviceType === s.id && styles.serviceBtnTextActive]}>{s.label}</Text>
-                                    </TouchableOpacity>
-                                ))}
-                            </View>
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.problemDesc || 'Problem Description'} *</Text>
-                            <View style={{ position: 'relative' }}>
-                                <TextInput
-                                    style={[styles.input, styles.textArea, !isDark && styles.inputLight]}
-                                    placeholder="..."
-                                    placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                    value={newOrder.problemDescription}
-                                    onChangeText={t => setNewOrder({ ...newOrder, problemDescription: t.substring(0, 500) })}
-                                    multiline
-                                    numberOfLines={3}
-                                    maxLength={500}
-                                />
-                                <Text style={styles.charCounter}>{newOrder.problemDescription.length}/500</Text>
-                            </View>
-                        </View>
-
-                        {/* Schedule */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.schedule || 'Schedule'}</Text>
-                            <View style={styles.urgencyRow}>
-                                <TouchableOpacity
-                                    style={[styles.urgencyBtn, newOrder.urgency === 'planned' && styles.urgencyBtnActive, !isDark && newOrder.urgency !== 'planned' && styles.btnLight]}
-                                    onPress={() => setNewOrder({ ...newOrder, urgency: 'planned' })}
-                                >
-                                    <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'planned' && styles.textDark, newOrder.urgency === 'planned' && styles.urgencyTextActive]}>{TRANSLATIONS.urgencyPlanned || 'Planned'}</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.urgencyBtn, newOrder.urgency === 'urgent' && styles.urgencyBtnActive, !isDark && newOrder.urgency !== 'urgent' && styles.btnLight]}
-                                    onPress={() => setNewOrder({ ...newOrder, urgency: 'urgent' })}
-                                >
-                                    <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'urgent' && styles.textDark, newOrder.urgency === 'urgent' && styles.urgencyTextActive]}>{TRANSLATIONS.urgencyUrgent || 'Urgent'}</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.urgencyBtn, newOrder.urgency === 'emergency' && styles.urgencyBtnActive, { borderColor: '#ef4444' }, !isDark && newOrder.urgency !== 'emergency' && styles.btnLight]}
-                                    onPress={() => setNewOrder({ ...newOrder, urgency: 'emergency' })}
-                                >
-                                    <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'emergency' && styles.textDark, newOrder.urgency === 'emergency' && styles.urgencyTextActive]}>{TRANSLATIONS.urgencyEmergency || 'Emergency'}</Text>
-                                </TouchableOpacity>
-                            </View>
-
-                            {newOrder.urgency === 'planned' && (
-                                <View style={styles.plannedPickerContainer}>
-                                    <View style={styles.plannedTimeRow}>
-                                        <View style={styles.plannedDateInput}>
-                                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.preferredDate || 'Date'}</Text>
-                                            {Platform.OS === 'web' ? (
-                                                <View style={[styles.input, styles.webPickerInput, !isDark && styles.inputLight]}>
-                                                    {React.createElement('input', {
-                                                        type: 'date',
-                                                        value: newOrder.preferredDate ? newOrder.preferredDate.split('.').reverse().join('-') : '',
-                                                        onChange: (e) => {
-                                                            const val = e.target.value;
-                                                            if (val) {
-                                                                const [y, m, d] = val.split('-');
-                                                                setNewOrder({ ...newOrder, preferredDate: `${d}.${m}.${y}` });
-                                                            } else {
-                                                                setNewOrder({ ...newOrder, preferredDate: '' });
-                                                            }
-                                                        },
-                                                        style: { border: 'none', background: 'transparent', color: isDark ? '#fff' : '#0f172a', width: '100%' }
-                                                    })}
-                                                </View>
-                                            ) : (
-                                                <TouchableOpacity
-                                                    style={[styles.input, styles.datePickerButton, !isDark && styles.inputLight]}
-                                                    onPress={() => setShowDatePicker(true)}
-                                                >
-                                                    <Text style={[styles.datePickerText, !newOrder.preferredDate && styles.placeholderText, !isDark && styles.textDark]}>
-                                                        {newOrder.preferredDate || (TRANSLATIONS.selectOption || 'Select')}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                            )}
-                                        </View>
-
-                                        <View style={styles.plannedTimeInput}>
-                                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.preferredTime || 'Time'}</Text>
-                                            {Platform.OS === 'web' ? (
-                                                <View style={[styles.input, styles.webPickerInput, !isDark && styles.inputLight]}>
-                                                    {React.createElement('input', {
-                                                        type: 'time',
-                                                        value: newOrder.preferredTime || '',
-                                                        onChange: (e) => setNewOrder({ ...newOrder, preferredTime: e.target.value || '' }),
-                                                        style: { border: 'none', background: 'transparent', color: isDark ? '#fff' : '#0f172a', width: '100%' }
-                                                    })}
-                                                </View>
-                                            ) : (
-                                                <TouchableOpacity
-                                                    style={[styles.input, styles.datePickerButton, !isDark && styles.inputLight]}
-                                                    onPress={() => setShowTimePicker(true)}
-                                                >
-                                                    <Text style={[styles.datePickerText, !newOrder.preferredTime && styles.placeholderText, !isDark && styles.textDark]}>
-                                                        {newOrder.preferredTime || (TRANSLATIONS.selectOption || 'Select')}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                            )}
-                                        </View>
-                                    </View>
-
-                                    {showDatePicker && (
-                                        <DateTimePicker
-                                            value={newOrder.preferredDate ? new Date(newOrder.preferredDate.split('.').reverse().join('-')) : new Date()}
-                                            mode="date"
-                                            display={Platform.OS === 'ios' ? 'inline' : 'default'}
-                                            onChange={onDateChange}
-                                        />
-                                    )}
-                                    {showTimePicker && (
-                                        <DateTimePicker
-                                            value={newOrder.preferredTime ? new Date(`1970-01-01T${newOrder.preferredTime}:00`) : new Date()}
-                                            mode="time"
-                                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                            onChange={onTimeChange}
-                                        />
-                                    )}
-                                </View>
-                            )}
-                        </View>
-
-                        {/* Pricing */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.pricing || 'Pricing'}</Text>
-                            <View style={styles.pricingRow}>
-                                <TouchableOpacity
-                                    style={[styles.pricingBtn, newOrder.pricingType === 'unknown' && styles.pricingBtnActive, !isDark && newOrder.pricingType !== 'unknown' && styles.btnLight]}
-                                    onPress={() => setNewOrder({ ...newOrder, pricingType: 'unknown' })}
-                                >
-                                    <Text style={styles.pricingBtnText}>{TRANSLATIONS.priceOpen || 'Open'}</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.pricingBtn, newOrder.pricingType === 'fixed' && styles.pricingBtnActive, !isDark && newOrder.pricingType !== 'fixed' && styles.btnLight]}
-                                    onPress={() => setNewOrder({ ...newOrder, pricingType: 'fixed' })}
-                                >
-                                    <Text style={styles.pricingBtnText}>{TRANSLATIONS.pricingFixed || 'Fixed Price'}</Text>
-                                </TouchableOpacity>
-                            </View>
-                            <View style={{ flexDirection: 'row', gap: 8 }}>
-                                <TextInput
-                                    style={[styles.input, !isDark && styles.inputLight, { flex: 1 }]}
-                                    placeholder={TRANSLATIONS.calloutFee || 'Call-out Fee'}
-                                    placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                    keyboardType="numeric"
-                                    value={newOrder.calloutFee}
-                                    onChangeText={t => setNewOrder({ ...newOrder, calloutFee: sanitizeNumberInput(t) })}
-                                />
-                                <TextInput
-                                    style={[styles.input, !isDark && styles.inputLight, { flex: 1 }]}
-                                    placeholder={TRANSLATIONS.initialPrice || 'Initial Price'}
-                                    placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                    keyboardType="numeric"
-                                    editable={newOrder.pricingType === 'fixed'}
-                                    value={newOrder.initialPrice}
-                                    onChangeText={t => setNewOrder({ ...newOrder, initialPrice: sanitizeNumberInput(t) })}
-                                />
-                            </View>
-                        </View>
-
-                        {/* Internal Note */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS.sectionNote || 'Internal Note'}</Text>
-                            <TextInput
-                                style={[styles.input, styles.textArea, !isDark && styles.inputLight]}
-                                placeholder={TRANSLATIONS.createInternalNote || 'Internal Note'}
-                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                value={newOrder.dispatcherNote}
-                                onChangeText={t => setNewOrder({ ...newOrder, dispatcherNote: t })}
-                                multiline
-                                numberOfLines={3}
-                                maxLength={500}
-                            />
-                        </View>
-                    </View>
-
-                    <View style={styles.createFooter}>
+                {!creationSuccess ? (
+                    <View style={[styles.fixedBottomBar, !isDark && styles.fixedBottomBarLight]}>
                         <TouchableOpacity style={styles.confirmRow} onPress={() => setConfirmChecked(!confirmChecked)}>
                             <View style={[styles.checkbox, confirmChecked && styles.checkboxChecked]}>
-                                {confirmChecked && <Text style={styles.checkmark}>✓</Text>}
+                                {confirmChecked ? <Text style={styles.checkmark}>✓</Text> : null}
                             </View>
                             <Text style={[styles.confirmLabel, !isDark && styles.textDark]}>{TRANSLATIONS.confirmDetails || 'Confirm Details'}</Text>
                         </TouchableOpacity>
-
-                        <View style={styles.createButtons}>
-                            <TouchableOpacity style={styles.clearBtn} onPress={clearCreateOrderForm}>
-                                <Text style={styles.clearBtnText}>↺</Text>
+                        <View style={styles.bottomBarButtons}>
+                            <TouchableOpacity style={[styles.bottomClearBtn, !isDark && styles.btnLight]} onPress={clearCreateOrderForm}>
+                                <Text style={[styles.bottomClearBtnText, !isDark && styles.textSecondary]}>{TRANSLATIONS.createClear || 'Clear'}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                                style={[styles.publishBtn, publishDisabled && styles.publishBtnDisabled]}
-                                disabled={publishDisabled}
-                                onPress={handleCreateOrder}
+                                style={[
+                                    styles.bottomPublishBtn,
+                                    publishDisabled && styles.bottomPublishBtnDisabled,
+                                    publishDisabled && styles.pointerEventsNone
+                                ]}
+                                onPress={publishDisabled ? undefined : handleCreateOrder}
                             >
-                                {actionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.publishBtnText}>{TRANSLATIONS.createOrder || 'Create Order'}</Text>}
+                                {actionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.bottomPublishBtnText}>{TRANSLATIONS.createOrder || 'Create Order'}</Text>}
                             </TouchableOpacity>
                         </View>
                     </View>
-                </ScrollView>
+                ) : null}
             </View>
         );
     };
-
     const renderDetailsDrawer = () => {
         if (!detailsOrder) return null;
         const calloutValue = detailsOrder.callout_fee;
@@ -4891,7 +4970,7 @@ export default function AdminDashboard({ navigation }) {
                                                 </View>
                                                 <View style={{ flex: 1 }}>
                                                     <Text style={styles.itemTitle}>{master.full_name}</Text>
-                                                    <Text style={styles.itemSubtitle}>{master.phone || 'N/A'} • {(TRANSLATIONS.labelJobs || TRANSLATIONS.orders || 'Jobs')}: {jobsLabel}</Text>
+                                                    <Text style={styles.itemSubtitle}>{master.phone || 'N/A'} ? {(TRANSLATIONS.labelJobs || TRANSLATIONS.orders || 'Jobs')}: {jobsLabel}</Text>
                                                 </View>
                                                 <Ionicons name="chevron-forward" size={16} color="#64748b" />
                                             </View>
@@ -4926,7 +5005,7 @@ export default function AdminDashboard({ navigation }) {
 
                         <TextInput
                             style={[styles.input, !isDark && styles.inputLight]}
-                            placeholder="Amount (сом)"
+                            placeholder="Amount (???)"
                             placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                             keyboardType="numeric"
                             value={balanceData.amount}
@@ -5086,11 +5165,11 @@ export default function AdminDashboard({ navigation }) {
                                         <View style={{ gap: 8 }}>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                                                 <Text style={{ color: '#64748b' }}>{TRANSLATIONS.balance || 'Balance:'}</Text>
-                                                <Text style={{ color: (detailsPerson?.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '700' }}>{detailsPerson?.prepaid_balance || 0} сом</Text>
+                                                <Text style={{ color: (detailsPerson?.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '700' }}>{detailsPerson?.prepaid_balance || 0} ???</Text>
                                             </View>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                                                 <Text style={{ color: '#64748b' }}>{TRANSLATIONS.initialDeposit || 'Initial Deposit:'}</Text>
-                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.initial_deposit || 0} сом</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.initial_deposit || 0} ???</Text>
                                             </View>
                                         </View>
                                     </View>
@@ -5236,7 +5315,7 @@ export default function AdminDashboard({ navigation }) {
                                                 </View>
                                                 <View style={{ alignItems: 'flex-end' }}>
                                                     <Text style={{ color: '#22c55e', fontWeight: '700', fontSize: 14 }}>
-                                                        {order.final_price ?? order.initial_price ?? order.callout_fee ?? '-'} сом
+                                                        {order.final_price ?? order.initial_price ?? order.callout_fee ?? '-'} ???
                                                     </Text>
                                                     <View style={[styles.statusBadge, { backgroundColor: statusColor, marginTop: 6 }]}>
                                                         <Text style={styles.statusText}>{getOrderStatusLabel(order.status, t)}</Text>
@@ -5407,7 +5486,7 @@ export default function AdminDashboard({ navigation }) {
 
                         <View style={{ backgroundColor: '#f59e0b15', padding: 12, borderRadius: 8, marginBottom: 16, borderLeftWidth: 3, borderLeftColor: '#f59e0b' }}>
                             <Text style={{ color: '#f59e0b', fontSize: 12 }}>
-                                ⚠️ {TRANSLATIONS.resetPasswordWarning || "This action will immediately change the user's password. They will need to use the new password to login."}
+                                ?? {TRANSLATIONS.resetPasswordWarning || "This action will immediately change the user's password. They will need to use the new password to login."}
                             </Text>
                         </View>
 
@@ -5952,19 +6031,20 @@ const styles = StyleSheet.create({
     cardPayText: { fontSize: 12, fontWeight: '700', color: '#fff' },
 
     // Create Order Styles (Dispatcher parity)
-    createContainer: { flex: 1 },
-    createScrollContent: { paddingBottom: 40 },
-    createSections: { gap: 12 },
-    formSection: { backgroundColor: 'rgba(30,41,59,0.8)', borderRadius: 16, padding: 16 },
-    formSectionLight: { backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e2e8f0' },
+    createWrapper: { flex: 1 },
+    createContainer: { flex: 1, padding: 16 },
+    createScrollContent: { paddingBottom: 20 },
+    createSections: { flex: 1 },
+    formSection: { backgroundColor: 'rgba(30,41,59,0.8)', borderRadius: 16, padding: 16, marginBottom: 12 },
+    formSectionLight: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', shadowColor: '#000', shadowOffset: { height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
     formSectionTitle: { fontSize: 14, fontWeight: '700', color: '#fff', marginBottom: 12 },
-    inputLabel: { fontSize: 10, fontWeight: '700', color: '#64748b', textTransform: 'uppercase', marginBottom: 6, marginTop: 8 },
+    inputLabel: { fontSize: 10, fontWeight: '700', color: '#64748b', textTransform: 'uppercase', marginBottom: 4, marginTop: 8 },
     input: { backgroundColor: 'rgba(71,85,105,0.3)', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, color: '#fff', fontSize: 14 },
     inputError: { borderWidth: 1, borderColor: '#ef4444' },
     inputWithIcon: { position: 'relative' },
-    inputWithPaste: { paddingRight: 40 },
-    inFieldBtn: { position: 'absolute', right: 10, top: 10, width: 28, height: 28, borderRadius: 6, backgroundColor: 'rgba(59,130,246,0.2)', alignItems: 'center', justifyContent: 'center' },
-    inFieldBtnText: { fontSize: 14, fontWeight: '700', color: '#60a5fa' },
+    inputWithPaste: { paddingRight: 44 },
+    inFieldBtn: { position: 'absolute', right: 4, top: 4, bottom: 4, width: 36, backgroundColor: 'rgba(59,130,246,0.15)', borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+    inFieldBtnText: { fontSize: 16, color: '#3b82f6' },
     textArea: { minHeight: 80, textAlignVertical: 'top' },
     pickerInput: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     pickerBtnText: { color: '#fff', fontSize: 14 },
@@ -5990,11 +6070,32 @@ const styles = StyleSheet.create({
     pricingBtn: { flex: 1, paddingVertical: 10, borderRadius: 8, backgroundColor: 'rgba(71,85,105,0.3)', alignItems: 'center' },
     pricingBtnActive: { backgroundColor: '#22c55e' },
     pricingBtnText: { fontSize: 12, fontWeight: '600', color: '#fff' },
-    charCounter: { position: 'absolute', right: 10, bottom: 8, fontSize: 10, color: '#64748b' },
+    charCounter: { position: 'absolute', bottom: 8, right: 12, fontSize: 10, color: '#64748b', fontWeight: '500' },
     createFooter: { backgroundColor: 'rgba(30,41,59,0.95)', borderRadius: 16, padding: 16, marginTop: 12 },
     confirmRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
     checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: '#64748b', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
     checkboxChecked: { backgroundColor: '#3b82f6', borderColor: '#3b82f6' },
+    fixedBottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#1e293b', borderTopWidth: 1, borderTopColor: 'rgba(71,85,105,0.3)', padding: 12, paddingBottom: Platform.OS === 'ios' ? 28 : 12 },
+    fixedBottomBarLight: { backgroundColor: '#fff', borderTopColor: '#e2e8f0' },
+    bottomBarButtons: { flexDirection: 'row', gap: 12 },
+    bottomClearBtn: { paddingVertical: 14, paddingHorizontal: 20, borderRadius: 10, backgroundColor: 'rgba(71,85,105,0.3)', alignItems: 'center' },
+    bottomClearBtnText: { fontSize: 14, fontWeight: '600', color: '#94a3b8' },
+    bottomPublishBtn: { flex: 1, paddingVertical: 14, borderRadius: 10, backgroundColor: '#3b82f6', alignItems: 'center' },
+    bottomPublishBtnDisabled: { backgroundColor: '#475569', opacity: 0.7 },
+    bottomPublishBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+    successContainer: { alignItems: 'center', paddingVertical: 60 },
+    successIcon: { fontSize: 64, color: '#22c55e', marginBottom: 16 },
+    successTitle: { fontSize: 24, fontWeight: '700', color: '#fff', marginBottom: 8 },
+    successId: { fontSize: 16, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: '#94a3b8', marginBottom: 24 },
+    successBtn: { backgroundColor: '#3b82f6', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 10, marginBottom: 12 },
+    successBtnText: { fontSize: 14, fontWeight: '600', color: '#fff' },
+    successBtnAlt: { paddingHorizontal: 24, paddingVertical: 14 },
+    successBtnAltText: { fontSize: 14, fontWeight: '600', color: '#3b82f6' },
+    successDivider: { marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(71,85,105,0.3)', width: '100%', alignItems: 'center' },
+    successDividerText: { fontSize: 12, color: '#64748b', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 },
+    successButtonRow: { flexDirection: 'row', gap: 12, marginTop: 16, width: '100%' },
+    successKeepLocationBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: '#3b82f6', alignItems: 'center' },
+    successKeepLocationText: { color: '#fff', fontSize: 14, fontWeight: '700' },
     checkmark: { color: '#fff', fontSize: 14, fontWeight: '700' },
     confirmLabel: { fontSize: 13, fontWeight: '600', color: '#fff' },
     createButtons: { flexDirection: 'row', gap: 8 },

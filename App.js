@@ -62,7 +62,7 @@ function AppNavigator() {
   const { user, session, loading, refreshSession, resetAppData } = useAuth();
   const { navRef, onStateChange, resetHistory } = useNavHistory();
   const [loadingTimeout, setLoadingTimeout] = useState(false);
-  const telegramActive = isTelegramWebApp();
+  const [telegramActive, setTelegramActive] = useState(isTelegramWebApp());
 
   const syncRoute = () => {
     if (!navRef.isReady()) return;
@@ -85,6 +85,22 @@ function AppNavigator() {
   useEffect(() => {
     syncRoute();
   }, [user]);
+
+  useEffect(() => {
+    if (telegramActive) return;
+    let mounted = true;
+    const interval = setInterval(() => {
+      if (!mounted) return;
+      if (isTelegramWebApp()) {
+        setTelegramActive(true);
+        clearInterval(interval);
+      }
+    }, 300);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, [telegramActive]);
 
   useEffect(() => {
     if (!telegramActive || !loading) {
@@ -137,14 +153,30 @@ import { LocalizationProvider } from './src/contexts/LocalizationContext';
 
 export default function App() {
   useEffect(() => {
-    const tg = getTelegramWebApp();
-    if (tg?.ready) {
-      try {
-        tg.ready();
-      } catch (error) {
-        console.warn('[Telegram] WebApp.ready failed', error);
+    let attempts = 0;
+    const tryReady = () => {
+      const tg = getTelegramWebApp();
+      if (tg?.ready) {
+        try {
+          tg.ready();
+          return true;
+        } catch (error) {
+          console.warn('[Telegram] WebApp.ready failed', error);
+        }
       }
-    }
+      return false;
+    };
+
+    if (tryReady()) return undefined;
+
+    const interval = setInterval(() => {
+      attempts += 1;
+      if (tryReady() || attempts >= 20) {
+        clearInterval(interval);
+      }
+    }, 250);
+
+    return () => clearInterval(interval);
   }, []);
 
   return (

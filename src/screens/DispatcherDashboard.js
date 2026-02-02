@@ -1048,7 +1048,7 @@ export default function DispatcherDashboard({ navigation, route }) {
             {/* Search */}
             <View style={styles.searchRow}>
                 <View style={[styles.searchInputWrapper, !isDark && styles.btnLight]}>
-                    <Text style={styles.searchIcon}>⌕</Text>
+                    <Text style={styles.searchIcon}>🔍</Text>
                     <TextInput style={[styles.searchInput, !isDark && styles.textDark]} placeholder={TRANSLATIONS[language].placeholderSearch} placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                         value={searchQuery} onChangeText={setSearchQuery} />
                     {searchQuery ? (
@@ -1065,7 +1065,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                 <TouchableOpacity
                     style={[styles.viewToggleBtn, !isDark && styles.btnLight]}
                     onPress={() => setViewMode(prev => prev === 'cards' ? 'compact' : 'cards')}>
-                    <Text style={[styles.viewToggleBtnText, !isDark && styles.textDark]}>{viewMode === 'cards' ? '≡' : '⊞'}</Text>
+                    <Text style={[styles.viewToggleBtnText, !isDark && styles.textDark]}>{viewMode === 'cards' ? '▦' : '☰'}</Text>
                 </TouchableOpacity>
 
                 {/* Filter Toggle */}
@@ -1087,7 +1087,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                             {currentStatusLabel} ({statusCounts[statusFilter] ?? 0})
                         </Text>
-                        <Text style={styles.filterDropdownArrow}>▾</Text>
+                        <Text style={styles.filterDropdownArrow}>▼</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
@@ -1096,7 +1096,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                             {TRANSLATIONS[language][DISPATCHER_OPTIONS.find(o => o.id === filterDispatcher)?.label] || DISPATCHER_OPTIONS.find(o => o.id === filterDispatcher)?.label || filterDispatcher}
                         </Text>
-                        <Text style={styles.filterDropdownArrow}>▾</Text>
+                        <Text style={styles.filterDropdownArrow}>▼</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
@@ -1105,7 +1105,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                             {TRANSLATIONS[language][URGENCY_OPTIONS.find(o => o.id === filterUrgency)?.label] || URGENCY_OPTIONS.find(o => o.id === filterUrgency)?.label || filterUrgency}
                         </Text>
-                        <Text style={styles.filterDropdownArrow}>▾</Text>
+                        <Text style={styles.filterDropdownArrow}>▼</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
@@ -1114,7 +1114,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                             {filterService === 'all' ? TRANSLATIONS[language].labelAllServices : serviceTypes.find(s => s.id === filterService)?.label || filterService}
                         </Text>
-                        <Text style={styles.filterDropdownArrow}>▾</Text>
+                        <Text style={styles.filterDropdownArrow}>▼</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
@@ -1123,7 +1123,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                             {TRANSLATIONS[language][SORT_OPTIONS.find(o => o.id === filterSort)?.label] || SORT_OPTIONS.find(o => o.id === filterSort)?.label || filterSort}
                         </Text>
-                        <Text style={styles.filterDropdownArrow}>▾</Text>
+                        <Text style={styles.filterDropdownArrow}>▼</Text>
                     </TouchableOpacity>
 
                     {/* Clear Filters Button */}
@@ -1173,7 +1173,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                         visible: true, title: TRANSLATIONS[language].pickerErrorType, options: ATTENTION_FILTER_OPTIONS, value: filterAttentionType, onChange: setFilterAttentionType
                     })}>
                         <Text style={styles.miniFilterText}>{TRANSLATIONS[language][ATTENTION_FILTER_OPTIONS.find(o => o.id === filterAttentionType)?.label] || TRANSLATIONS[language][filterAttentionType] || filterAttentionType}</Text>
-                        <Text style={styles.miniFilterArrow}>▾</Text>
+                        <Text style={styles.miniFilterArrow}>▼</Text>
                     </TouchableOpacity>
                 </View>
                 <Text style={{ color: '#94a3b8', textAlign: 'center', padding: 10 }}>{TRANSLATIONS[language].msgNoMatch}</Text>
@@ -1185,7 +1185,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                 <View style={styles.attentionHeaderRow}>
                     <TouchableOpacity style={styles.attentionHeader} onPress={() => setShowNeedsAttention(!showNeedsAttention)}>
                         <Text style={[styles.attentionTitle, !isDark && { color: '#ef4444' }]}>! {TRANSLATIONS[language].needsAttention} ({needsActionOrders.length})</Text>
-                        <Text style={[styles.attentionChevron, !isDark && styles.textSecondary]}>{showNeedsAttention ? '▲' : '▼'}</Text>
+                        <Text style={[styles.attentionChevron, !isDark && styles.textSecondary]}>{showNeedsAttention ? '^' : '▼'}</Text>
                     </TouchableOpacity>
 
                     <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -1195,7 +1195,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                 visible: true, title: TRANSLATIONS[language].pickerErrorType, options: ATTENTION_FILTER_OPTIONS, value: filterAttentionType, onChange: setFilterAttentionType
                             })}>
                                 <Text style={styles.miniFilterText}>{TRANSLATIONS[language][ATTENTION_FILTER_OPTIONS.find(o => o.id === filterAttentionType)?.label] || TRANSLATIONS[language][filterAttentionType] || filterAttentionType}</Text>
-                                <Text style={styles.miniFilterArrow}>▾</Text>
+                                <Text style={styles.miniFilterArrow}>▼</Text>
                             </TouchableOpacity>
                         )}
 
@@ -1318,6 +1318,339 @@ export default function DispatcherDashboard({ navigation, route }) {
 
     const renderCreateOrder = () => {
         const publishDisabled = !confirmChecked || actionLoading;
+
+        const renderSuccess = () => (
+            <View style={styles.successContainer}>
+                <Text style={styles.successIcon}>✓</Text>
+                <Text style={styles.successTitle}>{TRANSLATIONS[language].createSuccess}</Text>
+                <Text style={styles.successId}>#{creationSuccess.id}</Text>
+                <TouchableOpacity
+                    style={styles.successBtn}
+                    onPress={() => {
+                        setActiveTab('queue');
+                        setCreationSuccess(null);
+                        clearForm();
+                    }}
+                >
+                    <Text style={styles.successBtnText}>{TRANSLATIONS[language].createViewQueue}</Text>
+                </TouchableOpacity>
+                <View style={styles.successDivider}>
+                    <Text style={styles.successDividerText}>{TRANSLATIONS[language].createAnotherOrder}</Text>
+                </View>
+                <View style={styles.successButtonRow}>
+                    <TouchableOpacity style={styles.successKeepLocationBtn} onPress={keepLocationAndReset}>
+                        <Text style={styles.successKeepLocationText}>{TRANSLATIONS[language].keepLocation} →</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={styles.successBtnAlt}
+                        onPress={() => {
+                            setCreationSuccess(null);
+                            clearForm();
+                        }}
+                    >
+                        <Text style={styles.successBtnAltText}>{TRANSLATIONS[language].startFresh}</Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+        );
+
+        const renderForm = () => (
+            <View style={styles.createSections}>
+                {/* Client */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createClientDetails}</Text>
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createPhone} *</Text>
+                    <View style={styles.inputWithIcon}>
+                        <TextInput
+                            style={[styles.input, styles.inputWithPaste, phoneError && styles.inputError, !isDark && styles.inputLight]}
+                            placeholder="+996..."
+                            value={newOrder.clientPhone}
+                            onChangeText={t => setNewOrder({ ...newOrder, clientPhone: t })}
+                            onBlur={handlePhoneBlur}
+                            keyboardType="phone-pad"
+                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                        />
+                        <TouchableOpacity style={styles.inFieldBtn} onPress={handlePastePhone}>
+                            <Text style={styles.inFieldBtnText}>⎘</Text>
+                        </TouchableOpacity>
+                    </View>
+                    {phoneError ? <Text style={styles.errorText}>{phoneError}</Text> : null}
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createName}</Text>
+                    <TextInput
+                        style={[styles.input, !isDark && styles.inputLight]}
+                        placeholder={TRANSLATIONS[language].createName}
+                        value={newOrder.clientName}
+                        onChangeText={t => setNewOrder({ ...newOrder, clientName: t })}
+                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                    />
+                </View>
+
+                {/* Location */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createLocation}</Text>
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createDistrict} *</Text>
+                    <TouchableOpacity
+                        style={[styles.input, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, !isDark && styles.inputLight]}
+                        onPress={openDistrictPicker}
+                    >
+                        <Text style={[styles.pickerBtnText, !newOrder.area && styles.placeholderText, !isDark && styles.textDark]}>
+                            {newOrder.area ? (districts.find(d => d.id === newOrder.area)?.label || newOrder.area) : (TRANSLATIONS[language].selectOption || 'Select')}
+                        </Text>
+                        <Text style={{ color: '#94a3b8', fontSize: 12 }}>▼</Text>
+                    </TouchableOpacity>
+
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createFullAddress} *</Text>
+                    <TextInput
+                        style={[styles.input, !isDark && styles.inputLight]}
+                        placeholder={TRANSLATIONS[language].createFullAddress}
+                        value={newOrder.fullAddress}
+                        onChangeText={t => setNewOrder({ ...newOrder, fullAddress: t })}
+                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                    />
+
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createOrientir || 'Landmark/Orientir'}</Text>
+                    <TextInput
+                        style={[styles.input, !isDark && styles.inputLight]}
+                        placeholder={TRANSLATIONS[language].orientirPlaceholder || "e.g. Near Beta Stores"}
+                        value={newOrder.orientir}
+                        onChangeText={t => setNewOrder({ ...newOrder, orientir: t })}
+                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                    />
+                </View>
+                {/* Service */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createServiceType}</Text>
+                    <View style={styles.serviceGrid}>
+                        {serviceTypes.map(s => (
+                            <TouchableOpacity
+                                key={s.id}
+                                style={[
+                                    styles.serviceBtn,
+                                    newOrder.serviceType === s.id && styles.serviceBtnActive,
+                                    !isDark && newOrder.serviceType !== s.id && styles.btnLight
+                                ]}
+                                onPress={() => setNewOrder({ ...newOrder, serviceType: s.id })}
+                            >
+                                <Text style={[
+                                    styles.serviceBtnText,
+                                    !isDark && newOrder.serviceType !== s.id && styles.textDark,
+                                    newOrder.serviceType === s.id && styles.serviceBtnTextActive
+                                ]}>
+                                    {s.label}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].problemDesc} *</Text>
+                    <View style={{ position: 'relative' }}>
+                        <TextInput
+                            style={[styles.input, styles.textArea, !isDark && styles.inputLight]}
+                            placeholder="..."
+                            value={newOrder.problemDescription}
+                            onChangeText={t => setNewOrder({ ...newOrder, problemDescription: t.substring(0, 500) })}
+                            multiline
+                            numberOfLines={3}
+                            maxLength={500}
+                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                        />
+                        <Text style={styles.charCounter}>{(newOrder.problemDescription || '').length}/500</Text>
+                    </View>
+                </View>
+                {/* Schedule */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].schedule}</Text>
+                    <View style={styles.urgencyRow}>
+                        <TouchableOpacity
+                            style={[styles.urgencyBtn, newOrder.urgency === 'planned' && styles.urgencyBtnActive, !isDark && newOrder.urgency !== 'planned' && styles.btnLight]}
+                            onPress={() => setNewOrder({ ...newOrder, urgency: 'planned' })}
+                        >
+                            <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'planned' && styles.textDark, newOrder.urgency === 'planned' && styles.urgencyTextActive]}>
+                                {TRANSLATIONS[language].urgencyPlanned}
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.urgencyBtn, newOrder.urgency === 'urgent' && styles.urgencyBtnActive, !isDark && newOrder.urgency !== 'urgent' && styles.btnLight]}
+                            onPress={() => setNewOrder({ ...newOrder, urgency: 'urgent' })}
+                        >
+                            <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'urgent' && styles.textDark, newOrder.urgency === 'urgent' && styles.urgencyTextActive]}>
+                                {TRANSLATIONS[language].urgencyUrgent}
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.urgencyBtn, newOrder.urgency === 'emergency' && styles.urgencyBtnActive, { borderColor: '#ef4444' }, !isDark && newOrder.urgency !== 'emergency' && styles.btnLight]}
+                            onPress={() => setNewOrder({ ...newOrder, urgency: 'emergency' })}
+                        >
+                            <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'emergency' && styles.textDark, newOrder.urgency === 'emergency' && styles.urgencyTextActive]}>
+                                {TRANSLATIONS[language].urgencyEmergency}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    {newOrder.urgency === 'planned' ? (
+                        <View style={styles.plannedPickerContainer}>
+                            <View style={styles.plannedTimeRow}>
+                                <View style={styles.plannedDateInput}>
+                                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].preferredDate || 'Date'}</Text>
+                                    {Platform.OS === 'web' ? (
+                                        <View style={[styles.input, styles.webPickerInput, !isDark && styles.inputLight]}>
+                                            {React.createElement('input', {
+                                                type: 'date',
+                                                value: newOrder.preferredDate ? newOrder.preferredDate.split('.').reverse().join('-') : '',
+                                                onChange: (e) => {
+                                                    const val = e.target.value;
+                                                    if (val) {
+                                                        const [y, m, d] = val.split('-');
+                                                        setNewOrder({ ...newOrder, preferredDate: `${d}.${m}.${y}` });
+                                                    } else {
+                                                        setNewOrder({ ...newOrder, preferredDate: '' });
+                                                    }
+                                                },
+                                                style: {
+                                                    border: 'none',
+                                                    outline: 'none',
+                                                    background: 'transparent',
+                                                    color: isDark ? '#fff' : '#0f172a',
+                                                    width: '100%',
+                                                    height: '100%',
+                                                    fontFamily: 'system-ui',
+                                                    fontSize: 14
+                                                }
+                                            })}
+                                        </View>
+                                    ) : (
+                                        <TouchableOpacity
+                                            style={[styles.input, styles.pickerBtnDisplay, !isDark && styles.inputLight]}
+                                            onPress={() => setShowDatePicker(true)}
+                                        >
+                                            <Text style={[styles.pickerBtnText, !newOrder.preferredDate && styles.placeholderText, !isDark && styles.textDark]}>
+                                                {newOrder.preferredDate || 'DD.MM.YYYY'}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
+                                <View style={styles.plannedTimeInput}>
+                                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].preferredTime || 'Time'}</Text>
+                                    {Platform.OS === 'web' ? (
+                                        <View style={[styles.input, styles.webPickerInput, !isDark && styles.inputLight]}>
+                                            {React.createElement('input', {
+                                                type: 'time',
+                                                value: newOrder.preferredTime || '',
+                                                onChange: (e) => setNewOrder({ ...newOrder, preferredTime: e.target.value }),
+                                                style: {
+                                                    border: 'none',
+                                                    outline: 'none',
+                                                    background: 'transparent',
+                                                    color: isDark ? '#fff' : '#0f172a',
+                                                    width: '100%',
+                                                    height: '100%',
+                                                    fontFamily: 'system-ui',
+                                                    fontSize: 14
+                                                }
+                                            })}
+                                        </View>
+                                    ) : (
+                                        <TouchableOpacity
+                                            style={[styles.input, styles.pickerBtnDisplay, !isDark && styles.inputLight]}
+                                            onPress={() => setShowTimePicker(true)}
+                                        >
+                                            <Text style={[styles.pickerBtnText, !newOrder.preferredTime && styles.placeholderText, !isDark && styles.textDark]}>
+                                                {newOrder.preferredTime || 'HH:MM'}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
+                            </View>
+
+                            {Platform.OS !== 'web' && showDatePicker ? (
+                                <DateTimePicker
+                                    value={parseDateStr(newOrder.preferredDate)}
+                                    mode="date"
+                                    display="default"
+                                    onChange={onDateChange}
+                                />
+                            ) : null}
+                            {Platform.OS !== 'web' && showTimePicker ? (
+                                <DateTimePicker
+                                    value={parseTimeStr(newOrder.preferredTime)}
+                                    mode="time"
+                                    display="default"
+                                    onChange={onTimeChange}
+                                />
+                            ) : null}
+                        </View>
+                    ) : null}
+                </View>
+                {/* Pricing */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].pricing}</Text>
+                    <View style={styles.pricingTypeRow}>
+                        <TouchableOpacity
+                            style={[styles.pricingTypeBtn, newOrder.pricingType === 'unknown' && styles.pricingTypeBtnActive]}
+                            onPress={() => setNewOrder({ ...newOrder, pricingType: 'unknown' })}
+                        >
+                            <Text style={[styles.pricingTypeBtnText, newOrder.pricingType === 'unknown' && styles.pricingTypeBtnTextActive]}>
+                                {TRANSLATIONS[language].pricingMasterQuotes}
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.pricingTypeBtn, newOrder.pricingType === 'fixed' && styles.pricingTypeBtnActiveGreen]}
+                            onPress={() => setNewOrder({ ...newOrder, pricingType: 'fixed' })}
+                        >
+                            <Text style={[styles.pricingTypeBtnText, newOrder.pricingType === 'fixed' && styles.pricingTypeBtnTextActive]}>
+                                {TRANSLATIONS[language].pricingFixed}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                    <View style={styles.pricingInputRow}>
+                        <View style={styles.priceInputItem}>
+                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].calloutFee}</Text>
+                            <TextInput
+                                style={[styles.input, !isDark && styles.inputLight]}
+                                placeholder={platformSettings ? String(platformSettings.base_price) : "..."}
+                                keyboardType="numeric"
+                                value={newOrder.calloutFee}
+                                onChangeText={t => setNewOrder({ ...newOrder, calloutFee: sanitizeNumberInput(t) })}
+                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                            />
+                        </View>
+                        {newOrder.pricingType === 'fixed' ? (
+                            <View style={styles.priceInputItem}>
+                                <Text style={[styles.inputLabel, { color: '#22c55e' }]}>{TRANSLATIONS[language].fixedAmount}</Text>
+                                <TextInput
+                                    style={[styles.input, !isDark && styles.inputLight]}
+                                    placeholder="0"
+                                    keyboardType="numeric"
+                                    value={newOrder.initialPrice}
+                                    onChangeText={t => setNewOrder({ ...newOrder, initialPrice: sanitizeNumberInput(t) })}
+                                    placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                />
+                            </View>
+                        ) : null}
+                    </View>
+                </View>
+
+                {/* Internal Note */}
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].sectionNote}</Text>
+                    <View style={{ position: 'relative' }}>
+                        <TextInput
+                            style={[styles.input, styles.textArea, !isDark && styles.inputLight]}
+                            placeholder={TRANSLATIONS[language].createInternalNote}
+                            value={newOrder.dispatcherNote}
+                            onChangeText={t => setNewOrder({ ...newOrder, dispatcherNote: t.substring(0, 500) })}
+                            multiline
+                            numberOfLines={2}
+                            maxLength={500}
+                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                        />
+                        <Text style={styles.charCounter}>{(newOrder.dispatcherNote || '').length}/500</Text>
+                    </View>
+                </View>
+
+                <View style={{ height: 120 }} />
+            </View>
+        );
+
         return (
             <View style={styles.createWrapper}>
                 <ScrollView
@@ -1325,288 +1658,14 @@ export default function DispatcherDashboard({ navigation, route }) {
                     showsVerticalScrollIndicator={false}
                     contentContainerStyle={styles.createScrollContent}
                 >
-                {creationSuccess ? (
-                    <View style={styles.successContainer}>
-                        <Text style={styles.successIcon}>✓</Text>
-                        <Text style={styles.successTitle}>{TRANSLATIONS[language].createSuccess}</Text>
-                        <Text style={styles.successId}>#{creationSuccess.id}</Text>
-                        <TouchableOpacity style={styles.successBtn} onPress={() => { setActiveTab('queue'); setCreationSuccess(null); clearForm(); }}>
-                            <Text style={styles.successBtnText}>{TRANSLATIONS[language].createViewQueue}</Text>
-                        </TouchableOpacity>
-                        <View style={styles.successDivider}>
-                            <Text style={styles.successDividerText}>{TRANSLATIONS[language].createAnotherOrder}</Text>
-                        </View>
-                        <View style={styles.successButtonRow}>
-                            <TouchableOpacity style={styles.successKeepLocationBtn} onPress={keepLocationAndReset}>
-                                <Text style={styles.successKeepLocationText}>{TRANSLATIONS[language].keepLocation} →</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.successBtnAlt} onPress={() => { setCreationSuccess(null); clearForm(); }}>
-                                <Text style={styles.successBtnAltText}>{TRANSLATIONS[language].startFresh}</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                ) : (
-                    <View style={styles.createSections}>
-                        {/* Client */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createClientDetails}</Text>
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createPhone} *</Text>
-                            <View style={styles.inputWithIcon}>
-                                <TextInput style={[styles.input, styles.inputWithPaste, phoneError && styles.inputError, !isDark && styles.inputLight]} placeholder="+996..."
-                                    value={newOrder.clientPhone} onChangeText={t => setNewOrder({ ...newOrder, clientPhone: t })}
-                                    onBlur={handlePhoneBlur} keyboardType="phone-pad" placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
-                                <TouchableOpacity style={styles.inFieldBtn} onPress={handlePastePhone}>
-                                    <Text style={styles.inFieldBtnText}>⎘</Text>
-                                </TouchableOpacity>
-                            </View>
-                            {phoneError && <Text style={styles.errorText}>{phoneError}</Text>}
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createName}</Text>
-                            <TextInput style={[styles.input, !isDark && styles.inputLight]} placeholder={TRANSLATIONS[language].createName} value={newOrder.clientName}
-                                onChangeText={t => setNewOrder({ ...newOrder, clientName: t })} placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
-                        </View>
+                    {creationSuccess ? renderSuccess() : renderForm()}
+                </ScrollView>
 
-                        {/* Location */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createLocation}</Text>
-
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createDistrict} *</Text>
-                            <TouchableOpacity
-                                style={[styles.input, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, !isDark && styles.inputLight]}
-                                onPress={openDistrictPicker}
-                            >
-                                <Text style={[styles.pickerBtnText, !newOrder.area && styles.placeholderText, !isDark && styles.textDark]}>
-                                    {newOrder.area ? (districts.find(d => d.id === newOrder.area)?.label || newOrder.area) : (TRANSLATIONS[language].selectOption || 'Select')}
-                                </Text>
-                                <Text style={{ color: '#94a3b8', fontSize: 12 }}>▼</Text>
-                            </TouchableOpacity>
-
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createFullAddress} *</Text>
-                            <TextInput style={[styles.input, !isDark && styles.inputLight]}
-                                placeholder={TRANSLATIONS[language].createFullAddress}
-                                value={newOrder.fullAddress}
-                                onChangeText={t => setNewOrder({ ...newOrder, fullAddress: t })}
-                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                            />
-
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].createOrientir || 'Landmark/Orientir'}</Text>
-                            <TextInput style={[styles.input, !isDark && styles.inputLight]}
-                                placeholder={TRANSLATIONS[language].orientirPlaceholder || "e.g. Near Beta Stores"}
-                                value={newOrder.orientir}
-                                onChangeText={t => setNewOrder({ ...newOrder, orientir: t })}
-                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                            />
-                        </View>
-
-
-                        {/* Service */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].createServiceType}</Text>
-                            <View style={styles.serviceGrid}>
-                                {serviceTypes.map(s => (
-                                    <TouchableOpacity key={s.id} style={[styles.serviceBtn, newOrder.serviceType === s.id && styles.serviceBtnActive, !isDark && newOrder.serviceType !== s.id && styles.btnLight]}
-                                        onPress={() => setNewOrder({ ...newOrder, serviceType: s.id })}>
-                                        <Text style={[styles.serviceBtnText, !isDark && newOrder.serviceType !== s.id && styles.textDark, newOrder.serviceType === s.id && styles.serviceBtnTextActive]}>{s.label}</Text>
-                                    </TouchableOpacity>
-                                ))}
-                            </View>
-                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].problemDesc} *</Text>
-                            <View style={{ position: 'relative' }}>
-                                <TextInput style={[styles.input, styles.textArea, !isDark && styles.inputLight]} placeholder="..." value={newOrder.problemDescription}
-                                    onChangeText={t => setNewOrder({ ...newOrder, problemDescription: t.substring(0, 500) })} multiline numberOfLines={3} placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} maxLength={500} />
-                                <Text style={styles.charCounter}>{newOrder.problemDescription.length}/500</Text>
-                            </View>
-                        </View>
-
-                        {/* Schedule */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].schedule}</Text>
-                            <View style={styles.urgencyRow}>
-                                <TouchableOpacity style={[styles.urgencyBtn, newOrder.urgency === 'planned' && styles.urgencyBtnActive, !isDark && newOrder.urgency !== 'planned' && styles.btnLight]}
-                                    onPress={() => setNewOrder({ ...newOrder, urgency: 'planned' })}>
-                                    <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'planned' && styles.textDark, newOrder.urgency === 'planned' && styles.urgencyTextActive]}>{TRANSLATIONS[language].urgencyPlanned}</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity style={[styles.urgencyBtn, newOrder.urgency === 'urgent' && styles.urgencyBtnActive, !isDark && newOrder.urgency !== 'urgent' && styles.btnLight]}
-                                    onPress={() => setNewOrder({ ...newOrder, urgency: 'urgent' })}>
-                                    <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'urgent' && styles.textDark, newOrder.urgency === 'urgent' && styles.urgencyTextActive]}>{TRANSLATIONS[language].urgencyUrgent}</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity style={[styles.urgencyBtn, newOrder.urgency === 'emergency' && styles.urgencyBtnActive, { borderColor: '#ef4444' }, !isDark && newOrder.urgency !== 'emergency' && styles.btnLight]}
-                                    onPress={() => setNewOrder({ ...newOrder, urgency: 'emergency' })}>
-                                    <Text style={[styles.urgencyText, !isDark && newOrder.urgency !== 'emergency' && styles.textDark, newOrder.urgency === 'emergency' && styles.urgencyTextActive]}>{TRANSLATIONS[language].urgencyEmergency}</Text>
-                                </TouchableOpacity>
-                            </View>
-                            {/* Date/Time Selection for Planned Orders */}
-                            {newOrder.urgency === 'planned' && (
-                                <View style={styles.plannedPickerContainer}>
-                                    <View style={styles.plannedTimeRow}>
-                                        <View style={styles.plannedDateInput}>
-                                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].preferredDate || 'Date'}</Text>
-                                            {Platform.OS === 'web' ? (
-                                                <View style={[styles.input, styles.webPickerInput, !isDark && styles.inputLight]}>
-                                                    {React.createElement('input', {
-                                                        type: 'date',
-                                                        value: newOrder.preferredDate ? newOrder.preferredDate.split('.').reverse().join('-') : '',
-                                                        onChange: (e) => {
-                                                            const val = e.target.value; // YYYY-MM-DD
-                                                            if (val) {
-                                                                const [y, m, d] = val.split('-');
-                                                                setNewOrder({ ...newOrder, preferredDate: `${d}.${m}.${y}` });
-                                                            } else {
-                                                                setNewOrder({ ...newOrder, preferredDate: '' });
-                                                            }
-                                                        },
-                                                        style: {
-                                                            border: 'none',
-                                                            outline: 'none',
-                                                            background: 'transparent',
-                                                            color: isDark ? '#fff' : '#0f172a',
-                                                            width: '100%',
-                                                            height: '100%',
-                                                            fontFamily: 'system-ui',
-                                                            fontSize: 14
-                                                        }
-                                                    })}
-                                                </View>
-                                            ) : (
-                                                <TouchableOpacity
-                                                    style={[styles.input, styles.pickerBtnDisplay, !isDark && styles.inputLight]}
-                                                    onPress={() => setShowDatePicker(true)}
-                                                >
-                                                    <Text style={[styles.pickerBtnText, !newOrder.preferredDate && styles.placeholderText, !isDark && styles.textDark]}>
-                                                        {newOrder.preferredDate || 'DD.MM.YYYY'}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                            )}
-                                        </View>
-                                        <View style={styles.plannedTimeInput}>
-                                            <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].preferredTime || 'Time'}</Text>
-                                            {Platform.OS === 'web' ? (
-                                                <View style={[styles.input, styles.webPickerInput, !isDark && styles.inputLight]}>
-                                                    {React.createElement('input', {
-                                                        type: 'time',
-                                                        value: newOrder.preferredTime || '',
-                                                        onChange: (e) => setNewOrder({ ...newOrder, preferredTime: e.target.value }),
-                                                        style: {
-                                                            border: 'none',
-                                                            outline: 'none',
-                                                            background: 'transparent',
-                                                            color: isDark ? '#fff' : '#0f172a',
-                                                            width: '100%',
-                                                            height: '100%',
-                                                            fontFamily: 'system-ui',
-                                                            fontSize: 14
-                                                        }
-                                                    })}
-                                                </View>
-                                            ) : (
-                                                <TouchableOpacity
-                                                    style={[styles.input, styles.pickerBtnDisplay, !isDark && styles.inputLight]}
-                                                    onPress={() => setShowTimePicker(true)}
-                                                >
-                                                    <Text style={[styles.pickerBtnText, !newOrder.preferredTime && styles.placeholderText, !isDark && styles.textDark]}>
-                                                        {newOrder.preferredTime || 'HH:MM'}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                            )}
-                                        </View>
-                                    </View>
-
-                                    {/* Mobile Native Pickers (Modal) */}
-                                    {Platform.OS !== 'web' && showDatePicker && (
-                                        <DateTimePicker
-                                            value={parseDateStr(newOrder.preferredDate)}
-                                            mode="date"
-                                            display="default"
-                                            onChange={onDateChange}
-                                        />
-                                    )}
-                                    {Platform.OS !== 'web' && showTimePicker && (
-                                        <DateTimePicker
-                                            value={parseTimeStr(newOrder.preferredTime)}
-                                            mode="time"
-                                            display="default"
-                                            onChange={onTimeChange}
-                                        />
-                                    )}
-                                </View>
-                            )}
-                        </View>
-
-                        {/* Pricing */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].pricing}</Text>
-                            {/* Pricing Type Selector */}
-                            <View style={styles.pricingTypeRow}>
-                                <TouchableOpacity
-                                    style={[styles.pricingTypeBtn, newOrder.pricingType === 'unknown' && styles.pricingTypeBtnActive]}
-                                    onPress={() => setNewOrder({ ...newOrder, pricingType: 'unknown' })}>
-                                    <Text style={[styles.pricingTypeBtnText, newOrder.pricingType === 'unknown' && styles.pricingTypeBtnTextActive]}>{TRANSLATIONS[language].pricingMasterQuotes}</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.pricingTypeBtn, newOrder.pricingType === 'fixed' && styles.pricingTypeBtnActiveGreen]}
-                                    onPress={() => setNewOrder({ ...newOrder, pricingType: 'fixed' })}>
-                                    <Text style={[styles.pricingTypeBtnText, newOrder.pricingType === 'fixed' && styles.pricingTypeBtnTextActive]}>{TRANSLATIONS[language].pricingFixed}</Text>
-                                </TouchableOpacity>
-                            </View>
-                            {/* Price Inputs */}
-                            <View style={styles.pricingInputRow}>
-                                <View style={styles.priceInputItem}>
-                                    <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].calloutFee}</Text>
-                                    <TextInput
-                                        style={[styles.input, !isDark && styles.inputLight]}
-                                        placeholder={platformSettings ? String(platformSettings.base_price) : "..."}
-                                        keyboardType="numeric"
-                                        value={newOrder.calloutFee}
-                                        onChangeText={t => setNewOrder({ ...newOrder, calloutFee: sanitizeNumberInput(t) })}
-                                        placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                    />
-                                </View>
-                                {newOrder.pricingType === 'fixed' && (
-                                    <View style={styles.priceInputItem}>
-                                        <Text style={[styles.inputLabel, { color: '#22c55e' }]}>{TRANSLATIONS[language].fixedAmount}</Text>
-                                        <TextInput
-                                            style={[styles.input, !isDark && styles.inputLight]}
-                                            placeholder="0"
-                                            keyboardType="numeric"
-                                            value={newOrder.initialPrice}
-                                            onChangeText={t => setNewOrder({ ...newOrder, initialPrice: sanitizeNumberInput(t) })}
-                                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                        />
-                                    </View>
-                                )}
-                            </View>
-                        </View>
-
-                        {/* Internal Note */}
-                        <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
-                            <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>{TRANSLATIONS[language].sectionNote}</Text>
-                            <View style={{ position: 'relative' }}>
-                                <TextInput
-                                    style={[styles.input, styles.textArea, !isDark && styles.inputLight]}
-                                    placeholder={TRANSLATIONS[language].createInternalNote}
-                                    value={newOrder.dispatcherNote}
-                                    onChangeText={t => setNewOrder({ ...newOrder, dispatcherNote: t.substring(0, 500) })}
-                                    multiline
-                                    numberOfLines={2}
-                                    maxLength={500}
-                                    placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
-                                />
-                                <Text style={styles.charCounter}>{(newOrder.dispatcherNote || '').length}/500</Text>
-                            </View>
-                        </View>
-
-                        {/* Spacer for fixed bottom bar */}
-                        <View style={{ height: 120 }} />
-                    </View>
-                )}
-            </ScrollView>
-
-            {/* Fixed Bottom Bar */}
-            {
-                !creationSuccess && (
+                {!creationSuccess ? (
                     <View style={[styles.fixedBottomBar, !isDark && styles.fixedBottomBarLight]}>
                         <TouchableOpacity style={styles.confirmRow} onPress={() => setConfirmChecked(!confirmChecked)}>
                             <View style={[styles.checkbox, confirmChecked && styles.checkboxChecked]}>
-                                {confirmChecked && <Text style={styles.checkmark}>✓</Text>}
+                                {confirmChecked ? <Text style={styles.checkmark}>✓</Text> : null}
                             </View>
                             <Text style={[styles.confirmLabel, !isDark && styles.textDark]}>{TRANSLATIONS[language].createConfirm}</Text>
                         </TouchableOpacity>
@@ -1626,13 +1685,10 @@ export default function DispatcherDashboard({ navigation, route }) {
                             </TouchableOpacity>
                         </View>
                     </View>
-                )
-            }
+                ) : null}
             </View>
         );
     };
-
-    // Details Drawer
     const renderDetailsDrawer = () => {
         if (!detailsOrder) return null;
         // NOTE: handleSaveEdit is defined earlier in the component (around line 1146)
@@ -1860,7 +1916,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     {/* Actions */}
                                     {['canceled_by_master', 'canceled_by_client'].includes(detailsOrder.status) && (
                                         <TouchableOpacity style={styles.reopenBtn} onPress={() => { handleReopen(detailsOrder.id); setDetailsOrder(null); }}>
-                                            <Text style={styles.reopenText}>↻ {TRANSLATIONS[language].actionReopen}</Text>
+                                            <Text style={styles.reopenText}>? {TRANSLATIONS[language].actionReopen}</Text>
                                         </TouchableOpacity>
                                     )}
                                     {['placed', 'reopened', 'expired', 'canceled_by_master'].includes(detailsOrder.status) && (

@@ -19,6 +19,7 @@ const INACTIVITY_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
 const REFRESH_MIN_INTERVAL_MS = 30 * 1000; // 30 seconds
 
 const isWeb = Platform.OS === 'web' && typeof window !== 'undefined' && typeof localStorage !== 'undefined';
+const memoryStorage = new Map();
 const clearSupabaseWebStorage = async () => {
   if (!isWeb) return;
   try {
@@ -33,16 +34,31 @@ const clearSupabaseWebStorage = async () => {
 };
 const activityStorage = {
   getItem: async (key) => {
-    if (isWeb) return localStorage.getItem(key);
-    return AsyncStorage.getItem(key);
+    if (!isWeb) return AsyncStorage.getItem(key);
+    try {
+      return localStorage.getItem(key);
+    } catch (error) {
+      console.warn('[Auth] localStorage.getItem failed, using memory store', error);
+      return memoryStorage.has(key) ? memoryStorage.get(key) : null;
+    }
   },
   setItem: async (key, value) => {
-    if (isWeb) return localStorage.setItem(key, value);
-    return AsyncStorage.setItem(key, value);
+    if (!isWeb) return AsyncStorage.setItem(key, value);
+    try {
+      localStorage.setItem(key, value);
+    } catch (error) {
+      console.warn('[Auth] localStorage.setItem failed, using memory store', error);
+      memoryStorage.set(key, value);
+    }
   },
   removeItem: async (key) => {
-    if (isWeb) return localStorage.removeItem(key);
-    return AsyncStorage.removeItem(key);
+    if (!isWeb) return AsyncStorage.removeItem(key);
+    try {
+      localStorage.removeItem(key);
+    } catch (error) {
+      console.warn('[Auth] localStorage.removeItem failed, using memory store', error);
+      memoryStorage.delete(key);
+    }
   },
 };
 
@@ -65,34 +81,45 @@ export function AuthProvider({ children }) {
     }
 
     refreshInFlight.current = (async () => {
-      lastRefreshRef.current = now;
-      const { data: { session: activeSession } } = await supabase.auth.getSession();
-      setSession(activeSession || null);
+      try {
+        lastRefreshRef.current = now;
+        const { data: { session: activeSession } } = await supabase.auth.getSession();
+        setSession(activeSession || null);
 
-      if (!activeSession?.user) {
+        if (!activeSession?.user) {
+          setUser(null);
+          return null;
+        }
+
+        const retries = Number.isInteger(options.retries) ? options.retries : 2;
+        const retryDelayMs = Number.isInteger(options.retryDelayMs) ? options.retryDelayMs : 350;
+        let attempt = 0;
+        let currentUser = null;
+        while (attempt <= retries) {
+          currentUser = await authService.getCurrentUser({ session: activeSession });
+          if (currentUser) break;
+          attempt += 1;
+          if (attempt <= retries) {
+            await sleep(retryDelayMs);
+          }
+        }
+
+        setUser(currentUser);
+        return currentUser;
+      } catch (error) {
+        console.error('[Auth] refreshSession failed', error);
+        setSession(null);
         setUser(null);
         return null;
       }
-
-      const retries = Number.isInteger(options.retries) ? options.retries : 2;
-      const retryDelayMs = Number.isInteger(options.retryDelayMs) ? options.retryDelayMs : 350;
-      let attempt = 0;
-      let currentUser = null;
-      while (attempt <= retries) {
-        currentUser = await authService.getCurrentUser({ session: activeSession });
-        if (currentUser) break;
-        attempt += 1;
-        if (attempt <= retries) {
-          await sleep(retryDelayMs);
-        }
-      }
-
-      setUser(currentUser);
-      return currentUser;
     })();
 
-    const result = await refreshInFlight.current;
-    refreshInFlight.current = null;
+    let result = null;
+    try {
+      result = await refreshInFlight.current;
+    } finally {
+      refreshInFlight.current = null;
+    }
     return result;
   }, [user]);
 
@@ -116,28 +143,38 @@ export function AuthProvider({ children }) {
   }, []);
 
   const checkInactivity = useCallback(async () => {
-    const stored = await activityStorage.getItem(LAST_ACTIVE_KEY);
-    if (!stored) {
-      await recordActivity();
+    try {
+      const stored = await activityStorage.getItem(LAST_ACTIVE_KEY);
+      if (!stored) {
+        await recordActivity();
+        return false;
+      }
+      const lastActiveAt = Number(stored);
+      const elapsed = Date.now() - lastActiveAt;
+      // If you want per-role timeouts, swap INACTIVITY_TIMEOUT_MS for a lookup by user?.role.
+      if (elapsed > INACTIVITY_TIMEOUT_MS) {
+        await logout({ scope: 'local' });
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.warn('[Auth] checkInactivity failed', error);
       return false;
     }
-    const lastActiveAt = Number(stored);
-    const elapsed = Date.now() - lastActiveAt;
-    // If you want per-role timeouts, swap INACTIVITY_TIMEOUT_MS for a lookup by user?.role.
-    if (elapsed > INACTIVITY_TIMEOUT_MS) {
-      await logout({ scope: 'local' });
-      return true;
-    }
-    return false;
   }, [logout, recordActivity]);
 
   useEffect(() => {
     let mounted = true;
 
     const initialize = async () => {
-      await checkInactivity();
-      await refreshSession({ retries: 2, retryDelayMs: 400 });
-      if (mounted) setLoading(false);
+      try {
+        await checkInactivity();
+        await refreshSession({ retries: 2, retryDelayMs: 400 });
+      } catch (error) {
+        console.error('[Auth] initialization failed', error);
+      } finally {
+        if (mounted) setLoading(false);
+      }
     };
 
     initialize();
