@@ -1,7 +1,7 @@
 # Master KG v5 - Complete Technical Documentation
 
 > **Version**: 5.0  
-> **Last Updated**: January 2026  
+> **Last Updated**: February 2026  
 > **Architecture**: Dispatcher-Mediated Service Platform
 
 ---
@@ -561,6 +561,20 @@ npx expo start --clear
 ---
 
 # 5. Version History & Changelog
+
+## v5.3.1 - Auth Performance + Session Controls (February 2, 2026)
+
+### Auth & Session Performance
+- **Inactivity Logout**: Added 2-hour inactivity timeout with hooks for per-role and web/native customization.
+- **Refresh Throttling**: Auth refresh on app/tab active is throttled to avoid burst calls.
+- **Session Fetch Optimization**: Removed duplicate `getSession()` calls by reusing the active session.
+
+### Data Payload Reduction
+- **Profile Fetch**: Reduced `profiles` select to only fields used by auth and dashboards.
+- **Admin Lists**: Reduced master/dispatcher list payloads; optional pagination support added.
+
+### UX Stability
+- **Loading Loop Fix**: Removed the `session?.user && !user` loading gate to avoid infinite loading screens.
 
 ## v5.3.0 - Auth Stability, Navigation History, and Retries (January 28, 2026)
 

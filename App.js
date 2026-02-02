@@ -57,7 +57,7 @@ function AppNavigator() {
     syncRoute();
   }, [user]);
 
-  if (loading || (session?.user && !user)) {
+  if (loading) {
     return <LoadingScreen />;
   }
 

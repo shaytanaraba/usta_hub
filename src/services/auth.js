@@ -9,6 +9,55 @@ const LOG_PREFIX = '[AuthService]';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Profile columns used across auth + dashboards. Keep in sync with COMPLETE_SETUP_V2.sql.
+const PROFILE_SELECT_FIELDS = [
+  'id',
+  'email',
+  'phone',
+  'full_name',
+  'role',
+  'is_active',
+  'is_verified',
+  'service_area',
+  'experience_years',
+  'specializations',
+  'max_active_jobs',
+  'max_immediate_orders',
+  'max_pending_confirmation',
+  'prepaid_balance',
+  'initial_deposit',
+  'completed_jobs_count',
+  'created_at'
+].join(', ');
+
+const MASTER_LIST_FIELDS = [
+  'id',
+  'email',
+  'phone',
+  'full_name',
+  'role',
+  'is_active',
+  'is_verified',
+  'service_area',
+  'experience_years',
+  'specializations',
+  'max_active_jobs',
+  'prepaid_balance',
+  'initial_deposit',
+  'completed_jobs_count',
+  'created_at'
+].join(', ');
+
+const DISPATCHER_LIST_FIELDS = [
+  'id',
+  'email',
+  'phone',
+  'full_name',
+  'role',
+  'is_active',
+  'created_at'
+].join(', ');
+
 const isAuthInvalidError = (error) => {
   const message = error?.message?.toLowerCase?.() || '';
   const status = error?.status;
@@ -67,7 +116,7 @@ class AuthService {
       // Fetch profile with v5 fields
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('*')
+        .select(PROFILE_SELECT_FIELDS)
         .eq('id', data.user.id)
         .single();
 
@@ -122,7 +171,9 @@ class AuthService {
     console.log(`${LOG_PREFIX} Getting current user...`);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = options.session
+        ? options.session
+        : (await supabase.auth.getSession()).data.session;
 
       if (!session) {
         console.log(`${LOG_PREFIX} No active session`);
@@ -136,7 +187,7 @@ class AuthService {
       while (attempt <= retries) {
         const { data: profile, error } = await supabase
           .from('profiles')
-          .select('*')
+          .select(PROFILE_SELECT_FIELDS)
           .eq('id', session.user.id)
           .single();
 
@@ -212,15 +263,23 @@ class AuthService {
   /**
    * Get all masters (admin/dispatcher)
    */
-  async getAllMasters() {
+  async getAllMasters(options = {}) {
     console.log(`${LOG_PREFIX} Fetching all masters...`);
 
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('profiles')
-        .select('*')
+        .select(MASTER_LIST_FIELDS)
         .eq('role', 'master')
         .order('created_at', { ascending: false });
+
+      if (Number.isInteger(options.page) && Number.isInteger(options.pageSize)) {
+        const start = options.page * options.pageSize;
+        const end = start + options.pageSize - 1;
+        query = query.range(start, end);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       console.log(`${LOG_PREFIX} Found ${data.length} masters`);
@@ -234,15 +293,23 @@ class AuthService {
   /**
    * Get all dispatchers (admin)
    */
-  async getAllDispatchers() {
+  async getAllDispatchers(options = {}) {
     console.log(`${LOG_PREFIX} Fetching all dispatchers...`);
 
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('profiles')
-        .select('*')
+        .select(DISPATCHER_LIST_FIELDS)
         .eq('role', 'dispatcher')
         .order('created_at', { ascending: false });
+
+      if (Number.isInteger(options.page) && Number.isInteger(options.pageSize)) {
+        const start = options.page * options.pageSize;
+        const end = start + options.pageSize - 1;
+        query = query.range(start, end);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       return data;
