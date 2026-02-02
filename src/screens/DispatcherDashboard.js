@@ -1320,7 +1320,11 @@ export default function DispatcherDashboard({ navigation, route }) {
         const publishDisabled = !confirmChecked || actionLoading;
         return (
             <View style={styles.createWrapper}>
-            <ScrollView style={styles.createContainer} showsVerticalScrollIndicator={false} contentContainerStyle={styles.createScrollContent}>
+                <ScrollView
+                    style={styles.createContainer}
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={styles.createScrollContent}
+                >
                 {creationSuccess ? (
                     <View style={styles.successContainer}>
                         <Text style={styles.successIcon}>✓</Text>

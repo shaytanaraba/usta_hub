@@ -19,6 +19,18 @@ const INACTIVITY_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
 const REFRESH_MIN_INTERVAL_MS = 30 * 1000; // 30 seconds
 
 const isWeb = Platform.OS === 'web' && typeof window !== 'undefined' && typeof localStorage !== 'undefined';
+const clearSupabaseWebStorage = async () => {
+  if (!isWeb) return;
+  try {
+    Object.keys(localStorage).forEach((key) => {
+      if (key.startsWith('sb-') && key.endsWith('-auth-token')) {
+        localStorage.removeItem(key);
+      }
+    });
+  } catch (error) {
+    console.warn('[Auth] Failed to clear Supabase web storage', error);
+  }
+};
 const activityStorage = {
   getItem: async (key) => {
     if (isWeb) return localStorage.getItem(key);
@@ -91,6 +103,11 @@ export function AuthProvider({ children }) {
     await activityStorage.removeItem(LAST_ACTIVE_KEY);
     return result;
   }, []);
+
+  const resetAppData = useCallback(async () => {
+    await logout({ scope: 'local' });
+    await clearSupabaseWebStorage();
+  }, [logout]);
 
   const recordActivity = useCallback(async () => {
     const now = Date.now();
@@ -173,7 +190,8 @@ export function AuthProvider({ children }) {
     loading,
     refreshSession,
     logout,
-  }), [loading, logout, refreshSession, session, user]);
+    resetAppData,
+  }), [loading, logout, refreshSession, resetAppData, session, user]);
 
   return (
     <AuthContext.Provider value={value}>

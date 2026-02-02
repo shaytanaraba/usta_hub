@@ -6,6 +6,13 @@
 import { supabase } from '../lib/supabase';
 
 const LOG_PREFIX = '[AuthService]';
+const isDebug = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
+const debug = (...args) => {
+  if (isDebug) console.log(...args);
+};
+const debugWarn = (...args) => {
+  if (isDebug) console.warn(...args);
+};
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -94,7 +101,7 @@ class AuthService {
    * Login user - v5 uses 'role' field instead of 'user_type'
    */
   async loginUser(email, password) {
-    console.log(`${LOG_PREFIX} Attempting login for: ${email}`);
+    debug(`${LOG_PREFIX} Attempting login for: ${email}`);
 
     try {
       if (!email?.trim() || !password) {
@@ -111,7 +118,7 @@ class AuthService {
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Auth successful, fetching profile...`);
+      debug(`${LOG_PREFIX} Auth successful, fetching profile...`);
 
       // Fetch profile with v5 fields
       const { data: profile, error: profileError } = await supabase
@@ -128,14 +135,14 @@ class AuthService {
 
       // Check if user is active
       if (!profile.is_active) {
-        console.warn(`${LOG_PREFIX} User deactivated:`, profile.id);
+        debugWarn(`${LOG_PREFIX} User deactivated:`, profile.id);
         await this.logoutUser();
         throw new Error('Account deactivated. Contact administrator.');
       }
 
       // Block client logins in v5 (dispatcher-mediated architecture)
       if (profile.role === 'client') {
-        console.warn(`${LOG_PREFIX} Client login blocked:`, profile.id);
+        debugWarn(`${LOG_PREFIX} Client login blocked:`, profile.id);
         await this.logoutUser();
         throw new Error('Client accounts cannot login. Contact dispatcher for service.');
       }
@@ -147,7 +154,7 @@ class AuthService {
         throw new Error('Invalid user role. Contact administrator.');
       }
 
-      console.log(`${LOG_PREFIX} Login successful. Role: ${profile.role}`);
+      debug(`${LOG_PREFIX} Login successful. Role: ${profile.role}`);
 
       return {
         success: true,
@@ -168,7 +175,7 @@ class AuthService {
    * Get current logged-in user with full profile
    */
   async getCurrentUser(options = {}) {
-    console.log(`${LOG_PREFIX} Getting current user...`);
+    debug(`${LOG_PREFIX} Getting current user...`);
 
     try {
       const session = options.session
@@ -176,7 +183,7 @@ class AuthService {
         : (await supabase.auth.getSession()).data.session;
 
       if (!session) {
-        console.log(`${LOG_PREFIX} No active session`);
+        debug(`${LOG_PREFIX} No active session`);
         return null;
       }
 
@@ -192,7 +199,7 @@ class AuthService {
           .single();
 
         if (!error && profile) {
-          console.log(`${LOG_PREFIX} Current user: ${profile.full_name} (${profile.role})`);
+          debug(`${LOG_PREFIX} Current user: ${profile.full_name} (${profile.role})`);
           return { ...session.user, ...profile };
         }
 
@@ -220,13 +227,13 @@ class AuthService {
    * Logout user
    */
   async logoutUser(options = {}) {
-    console.log(`${LOG_PREFIX} Logging out...`);
+    debug(`${LOG_PREFIX} Logging out...`);
 
     try {
       const scope = options.scope || 'local';
       const { error } = await supabase.auth.signOut({ scope });
       if (error) throw error;
-      console.log(`${LOG_PREFIX} Logout successful`);
+      debug(`${LOG_PREFIX} Logout successful`);
       return { success: true };
     } catch (error) {
       console.error(`${LOG_PREFIX} Logout error:`, error);
@@ -264,7 +271,7 @@ class AuthService {
    * Get all masters (admin/dispatcher)
    */
   async getAllMasters(options = {}) {
-    console.log(`${LOG_PREFIX} Fetching all masters...`);
+    debug(`${LOG_PREFIX} Fetching all masters...`);
 
     try {
       let query = supabase
@@ -282,7 +289,7 @@ class AuthService {
       const { data, error } = await query;
 
       if (error) throw error;
-      console.log(`${LOG_PREFIX} Found ${data.length} masters`);
+      debug(`${LOG_PREFIX} Found ${data.length} masters`);
       return data;
     } catch (error) {
       console.error(`${LOG_PREFIX} getAllMasters error:`, error);
@@ -294,7 +301,7 @@ class AuthService {
    * Get all dispatchers (admin)
    */
   async getAllDispatchers(options = {}) {
-    console.log(`${LOG_PREFIX} Fetching all dispatchers...`);
+    debug(`${LOG_PREFIX} Fetching all dispatchers...`);
 
     try {
       let query = supabase
@@ -323,7 +330,7 @@ class AuthService {
    * Verify master (admin only)
    */
   async verifyMaster(masterId) {
-    console.log(`${LOG_PREFIX} Verifying master: ${masterId}`);
+    debug(`${LOG_PREFIX} Verifying master: ${masterId}`);
 
     try {
       const { data, error } = await supabase
@@ -335,7 +342,7 @@ class AuthService {
         .single();
 
       if (error) throw error;
-      console.log(`${LOG_PREFIX} Master verified successfully`);
+      debug(`${LOG_PREFIX} Master verified successfully`);
       return { success: true, message: 'Master verified' };
     } catch (error) {
       console.error(`${LOG_PREFIX} verifyMaster error:`, error);
@@ -347,7 +354,7 @@ class AuthService {
    * Unverify master (admin only)
    */
   async unverifyMaster(masterId) {
-    console.log(`${LOG_PREFIX} Unverifying master: ${masterId}`);
+    debug(`${LOG_PREFIX} Unverifying master: ${masterId}`);
 
     try {
       const { data, error } = await supabase
@@ -370,7 +377,7 @@ class AuthService {
    * Update user profile
    */
   async updateProfile(userId, updates) {
-    console.log(`${LOG_PREFIX} Updating profile: ${userId}`);
+    debug(`${LOG_PREFIX} Updating profile: ${userId}`);
 
     try {
       const profileUpdates = {};
@@ -403,7 +410,7 @@ class AuthService {
    * Used to add new masters or dispatchers
    */
   async createUser(userData) {
-    console.log(`${LOG_PREFIX} Creating new user: ${userData.email} (${userData.role})`);
+    debug(`${LOG_PREFIX} Creating new user: ${userData.email} (${userData.role})`);
 
     try {
       if (!userData.email || !userData.password || !userData.role) {
@@ -467,7 +474,7 @@ class AuthService {
         };
       }
 
-      console.log(`${LOG_PREFIX} User created successfully: ${profile.full_name}`);
+      debug(`${LOG_PREFIX} User created successfully: ${profile.full_name}`);
       return {
         success: true,
         message: `${userData.role === 'master' ? 'Master' : 'Dispatcher'} created successfully`,
@@ -484,7 +491,7 @@ class AuthService {
    * Uses admin_reset_user_password RPC function from PATCH_ADMIN_PASSWORD_RESET.sql
    */
   async resetUserPassword(userId, newPassword) {
-    console.log(`${LOG_PREFIX} Resetting password for user: ${userId}`);
+    debug(`${LOG_PREFIX} Resetting password for user: ${userId}`);
 
     try {
       if (!newPassword || newPassword.length < 6) {
@@ -513,7 +520,7 @@ class AuthService {
         };
       }
 
-      console.log(`${LOG_PREFIX} Password reset successful for ${data.target_role}`);
+      debug(`${LOG_PREFIX} Password reset successful for ${data.target_role}`);
       return {
         success: true,
         message: 'Password reset successfully. User can now login with the new password.'
@@ -532,7 +539,7 @@ class AuthService {
    * Get all dispatchers with workload data (admin only)
    */
   async getDispatchersWithWorkload() {
-    console.log(`${LOG_PREFIX} Fetching dispatchers with workload...`);
+    debug(`${LOG_PREFIX} Fetching dispatchers with workload...`);
 
     try {
       const { data, error } = await supabase.rpc('get_dispatchers_with_workload');
@@ -557,7 +564,7 @@ class AuthService {
         }));
       }
 
-      console.log(`${LOG_PREFIX} Found ${data.length} dispatchers`);
+      debug(`${LOG_PREFIX} Found ${data.length} dispatchers`);
       return data;
     } catch (error) {
       console.error(`${LOG_PREFIX} getDispatchersWithWorkload error:`, error);
@@ -569,7 +576,7 @@ class AuthService {
    * Toggle dispatcher active status (admin only)
    */
   async toggleDispatcherActive(dispatcherId, newStatus, reason = null) {
-    console.log(`${LOG_PREFIX} Toggling dispatcher ${dispatcherId} to ${newStatus ? 'active' : 'inactive'}`);
+    debug(`${LOG_PREFIX} Toggling dispatcher ${dispatcherId} to ${newStatus ? 'active' : 'inactive'}`);
 
     try {
       const { data, error } = await supabase.rpc('toggle_dispatcher_active', {
@@ -593,7 +600,7 @@ class AuthService {
         };
       }
 
-      console.log(`${LOG_PREFIX} Dispatcher status updated:`, data);
+      debug(`${LOG_PREFIX} Dispatcher status updated:`, data);
       return {
         success: true,
         message: `${data.dispatcher_name} ${newStatus ? 'activated' : 'deactivated'}`,
@@ -609,7 +616,7 @@ class AuthService {
    * Reassign all active orders from one dispatcher to another (admin only)
    */
   async reassignDispatcherOrders(oldDispatcherId, newDispatcherId, reason = 'Staff reassignment') {
-    console.log(`${LOG_PREFIX} Reassigning orders from ${oldDispatcherId} to ${newDispatcherId}`);
+    debug(`${LOG_PREFIX} Reassigning orders from ${oldDispatcherId} to ${newDispatcherId}`);
 
     try {
       const { data, error } = await supabase.rpc('reassign_dispatcher_orders', {
@@ -623,7 +630,7 @@ class AuthService {
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Orders reassigned:`, data);
+      debug(`${LOG_PREFIX} Orders reassigned:`, data);
       return {
         success: true,
         message: `${data.orders_reassigned} orders reassigned successfully`,
@@ -644,7 +651,7 @@ class AuthService {
    * Uses get_master_active_workload RPC function from COMPLETE_SETUP_V2.sql
    */
   async getMasterWorkload(masterId = null) {
-    console.log(`${LOG_PREFIX} Fetching master workload...`);
+    debug(`${LOG_PREFIX} Fetching master workload...`);
 
     try {
       const { data, error } = await supabase.rpc('get_master_active_workload', {
@@ -656,7 +663,7 @@ class AuthService {
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Master workload data:`, data?.length || 0, 'records');
+      debug(`${LOG_PREFIX} Master workload data:`, data?.length || 0, 'records');
       return data || [];
     } catch (error) {
       console.error(`${LOG_PREFIX} getMasterWorkload failed:`, error);
@@ -669,7 +676,7 @@ class AuthService {
    * Uses get_master_performance RPC function from COMPLETE_SETUP_V2.sql
    */
   async getMasterPerformance(masterId = null) {
-    console.log(`${LOG_PREFIX} Fetching master performance...`);
+    debug(`${LOG_PREFIX} Fetching master performance...`);
 
     try {
       const { data, error } = await supabase.rpc('get_master_performance', {
@@ -681,7 +688,7 @@ class AuthService {
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Master performance data:`, data?.length || 0, 'records');
+      debug(`${LOG_PREFIX} Master performance data:`, data?.length || 0, 'records');
       return data || [];
     } catch (error) {
       console.error(`${LOG_PREFIX} getMasterPerformance failed:`, error);
@@ -694,7 +701,7 @@ class AuthService {
    * Uses get_dispatcher_metrics RPC function from COMPLETE_SETUP_V2.sql
    */
   async getDispatcherMetrics(dispatcherId = null) {
-    console.log(`${LOG_PREFIX} Fetching dispatcher metrics...`);
+    debug(`${LOG_PREFIX} Fetching dispatcher metrics...`);
 
     try {
       const { data, error } = await supabase.rpc('get_dispatcher_metrics', {
@@ -706,7 +713,7 @@ class AuthService {
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Dispatcher metrics:`, data?.length || 0, 'records');
+      debug(`${LOG_PREFIX} Dispatcher metrics:`, data?.length || 0, 'records');
       return data || [];
     } catch (error) {
       console.error(`${LOG_PREFIX} getDispatcherMetrics failed:`, error);
@@ -719,7 +726,7 @@ class AuthService {
    * Uses set_master_initial_deposit RPC function from COMPLETE_SETUP_V2.sql
    */
   async setMasterInitialDeposit(masterId, depositAmount) {
-    console.log(`${LOG_PREFIX} Setting initial deposit for master ${masterId}: ${depositAmount}`);
+    debug(`${LOG_PREFIX} Setting initial deposit for master ${masterId}: ${depositAmount}`);
 
     try {
       const { data, error } = await supabase.rpc('set_master_initial_deposit', {
@@ -736,7 +743,7 @@ class AuthService {
         return { success: false, message: data.message || 'Failed to set deposit' };
       }
 
-      console.log(`${LOG_PREFIX} Initial deposit set:`, data);
+      debug(`${LOG_PREFIX} Initial deposit set:`, data);
       return { success: true, message: `Deposit of ${depositAmount} set`, deposit: data.deposit };
     } catch (error) {
       console.error(`${LOG_PREFIX} setMasterInitialDeposit failed:`, error);

@@ -562,6 +562,13 @@ npx expo start --clear
 
 # 5. Version History & Changelog
 
+## v5.3.2 - Telegram WebApp Fail-Safe (February 2, 2026)
+
+### Telegram Mini App Stability
+- **WebApp Ready Hook**: Calls `Telegram.WebApp.ready()` when running inside Telegram to stop the native loader.
+- **Loading Timeout**: If loading exceeds 10 seconds in Telegram, a recovery screen appears.
+- **Reset App Data**: Added a safe reset action to clear local session data (Telegram-only UI).
+
 ## v5.3.1 - Auth Performance + Session Controls (February 2, 2026)
 
 ### Auth & Session Performance
