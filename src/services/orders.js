@@ -80,6 +80,7 @@ class OrdersService {
           urgency,
           problem_description,
           area,
+          orientir,
           pricing_type,
           initial_price,
           guaranteed_payout,

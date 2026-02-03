@@ -77,6 +77,11 @@ master-kg/
     └── SEED_DATA.sql      # Test data
 ```
 
+## 1.5 Known Issues / Notes
+
+- **Web build NetworkError (fetch failed)**: If the web build logs `TypeError: NetworkError when attempting to fetch resource` for orders/profile, this is usually **environment or connectivity** (Supabase URL not reachable, CORS, backend down, or wrong `EXPO_PUBLIC_SUPABASE_URL/ANON_KEY`). Confirm the Supabase URL is reachable from the browser and that CORS allows the web origin.
+- **Recent UI updates (Master dashboard)**: Orders list now uses skeleton loading; filters are a compact overlay row that expands into a horizontal chip panel; order cards were restyled to match the prototype and now show landmark/orientir even before claim; the active order peek widget/bottom sheet layout was updated; My Account now hides raw order IDs in history and shows human-friendly context; Settings screen got language flags and a support contact card.
+
 ---
 
 # 2. Data Architecture

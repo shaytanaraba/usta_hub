@@ -17,8 +17,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
     LogOut, ShieldCheck, Moon, Sun, MapPin, Check, X, Filter, ChevronDown, ChevronUp,
-    Inbox, ClipboardList, AlertCircle, CheckCircle2, Phone, User, Clock, Copy,
-    DollarSign, RotateCw, Wallet, CreditCard
+    ChevronLeft, ChevronRight, Settings,
+    Inbox, ClipboardList, AlertCircle, Phone, User, Clock, Copy, Send, MessageCircle,
+    RotateCw, Wallet
 } from 'lucide-react-native';
 
 import authService from '../services/auth';
@@ -104,7 +105,7 @@ const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, o
     const getFlagEmoji = () => ({ ru: '🇷🇺', kg: '🇰🇬' }[language] || '🇬🇧');
 
     return (
-        <View style={[styles.header, { backgroundColor: theme.bgSecondary, borderBottomColor: theme.borderPrimary }]}>
+        <View style={styles.header}>
             <View style={styles.headerLeft}>
                 {user ? (
                     <>
@@ -144,7 +145,15 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
     const isStarted = order.status === 'started';
     const isClaimed = order.status === 'claimed';
     const isCompleted = order.status === 'completed';
-
+    const districtText = order.area || order.district || '-';
+    const landmarkText = order.orientir || order.landmark || order.landmark_orientir || '';
+    const normalizeLabel = (label, fallback, key) => {
+        const raw = label && label !== key ? label : fallback;
+        return String(raw).replace(/:\s*$/, '');
+    };
+    const orientirLabel = normalizeLabel(t('labelOrientir'), 'Landmark', 'labelOrientir');
+    const addressLabel = normalizeLabel(t('address'), 'Address', 'address');
+    const districtLabel = normalizeLabel(t('filterArea'), 'District', 'filterArea');
 
     const getStatusColor = () => ({
         placed: theme.statusPlaced, claimed: theme.statusClaimed, started: theme.statusStarted,
@@ -166,15 +175,18 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
             : (t('priceOpen') || 'Open');
 
     const getLocationDisplay = () => {
-        if (isPool) return order.area;
-        if (isClaimed) return `${order.area} - ${t('cardStartToSeeAddress')}`;
-        if (isStarted) return order.area || order.full_address;
-        return order.area;
+        if (isPool) return districtText;
+        if (isClaimed) return `${districtText} - ${t('cardStartToSeeAddress')}`;
+        if (isStarted) return districtText || order.full_address;
+        return districtText;
     };
 
-    const addressText = order.full_address || order.address || order.area;
+    const addressText = order.full_address || order.address || '';
+    const addressValue = isStarted ? (addressText || districtText) : t('cardStartToSeeAddress');
     const showAddressCopy = Boolean(isStarted && addressText);
     const showClientInfo = isStarted;
+    const showDetailsBlock = !isPool;
+    const showLandmarkInline = Boolean(isPool && landmarkText);
     const userCanClaim = userVerified && !userBalanceBlocked;
     const cardMargin = 6;
     const containerPadding = 16;
@@ -188,7 +200,6 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
             onPress={() => (!isPool ? onOpen?.(order) : null)}
             style={[styles.orderCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary, width: cardWidth, opacity: isConfirmed ? 0.6 : 1 }]}
         >
-            <View style={[styles.statusStripe, { backgroundColor: getStatusColor() }]} />
             <View style={styles.cardContent}>
                 <View style={styles.cardHeader}>
                     <Text style={[styles.serviceType, { color: theme.textPrimary }]} numberOfLines={1}>{getServiceLabel(order.service_type, t)}</Text>
@@ -208,22 +219,38 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
                     </View>
                 </View>
                 <Text style={[styles.description, { color: theme.textSecondary }]} numberOfLines={2}>{order.problem_description}</Text>
-                {showAddressCopy && (
-                    <View style={styles.addressRow}>
-                        <View style={styles.addressTextRow}>
-                            <MapPin size={12} color={theme.textMuted} />
-                            <Text style={[styles.addressText, { color: theme.textSecondary }]} numberOfLines={2}>
-                                {addressText}
-                            </Text>
+                {showLandmarkInline && (
+                    <View style={styles.inlineHintRow}>
+                        <Text style={[styles.inlineHintLabel, { color: theme.textMuted }]}>{orientirLabel}:</Text>
+                        <Text style={[styles.inlineHintValue, { color: theme.textSecondary }]} numberOfLines={1}>{landmarkText}</Text>
+                    </View>
+                )}
+                {showDetailsBlock && (
+                    <View style={[styles.cardInfoBlock, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
+                        <View style={styles.cardInfoRow}>
+                            <Text style={[styles.cardInfoLabel, { color: theme.textMuted }]}>{districtLabel}</Text>
+                            <Text style={[styles.cardInfoValue, { color: theme.textPrimary }]} numberOfLines={1}>{districtText}</Text>
                         </View>
-                        <TouchableOpacity
-                            style={[styles.copyAddressBtn, { borderColor: theme.accentIndigo, backgroundColor: `${theme.accentIndigo}15` }]}
-                            onPress={() => onCopyAddress?.(addressText)}
-                        >
-                            <Text style={[styles.copyAddressText, { color: theme.accentIndigo }]}>
-                                {t('actionCopyAddress') || 'Copy address'}
-                            </Text>
-                        </TouchableOpacity>
+                        {landmarkText && (
+                            <View style={styles.cardInfoRow}>
+                                <Text style={[styles.cardInfoLabel, { color: theme.textMuted }]}>{orientirLabel}</Text>
+                                <Text style={[styles.cardInfoValue, { color: theme.textPrimary }]} numberOfLines={1}>{landmarkText}</Text>
+                            </View>
+                        )}
+                        <View style={styles.cardInfoRow}>
+                            <Text style={[styles.cardInfoLabel, { color: theme.textMuted }]}>{addressLabel}</Text>
+                            <Text style={[styles.cardInfoValue, { color: theme.textPrimary }]} numberOfLines={2}>{addressValue}</Text>
+                        </View>
+                        {showAddressCopy && (
+                            <TouchableOpacity
+                                style={[styles.copyAddressBtn, { borderColor: theme.accentIndigo, backgroundColor: `${theme.accentIndigo}12` }]}
+                                onPress={() => onCopyAddress?.(addressText)}
+                            >
+                                <Text style={[styles.copyAddressText, { color: theme.accentIndigo }]}>
+                                    {t('actionCopyAddress') || 'Copy address'}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
                     </View>
                 )}
                 {showClientInfo && order.client && (
@@ -267,16 +294,58 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
 };
 
 // ============================================
+// SKELETON ORDER CARD
+// ============================================
+const SkeletonOrderCard = ({ width }) => {
+    const { theme } = useTheme();
+    const pulse = useRef(new Animated.Value(0.55)).current;
+
+    useEffect(() => {
+        const animation = Animated.loop(
+            Animated.sequence([
+                Animated.timing(pulse, { toValue: 0.9, duration: 520, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+                Animated.timing(pulse, { toValue: 0.55, duration: 520, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+            ])
+        );
+        animation.start();
+        return () => animation.stop();
+    }, [pulse]);
+
+    return (
+        <Animated.View style={[styles.skeletonCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary, width, opacity: pulse }]}>
+            <View style={styles.skeletonHeader}>
+                <View style={styles.skeletonLineWide} />
+                <View style={styles.skeletonLineShort} />
+            </View>
+            <View style={styles.skeletonMeta}>
+                <View style={styles.skeletonBadge} />
+                <View style={styles.skeletonLineTiny} />
+            </View>
+            <View style={styles.skeletonDesc}>
+                <View style={styles.skeletonLineFull} />
+                <View style={styles.skeletonLineMid} />
+            </View>
+            <View style={styles.skeletonInfoBlock}>
+                <View style={styles.skeletonLineMid} />
+                <View style={styles.skeletonLineMid} />
+                <View style={styles.skeletonLineFull} />
+            </View>
+            <View style={styles.skeletonAction} />
+        </Animated.View>
+    );
+};
+
+// ============================================
 // SECTION TOGGLE COMPONENT
 // ============================================
 const SectionToggle = ({ sections, activeSection, onSectionChange }) => {
     const { theme } = useTheme();
     return (
-        <View style={[styles.sectionToggle, { backgroundColor: theme.bgSecondary, borderBottomColor: theme.borderPrimary }]}>
+        <View style={[styles.sectionToggle, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
             {sections.map(sec => (
                 <TouchableOpacity
                     key={sec.key}
-                    style={[styles.sectionBtn, activeSection === sec.key && { borderBottomColor: theme.accentIndigo, borderBottomWidth: 2 }]}
+                    style={[styles.sectionBtn, activeSection === sec.key && { backgroundColor: theme.bgCard }]}
                     onPress={() => onSectionChange(sec.key)}
                 >
                     <Text style={[styles.sectionBtnText, { color: activeSection === sec.key ? theme.accentIndigo : theme.textSecondary }]}>
@@ -292,95 +361,105 @@ const SectionToggle = ({ sections, activeSection, onSectionChange }) => {
 // MY ACCOUNT TAB
 // ============================================
 const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransactions = [], refreshing, onRefresh }) => {
-    const { t, language } = useLocalization();
-    const { theme } = useTheme();
-    const [section, setSection] = useState('history');
-    const [period, setPeriod] = useState('all');
-
-    const filteredEarnings = useMemo(() => {
-        if (period === 'all') return earnings;
-        const now = new Date();
-        const cutOff = new Date();
-        if (period === 'today') cutOff.setHours(0, 0, 0, 0);
-        else if (period === 'week') cutOff.setDate(now.getDate() - 7);
-        else if (period === 'month') cutOff.setMonth(now.getMonth() - 1);
-        return earnings.filter(e => new Date(e.created_at) >= cutOff);
-    }, [period, earnings]);
-
-    const stats = useMemo(() => {
-        let totalEarnings = 0, commissionOwed = 0, commissionPaid = 0;
-        filteredEarnings.forEach(e => {
-            totalEarnings += Number(e.amount) || 0;
-            if (e.status === 'pending') commissionOwed += Number(e.commission_amount) || 0;
-            else if (e.status === 'paid') commissionPaid += Number(e.commission_amount) || 0;
-        });
-        return { totalEarnings, commissionOwed, commissionPaid, jobsDone: filteredEarnings.length, netBalance: totalEarnings - commissionPaid - commissionOwed };
-    }, [filteredEarnings]);
+    const { t, language, setLanguage } = useLocalization();
+    const { theme, isDark, toggleTheme } = useTheme();
+    const [accountView, setAccountView] = useState('menu');
+    const languageOptions = [
+        { code: 'en', label: 'EN', flag: '🇬🇧' },
+        { code: 'ru', label: 'RU', flag: '🇷🇺' },
+        { code: 'kg', label: 'KG', flag: '🇰🇬' }
+    ];
+    const supportPhone = '+996500105415';
+    const supportWhatsApp = 'https://wa.me/996500105415';
+    const supportTelegram = 'https://t.me/konevor';
+    const openSupportLink = (url) => {
+        if (!url) return;
+        Linking.openURL(url);
+    };
 
     const getStatusColor = (status) => ({ confirmed: theme.accentSuccess, completed: theme.statusCompleted, canceled_by_master: theme.accentDanger, canceled_by_client: theme.accentWarning }[status] || theme.textMuted);
 
     const getStatusLabel = (status) => getOrderStatusLabel(status, t);
 
-    const StatCard = ({ label, value, color, icon: Icon, small }) => (
-        <View style={[small ? styles.statCardSmall : styles.statCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-            <View style={styles.statHeader}><Icon size={small ? 14 : 18} color={color} /><Text style={[styles.statLabel, { color }]}>{label}</Text></View>
-            <Text style={[small ? styles.statValueSmall : styles.statValue, { color: theme.textPrimary }]}>{value}</Text>
-        </View>
-    );
+    const accountTitle = {
+        history: t('sectionHistory'),
+        profile: t('sectionProfile'),
+        settings: t('sectionSettings') || 'Settings'
+    }[accountView];
 
     return (
         <ScrollView style={styles.accountContainer} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}>
-            {/* Balance Card */}
-            <View style={[styles.balanceCard, { backgroundColor: theme.bgCard, borderColor: financials?.balanceBlocked ? theme.accentDanger : theme.borderPrimary }]}>
-                <View style={styles.balanceHeader}><Wallet size={20} color={theme.accentIndigo} /><Text style={[styles.balanceLabel, { color: theme.textMuted }]}>{t('prepaidBalance')}</Text></View>
-                <Text style={[styles.balanceValue, { color: financials?.balanceBlocked ? theme.accentDanger : theme.textPrimary }]}>{financials?.prepaidBalance?.toFixed(0) || 0}</Text>
-                {financials?.balanceBlocked && <View style={[styles.blockedBadge, { backgroundColor: `${theme.accentDanger}20` }]}><AlertCircle size={12} color={theme.accentDanger} /><Text style={{ color: theme.accentDanger, fontSize: 11 }}>{t('balanceBlocked')}</Text></View>}
-                <Text style={{ color: theme.textMuted, fontSize: 11, marginTop: 8 }}>{t('initialDeposit')}: {financials?.initialDeposit || 0} | {t('threshold')}: {financials?.balanceThreshold || 0}</Text>
-            </View>
-
-            {/* Section Tabs - Earnings hidden temporarily */}
-            <View style={[styles.accountSectionTabs, { borderBottomColor: theme.borderPrimary }]}>
-                {[{ key: 'history', icon: ClipboardList, label: t('sectionHistory') }, { key: 'profile', icon: User, label: t('sectionProfile') }].map(s => (
-                    <TouchableOpacity key={s.key} style={[styles.accountSectionTab, section === s.key && { borderBottomColor: theme.accentIndigo, borderBottomWidth: 2 }]} onPress={() => setSection(s.key)}>
-                        <s.icon size={14} color={section === s.key ? theme.accentIndigo : theme.textMuted} />
-                        <Text style={{ color: section === s.key ? theme.accentIndigo : theme.textMuted, fontSize: 11, fontWeight: '600' }}>{s.label}</Text>
+            {accountView !== 'menu' && (
+                <View style={styles.accountHeaderRow}>
+                    <TouchableOpacity
+                        style={[styles.accountBackBtn, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}
+                        onPress={() => setAccountView('menu')}
+                    >
+                        <ChevronLeft size={18} color={theme.textPrimary} />
                     </TouchableOpacity>
-                ))}
-            </View>
-
-            {/* Earnings Section */}
-            {section === 'earnings' && (
-                <View style={styles.earningsSection}>
-                    <View style={styles.periodFilter}>{['all', 'month', 'week', 'today'].map(p => (
-                        <TouchableOpacity key={p} style={[styles.periodChip, { backgroundColor: period === p ? `${theme.accentIndigo}15` : theme.bgCard, borderColor: period === p ? theme.accentIndigo : theme.borderPrimary }]} onPress={() => setPeriod(p)}>
-                            <Text style={{ color: period === p ? theme.accentIndigo : theme.textSecondary, fontSize: 11 }}>{t(`period${p.charAt(0).toUpperCase() + p.slice(1)}`)}</Text>
-                        </TouchableOpacity>
-                    ))}</View>
-                    <StatCard label={t('finNetBalance')} value={stats.netBalance.toFixed(0)} color={theme.accentIndigo} icon={DollarSign} />
-                    <View style={styles.statsGrid}>
-                        <StatCard label={t('finTotalEarned')} value={stats.totalEarnings.toFixed(0)} color={theme.accentSuccess} icon={Wallet} small />
-                        <StatCard label={t('finCommissionPaid')} value={stats.commissionPaid.toFixed(0)} color={theme.accentIndigo} icon={CreditCard} small />
-                        <StatCard label={t('finCommissionOwed')} value={stats.commissionOwed.toFixed(0)} color={theme.accentWarning} icon={AlertCircle} small />
-                        <StatCard label={t('finJobsDone')} value={stats.jobsDone} color={theme.accentInfo} icon={CheckCircle2} small />
-                    </View>
-                    {filteredEarnings.length > 0 && (
-                        <View style={[styles.earningsList, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                            {filteredEarnings.slice(0, 10).map((e, i) => (
-                                <View key={e.id || i} style={[styles.earningItem, i < filteredEarnings.length - 1 && { borderBottomColor: theme.borderLight, borderBottomWidth: 1 }]}>
-                                    <View><Text style={[styles.earningService, { color: theme.textPrimary }]}>{e.order?.service_type || 'Service'}</Text><Text style={{ color: theme.textMuted, fontSize: 10 }}>{new Date(e.created_at).toLocaleDateString()}</Text></View>
-                                    <View style={{ alignItems: 'flex-end' }}><Text style={{ color: theme.accentSuccess, fontWeight: '600' }}>+{Number(e.amount).toFixed(0)}</Text><Text style={{ color: e.status === 'paid' ? theme.accentIndigo : theme.accentWarning, fontSize: 9 }}>{e.status === 'paid' ? t('finPaid') : t('finPending')}</Text></View>
-                                </View>
-                            ))}
-                        </View>
-                    )}
+                    <Text style={[styles.accountHeaderTitle, { color: theme.textPrimary }]}>{accountTitle}</Text>
                 </View>
             )}
 
+            {accountView === 'menu' && (
+                <>
+                    {/* Balance Card */}
+                    <View style={[styles.balanceCard, { backgroundColor: theme.bgCard, borderColor: financials?.balanceBlocked ? theme.accentDanger : theme.borderPrimary }]}>
+                        <View style={styles.balanceHeader}><Wallet size={20} color={theme.accentIndigo} /><Text style={[styles.balanceLabel, { color: theme.textMuted }]}>{t('prepaidBalance')}</Text></View>
+                        <Text style={[styles.balanceValue, { color: financials?.balanceBlocked ? theme.accentDanger : theme.textPrimary }]}>{financials?.prepaidBalance?.toFixed(0) || 0}</Text>
+                        {financials?.balanceBlocked && <View style={[styles.blockedBadge, { backgroundColor: `${theme.accentDanger}20` }]}><AlertCircle size={12} color={theme.accentDanger} /><Text style={{ color: theme.accentDanger, fontSize: 11 }}>{t('balanceBlocked')}</Text></View>}
+                        <Text style={{ color: theme.textMuted, fontSize: 11, marginTop: 8 }}>{t('initialDeposit')}: {financials?.initialDeposit || 0} | {t('threshold')}: {financials?.balanceThreshold || 0}</Text>
+                    </View>
+
+                    <View style={styles.accountMenu}>
+                        <TouchableOpacity
+                            style={[styles.accountMenuItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}
+                            onPress={() => setAccountView('history')}
+                        >
+                            <View style={[styles.accountMenuIcon, { backgroundColor: `${theme.accentIndigo}15` }]}>
+                                <ClipboardList size={18} color={theme.accentIndigo} />
+                            </View>
+                            <Text style={[styles.accountMenuLabel, { color: theme.textPrimary }]}>{t('sectionHistory')}</Text>
+                            <ChevronRight size={16} color={theme.textMuted} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.accountMenuItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}
+                            onPress={() => setAccountView('profile')}
+                        >
+                            <View style={[styles.accountMenuIcon, { backgroundColor: `${theme.accentSuccess}15` }]}>
+                                <User size={18} color={theme.accentSuccess} />
+                            </View>
+                            <Text style={[styles.accountMenuLabel, { color: theme.textPrimary }]}>{t('sectionProfile')}</Text>
+                            <ChevronRight size={16} color={theme.textMuted} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.accountMenuItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}
+                            onPress={() => setAccountView('settings')}
+                        >
+                            <View style={[styles.accountMenuIcon, { backgroundColor: `${theme.accentWarning}15` }]}>
+                                <Settings size={18} color={theme.accentWarning} />
+                            </View>
+                            <Text style={[styles.accountMenuLabel, { color: theme.textPrimary }]}>{t('sectionSettings') || 'Settings'}</Text>
+                            <ChevronRight size={16} color={theme.textMuted} />
+                        </TouchableOpacity>
+                    </View>
+                </>
+            )}
+
             {/* History Section - Combined orders and balance transactions */}
-            {section === 'history' && (
+            {accountView === 'history' && (
                 <View style={styles.historySection}>
                     {(() => {
                         // Combine and sort order history with balance transactions by date (newest first)
+                        const orderById = new Map(orderHistory.map(o => [o.id, o]));
+                        const uuidRegex = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
+                        const contextSeparator = ' \u00b7 ';
+                        const balanceLabel = (t('balance') || 'Balance').replace(/:\s*$/, '');
+                        const formatOrderContext = (serviceType, area) => {
+                            const serviceLabel = getServiceLabel(serviceType, t);
+                            const areaLabel = area || '-';
+                            return `${serviceLabel}${contextSeparator}${areaLabel}`;
+                        };
                         const combinedHistory = [
                             ...orderHistory.map(o => ({ ...o, type: 'order', date: new Date(o.created_at) })),
                             ...balanceTransactions.map(tx => ({ ...tx, type: 'transaction', date: new Date(tx.created_at) }))
@@ -400,6 +479,14 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
                             if (item.type === 'transaction') {
                                 const isPositive = item.amount > 0;
                                 const isCommissionTx = String(item.transaction_type || '').includes('commission');
+                                const noteText = String(item.notes || '').trim();
+                                const uuidMatch = noteText.match(uuidRegex);
+                                const relatedOrder = uuidMatch ? orderById.get(uuidMatch[0]) : null;
+                                const sanitizedNote = noteText
+                                    .replace(uuidRegex, '')
+                                    .replace(/\b[0-9a-fA-F]{16,}\b/g, '')
+                                    .replace(/\b\d{8,}\b/g, '')
+                                    .trim();
                                 const txTypeLabel = {
                                     top_up: t('transactionTopUp') || 'Top Up',
                                     adjustment: t('transactionAdjustment') || 'Adjustment',
@@ -408,18 +495,20 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
                                     commission: t('transactionCommission') || 'Commission',
                                     commission_deduct: t('transactionCommission') || 'Commission'
                                 }[item.transaction_type] || (isCommissionTx ? (t('transactionCommission') || 'Commission') : item.transaction_type);
+                                const relatedArea = relatedOrder?.area || relatedOrder?.district || '-';
+                                const contextLabel = relatedOrder
+                                    ? formatOrderContext(relatedOrder.service_type, relatedArea)
+                                    : (isCommissionTx ? (t('commissionClue') || 'Commission from a completed job') : (sanitizedNote || balanceLabel));
 
                                 return (
                                     <View key={`tx-${item.id}`} style={[styles.historyItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
                                         <View>
-                                        <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{txTypeLabel}</Text>
-                                        {item.notes && (
-                                            <Text style={{ color: theme.textMuted, fontSize: 11 }} numberOfLines={1}>
-                                                {isCommissionTx
-                                                    ? (t('commissionClue') || 'Commission from a completed job')
-                                                    : item.notes}
-                                            </Text>
-                                        )}
+                                            <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{txTypeLabel}</Text>
+                                            {contextLabel ? (
+                                                <Text style={{ color: theme.textMuted, fontSize: 11 }} numberOfLines={1}>
+                                                    {contextLabel}
+                                                </Text>
+                                            ) : null}
                                             <Text style={{ color: theme.textMuted, fontSize: 10 }}>{item.date.toLocaleDateString()}</Text>
                                         </View>
                                         <View style={{ alignItems: 'flex-end' }}>
@@ -434,11 +523,20 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
 
                             // Render order history item with commission info
                             const o = item;
+                            const orderArea = o.area || o.district || '-';
+                            const orderContext = formatOrderContext(o.service_type, orderArea);
+                            const orderEventLabel = {
+                                completed: t('jobCompleted') || 'Job completed',
+                                confirmed: t('jobConfirmed') || 'Job confirmed',
+                                canceled_by_master: t('jobCanceled') || 'Job canceled',
+                                canceled_by_client: t('jobCanceled') || 'Job canceled',
+                                expired: t('jobExpired') || 'Job expired',
+                            }[o.status] || getStatusLabel(o.status);
                             return (
                                 <View key={o.id} style={[styles.historyItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
                                     <View>
-                                        <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{getServiceLabel(o.service_type, t)}</Text>
-                                        <Text style={{ color: theme.textMuted, fontSize: 11 }}>{o.area}</Text>
+                                        <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{orderEventLabel}</Text>
+                                        <Text style={{ color: theme.textMuted, fontSize: 11 }}>{orderContext}</Text>
                                         <Text style={{ color: theme.textMuted, fontSize: 10 }}>{o.date.toLocaleDateString()}</Text>
                                     </View>
                                     <View style={{ alignItems: 'flex-end' }}>
@@ -459,7 +557,7 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
             )}
 
             {/* Profile Section */}
-            {section === 'profile' && (
+            {accountView === 'profile' && (
                 <View style={styles.profileSection}>
                     {/* User info card with verified status */}
                     <View style={[styles.profileCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
@@ -490,6 +588,83 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
                     </View>
                 </View>
             )}
+            {accountView === 'settings' && (
+                <View style={styles.settingsSection}>
+                    <View style={[styles.settingsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                        <Text style={[styles.settingsTitle, { color: theme.textPrimary }]}>{t('settingsLanguage') || 'Language'}</Text>
+                        <View style={styles.settingsOptionsRow}>
+                            {languageOptions.map(option => (
+                                <TouchableOpacity
+                                    key={option.code}
+                                    style={[
+                                        styles.settingsOption,
+                                        {
+                                            backgroundColor: language === option.code ? `${theme.accentIndigo}15` : theme.bgSecondary,
+                                            borderColor: language === option.code ? theme.accentIndigo : theme.borderPrimary
+                                        }
+                                    ]}
+                                    onPress={() => setLanguage(option.code)}
+                                >
+                                    <Text style={{ fontSize: 16 }}>{option.flag}</Text>
+                                    <Text style={{ color: language === option.code ? theme.accentIndigo : theme.textSecondary, fontWeight: '700', fontSize: 11 }}>
+                                        {option.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    </View>
+                    <View style={[styles.settingsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                        <View style={styles.settingsToggleRow}>
+                            <View>
+                                <Text style={[styles.settingsTitle, { color: theme.textPrimary }]}>{t('settingsTheme') || 'Theme'}</Text>
+                                <Text style={{ color: theme.textMuted, fontSize: 11 }}>{t('settingsThemeHint') || 'Adjust appearance'}</Text>
+                            </View>
+                            <TouchableOpacity
+                                style={[styles.settingsToggle, { backgroundColor: isDark ? theme.accentIndigo : theme.borderSecondary }]}
+                                onPress={toggleTheme}
+                            >
+                                <View style={[styles.settingsToggleThumb, { left: isDark ? 22 : 3 }]} />
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                    <View style={[styles.settingsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                        <Text style={[styles.settingsTitle, { color: theme.textPrimary }]}>{t('settingsSupport') || 'Support'}</Text>
+                        <View style={styles.settingsSupportList}>
+                            <TouchableOpacity
+                                style={[styles.settingsSupportRow, { borderColor: theme.borderPrimary, backgroundColor: theme.bgSecondary }]}
+                                onPress={() => openSupportLink(`tel:${supportPhone}`)}
+                            >
+                                <View style={styles.settingsSupportLeft}>
+                                    <Phone size={16} color={theme.textMuted} />
+                                    <Text style={[styles.settingsSupportLabel, { color: theme.textPrimary }]}>{t('settingsSupportPhone') || 'Call Support'}</Text>
+                                </View>
+                                <Text style={[styles.settingsSupportValue, { color: theme.textMuted }]}>{supportPhone}</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.settingsSupportRow, { borderColor: theme.borderPrimary, backgroundColor: theme.bgSecondary }]}
+                                onPress={() => openSupportLink(supportWhatsApp)}
+                            >
+                                <View style={styles.settingsSupportLeft}>
+                                    <MessageCircle size={16} color={theme.textMuted} />
+                                    <Text style={[styles.settingsSupportLabel, { color: theme.textPrimary }]}>{t('settingsSupportWhatsApp') || 'WhatsApp'}</Text>
+                                </View>
+                                <Text style={[styles.settingsSupportValue, { color: theme.textMuted }]}>+996 500 105 415</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.settingsSupportRow, { borderColor: theme.borderPrimary, backgroundColor: theme.bgSecondary }]}
+                                onPress={() => openSupportLink(supportTelegram)}
+                            >
+                                <View style={styles.settingsSupportLeft}>
+                                    <Send size={16} color={theme.textMuted} />
+                                    <Text style={[styles.settingsSupportLabel, { color: theme.textPrimary }]}>{t('settingsSupportTelegram') || 'Telegram'}</Text>
+                                </View>
+                                <Text style={[styles.settingsSupportValue, { color: theme.textMuted }]}>@konevor</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            )}
+
             <View style={{ height: 100 }} />
         </ScrollView>
     );
@@ -522,6 +697,7 @@ const DashboardContent = ({ navigation }) => {
     const [serviceTypes, setServiceTypes] = useState([]);
     const [cancelReasons, setCancelReasons] = useState([]);
 
+    const [headerHeight, setHeaderHeight] = useState(0);
     const [pagePool, setPagePool] = useState(1);
     const [totalPool, setTotalPool] = useState(0);
     const [refreshing, setRefreshing] = useState(false);
@@ -533,22 +709,31 @@ const DashboardContent = ({ navigation }) => {
     const [completeData, setCompleteData] = useState({});
     const [refuseData, setRefuseData] = useState({});
     const [activeSheetOrder, setActiveSheetOrder] = useState(null);
-    const [sheetSnap, setSheetSnap] = useState('full'); // 'peek' | 'half' | 'full'
+    const [sheetSnap, setSheetSnap] = useState('peek'); // 'peek' | 'half' | 'full'
     const [sheetModalVisible, setSheetModalVisible] = useState(false);
     const sheetAnim = useRef(new Animated.Value(0)).current;
     const sheetSnapAnim = useRef(new Animated.Value(0)).current;
+    const filterAnim = useRef(new Animated.Value(showFilters ? 1 : 0)).current;
 
     const { logout } = useAuth();
 
     useEffect(() => { loadData(); }, []);
     useEffect(() => { if (user) reloadPool(); }, [filters]);
     useEffect(() => {
+        Animated.timing(filterAnim, {
+            toValue: showFilters ? 1 : 0,
+            duration: 180,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: false,
+        }).start();
+    }, [showFilters, filterAnim]);
+    useEffect(() => {
         if (activeTab !== 'orders') return;
         if (activeSheetOrder) return;
         const active = myOrders.find(o => o.status === ORDER_STATUS.STARTED || o.status === ORDER_STATUS.CLAIMED);
         if (active) {
             setActiveSheetOrder(active);
-            setSheetSnap('full');
+            setSheetSnap('peek');
         }
     }, [activeTab, myOrders, activeSheetOrder]);
 
@@ -700,6 +885,15 @@ const DashboardContent = ({ navigation }) => {
         inputRange: [0, 1],
         outputRange: [sheetFullHeight + 40, 0],
     });
+    const filterSummaryHeight = 22;
+    const filterDropdownHeight = filterAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 40] });
+    const filterOverlayHeight = useMemo(
+        () => Animated.add(new Animated.Value(filterSummaryHeight), filterDropdownHeight),
+        [filterDropdownHeight]
+    );
+    const activeFilterCount = useMemo(() => {
+        return ['urgency', 'service', 'area', 'pricing'].reduce((count, key) => (filters[key] && filters[key] !== 'all' ? count + 1 : count), 0);
+    }, [filters]);
 
     const availableServices = useMemo(() => {
         const codes = serviceTypes.map(s => s.code);
@@ -769,6 +963,18 @@ const DashboardContent = ({ navigation }) => {
         setActionLoading(false);
     };
 
+    const handleStart = async (orderId) => {
+        const res = await handleAction(ordersService.startJob, orderId, user.id);
+        if (res?.success) {
+            const updatedOrder = res.order || myOrders.find(o => o.id === orderId) || activeSheetOrder;
+            if (updatedOrder) {
+                setActiveSheetOrder(updatedOrder);
+            }
+            setSheetSnap('full');
+        }
+        return res;
+    };
+
     const handleAction = async (fn, ...args) => {
         setActionLoading(true);
         try {
@@ -829,66 +1035,101 @@ const DashboardContent = ({ navigation }) => {
             colors={isDark ? ['#0b1220', '#111827'] : ['#f8fafc', '#eef2ff']}
             style={styles.container}
         >
-            <Header
-                user={user}
-                financials={financials}
-                onLogout={handleLogout}
-                onLanguageToggle={cycleLanguage}
-                onThemeToggle={toggleTheme}
-                onRefresh={() => loadData(true)}
-            />
-
-            {activeTab === 'orders' && (
-                <>
-                    <SectionToggle
-                        sections={[
-                            { key: 'available', label: t('sectionAvailable'), count: availableOrders.length },
-                            { key: 'myJobs', label: t('sectionMyJobs'), count: activeJobsCount }
-                        ]}
-                        activeSection={orderSection}
-                        onSectionChange={setOrderSection}
-                    />
-                    {orderSection === 'available' && (
-                        <View style={[styles.filterBar, { backgroundColor: theme.bgSecondary, borderBottomColor: theme.borderPrimary }]}>
-                            <View style={styles.filterBarRow}>
-                                {/* Filter toggle button - left side */}
-                                <TouchableOpacity
-                                    style={[styles.filterToggleBtn, {
-                                        backgroundColor: showFilters ? `${theme.accentIndigo}15` : theme.bgCard,
-                                        borderColor: showFilters ? theme.accentIndigo : theme.borderPrimary
-                                    }]}
-                                    onPress={() => setShowFilters(!showFilters)}
-                                >
-                                    <Filter size={14} color={showFilters ? theme.accentIndigo : theme.textSecondary} />
-                                    {showFilters ? <ChevronUp size={14} color={theme.accentIndigo} /> : <ChevronDown size={14} color={theme.textSecondary} />}
-                                </TouchableOpacity>
-
-                                {/* Filter dropdowns - center/scrollable */}
-                                {showFilters && (
-                                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScrollContent} style={styles.filterScroll}>
-                                        <Dropdown label={t('filterUrgency')} value={filters.urgency} options={['all', 'emergency', 'urgent', 'planned']} optionLabels={{ all: t('filterAll'), emergency: t('urgencyEmergency'), urgent: t('urgencyUrgent'), planned: t('urgencyPlanned') }} onChange={v => setFilters({ ...filters, urgency: v })} />
-                                        <Dropdown label={t('filterService')} value={filters.service} options={['all', ...availableServices]} optionLabels={serviceOptionLabels} onChange={v => setFilters({ ...filters, service: v })} />
-                                        <Dropdown label={t('filterArea')} value={filters.area} options={['all', ...availableAreas]} optionLabels={{ all: t('filterAll') }} onChange={v => setFilters({ ...filters, area: v })} />
-                                    </ScrollView>
-                                )}
-
-                                {/* Clear Filters button - right side, only visible when filters are active */}
-                                {(filters.urgency !== 'all' || filters.service !== 'all' || filters.area !== 'all' || filters.pricing !== 'all') && (
-                                    <TouchableOpacity
-                                        style={[styles.clearFiltersBtn, { borderColor: theme.textMuted, marginLeft: 'auto' }]}
-                                        onPress={() => setFilters({ urgency: 'all', service: 'all', area: 'all', pricing: 'all' })}
-                                    >
-                                        <X size={14} color={theme.textMuted} />
-                                    </TouchableOpacity>
-                                )}
-                            </View>
+            <View
+                style={[styles.headerShell, { backgroundColor: theme.bgSecondary, borderBottomColor: theme.borderPrimary }]}
+                onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
+            >
+                <Header
+                    user={user}
+                    financials={financials}
+                    onLogout={handleLogout}
+                    onLanguageToggle={cycleLanguage}
+                    onThemeToggle={toggleTheme}
+                    onRefresh={() => loadData(true)}
+                />
+                {activeTab === 'orders' && (
+                    <View style={styles.headerExtras}>
+                        <SectionToggle
+                            sections={[
+                                { key: 'available', label: t('sectionAvailable'), count: availableOrders.length },
+                                { key: 'myJobs', label: t('sectionMyJobs'), count: activeJobsCount }
+                            ]}
+                            activeSection={orderSection}
+                            onSectionChange={setOrderSection}
+                        />
+                    </View>
+                )}
+            </View>
+            {activeTab === 'orders' && orderSection === 'available' && (
+                <Animated.View
+                    style={[
+                        styles.filterOverlay,
+                        {
+                            top: headerHeight + 6,
+                            height: filterOverlayHeight,
+                            backgroundColor: theme.bgSecondary,
+                            borderColor: theme.borderPrimary,
+                        }
+                    ]}
+                >
+                    <TouchableOpacity
+                        style={styles.filterSummaryRow}
+                        onPress={() => setShowFilters(!showFilters)}
+                    >
+                        <View style={styles.filterSummaryLeft}>
+                            <Filter size={14} color={theme.textSecondary} />
+                            <Text style={[styles.filterSummaryText, { color: theme.textPrimary }]}>
+                                {safeT('filterTitle', 'Filters')} ({activeFilterCount})
+                            </Text>
                         </View>
-                    )}
-                </>
+                        {showFilters ? <ChevronUp size={16} color={theme.textSecondary} /> : <ChevronDown size={16} color={theme.textSecondary} />}
+                    </TouchableOpacity>
+                    <Animated.View style={[styles.filterPanel, { height: filterDropdownHeight, opacity: filterAnim }]}>
+                        <View style={styles.filterPanelInner}>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScrollContent} style={styles.filterScroll}>
+                                <Dropdown label={t('filterUrgency')} value={filters.urgency} options={['all', 'emergency', 'urgent', 'planned']} optionLabels={{ all: t('filterAll'), emergency: t('urgencyEmergency'), urgent: t('urgencyUrgent'), planned: t('urgencyPlanned') }} onChange={v => setFilters({ ...filters, urgency: v })} />
+                                <Dropdown label={t('filterService')} value={filters.service} options={['all', ...availableServices]} optionLabels={serviceOptionLabels} onChange={v => setFilters({ ...filters, service: v })} />
+                                <Dropdown label={t('filterArea')} value={filters.area} options={['all', ...availableAreas]} optionLabels={{ all: t('filterAll') }} onChange={v => setFilters({ ...filters, area: v })} />
+                            </ScrollView>
+                            {(filters.urgency !== 'all' || filters.service !== 'all' || filters.area !== 'all' || filters.pricing !== 'all') && (
+                                <TouchableOpacity
+                                    style={[styles.clearFiltersBtn, { borderColor: theme.textMuted }]}
+                                    onPress={() => setFilters({ urgency: 'all', service: 'all', area: 'all', pricing: 'all' })}
+                                >
+                                    <X size={14} color={theme.textMuted} />
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    </Animated.View>
+                </Animated.View>
             )}
 
             {loading && !refreshing ? (
-                <View style={styles.center}><ActivityIndicator color={theme.accentIndigo} size="large" /></View>
+                activeTab === 'orders' ? (
+                    <ScrollView
+                        contentContainerStyle={[
+                            styles.list,
+                            orderSection === 'available'
+                                ? (showFilters ? styles.listWithFiltersOpen : styles.listWithFiltersClosed)
+                                : null
+                        ]}
+                        showsVerticalScrollIndicator={false}
+                    >
+                        {(() => {
+                            const columns = deviceUtils.getGridColumns();
+                            const cardMargin = 6;
+                            const containerPadding = 16;
+                            const totalGaps = (columns - 1) * (cardMargin * 2);
+                            const availableWidth = Dimensions.get('window').width - (containerPadding * 2) - totalGaps;
+                            const cardWidth = columns === 1 ? '100%' : (availableWidth / columns) - cardMargin;
+                            return Array.from({ length: 4 }).map((_, index) => (
+                                <SkeletonOrderCard key={`skeleton-${index}`} width={cardWidth} />
+                            ));
+                        })()}
+                    </ScrollView>
+                ) : (
+                    <View style={styles.center}><ActivityIndicator color={theme.accentIndigo} size="large" /></View>
+                )
             ) : activeTab === 'account' ? (
                 <MyAccountTab
                     user={user}
@@ -900,7 +1141,17 @@ const DashboardContent = ({ navigation }) => {
                     onRefresh={onRefresh}
                 />
             ) : (
-                <FlatList data={processedOrders} key={deviceUtils.getGridColumns()} numColumns={deviceUtils.getGridColumns()} keyExtractor={item => item.id} contentContainerStyle={styles.list}
+                <FlatList
+                    data={processedOrders}
+                    key={deviceUtils.getGridColumns()}
+                    numColumns={deviceUtils.getGridColumns()}
+                    keyExtractor={item => item.id}
+                    contentContainerStyle={[
+                        styles.list,
+                        orderSection === 'available'
+                            ? (showFilters ? styles.listWithFiltersOpen : styles.listWithFiltersClosed)
+                            : null
+                    ]}
                     columnWrapperStyle={deviceUtils.getGridColumns() > 1 ? styles.colWrapper : null} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}
                     renderItem={({ item }) => (
                         <OrderCard
@@ -910,7 +1161,7 @@ const DashboardContent = ({ navigation }) => {
                             userBalanceBlocked={financials?.balanceBlocked}
                             actionLoading={actionLoading}
                             onClaim={handleClaim}
-                            onStart={(id) => handleAction(ordersService.startJob, id, user.id)}
+            onStart={(id) => handleStart(id)}
                             onCopyAddress={handleCopyAddress}
                             onComplete={(o) => setModalState({ type: 'complete', order: o })}
                             onRefuse={(o) => setModalState({ type: 'refuse', order: o })}
@@ -1173,18 +1424,22 @@ const DashboardContent = ({ navigation }) => {
             )}
             {activeTab === 'orders' && activeSheetOrder && sheetSnap === 'peek' && !sheetModalVisible && (
                 <Pressable
-                    style={[styles.sheetPeek, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary, bottom: sheetBottomInset + 8 }]}
+                    style={[styles.sheetPeek, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary, bottom: sheetBottomInset + 20 }]}
                     onPress={() => setSheetSnap('full')}
                 >
-                    <View style={styles.sheetPeekHandle} />
-                    <View style={styles.sheetPeekContent}>
-                        <Text style={[styles.sheetPeekLabel, { color: theme.textMuted }]}>{safeT('activeOrderTitle', 'Active order')}</Text>
+                    <View style={styles.sheetPeekLeft}>
+                        <View style={styles.sheetPeekTopRow}>
+                            <Text style={[styles.sheetPeekLabel, { color: theme.textMuted }]}>{safeT('activeOrderTitle', 'Active order')}</Text>
+                            <View style={[styles.sheetPeekStatusPill, { backgroundColor: `${theme.accentIndigo}18` }]}>
+                                <Text style={[styles.sheetPeekStatusText, { color: theme.accentIndigo }]}>{getOrderStatusLabel(activeSheetOrder.status, t)}</Text>
+                            </View>
+                        </View>
                         <Text style={[styles.sheetPeekValue, { color: theme.textPrimary }]} numberOfLines={1}>
                             {getServiceLabel(activeSheetOrder.service_type, t)}
                         </Text>
                     </View>
-                    <View style={[styles.sheetPeekBadge, { backgroundColor: `${theme.accentIndigo}20` }]}>
-                        <Text style={[styles.sheetPeekBadgeText, { color: theme.accentIndigo }]}>{getOrderStatusLabel(activeSheetOrder.status, t)}</Text>
+                    <View style={[styles.sheetPeekChevron, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
+                        <ChevronUp size={16} color={theme.textMuted} />
                     </View>
                 </Pressable>
             )}
@@ -1272,7 +1527,13 @@ export default function MasterDashboard(props) {
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
-    header: { paddingTop: Platform.OS === 'ios' ? 50 : 40, paddingBottom: 12, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 1 },
+    header: { paddingTop: Platform.OS === 'ios' ? 50 : 40, paddingBottom: 8, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between' },
+    headerShell: { borderBottomWidth: 1, paddingBottom: 4, zIndex: 1 },
+    headerExtras: { gap: 4, paddingBottom: 2 },
+    filterOverlay: { position: 'absolute', left: 12, right: 12, borderRadius: 14, borderWidth: 1, overflow: 'hidden', zIndex: 3 },
+    filterSummaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4, paddingHorizontal: 10 },
+    filterSummaryLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    filterSummaryText: { fontSize: 11, fontWeight: '700' },
     headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
     headerRight: { flexDirection: 'row', gap: 8 },
     userName: { fontSize: 15, fontWeight: '700', maxWidth: 100 },
@@ -1281,44 +1542,62 @@ const styles = StyleSheet.create({
     balanceMini: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
     headerButton: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
     skeletonName: { width: 80, height: 16, borderRadius: 4 },
-    sectionToggle: { flexDirection: 'row', borderBottomWidth: 1 },
-    sectionBtn: { flex: 1, paddingVertical: 12, alignItems: 'center' },
-    sectionBtnText: { fontSize: 13, fontWeight: '600' },
-    filterBar: { paddingVertical: 8, borderBottomWidth: 1, paddingHorizontal: 12 },
+    sectionToggle: { flexDirection: 'row', borderWidth: 1, borderRadius: 14, padding: 4, marginHorizontal: 12, marginTop: 6, marginBottom: 4 },
+    sectionBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 12 },
+    sectionBtnText: { fontSize: 12, fontWeight: '700' },
+    filterBar: { paddingVertical: 8, paddingHorizontal: 12, borderWidth: 1, borderRadius: 16, marginHorizontal: 12 },
     filterBarRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    filterToggleBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, height: 36, borderRadius: 8, borderWidth: 1 },
+    filterToggleBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, height: 34, borderRadius: 999, borderWidth: 1 },
     filterScroll: { flex: 1 },
-    filterScrollContent: { gap: 8 },
+    filterScrollContent: { gap: 6 },
+    filterRoll: { overflow: 'hidden', marginTop: 8 },
+    filterPanel: { overflow: 'hidden' },
+    filterPanelInner: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4, paddingHorizontal: 8 },
     // Clear filters button - outline style with X icon
-    clearFiltersBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, height: 32, borderRadius: 8, borderWidth: 1, backgroundColor: 'transparent' },
+    clearFiltersBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, height: 26, borderRadius: 999, borderWidth: 1, backgroundColor: 'transparent' },
     clearFiltersBtnText: { fontSize: 10, fontWeight: '600', textTransform: 'uppercase' },
     dropdownWrapper: { position: 'relative' },
-    dropdownButton: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, height: 36, borderRadius: 8, borderWidth: 1 },
-    dropdownLabel: { fontSize: 12, fontWeight: '600', textTransform: 'uppercase' },
+    dropdownButton: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, height: 28, borderRadius: 10, borderWidth: 1 },
+    dropdownLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
     dropdownOverlay: { flex: 1, backgroundColor: 'transparent' },
     dropdownMenu: { position: 'absolute', borderRadius: 8, borderWidth: 1, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 12, elevation: 8, overflow: 'hidden' },
     dropdownItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 14 },
     dropdownItemText: { fontSize: 13, fontWeight: '500' },
     checkIconWrapper: { width: 20, alignItems: 'center', marginRight: 6 },
-    list: { padding: 16, paddingBottom: 100 },
+    list: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 100 },
+    listWithFiltersOpen: { paddingTop: 64 },
+    listWithFiltersClosed: { paddingTop: 24 },
     colWrapper: { justifyContent: 'space-between' },
     center: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 300 },
-    orderCard: { borderRadius: 12, borderWidth: 1, marginBottom: 12, overflow: 'hidden', flexDirection: 'row' },
-    statusStripe: { width: 4 },
-    cardContent: { flex: 1, padding: 12 },
-    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-    serviceType: { fontSize: 14, fontWeight: '700', flex: 1 },
-    cardPrice: { fontSize: 14, fontWeight: '700' },
-    cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-    urgencyBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1 },
+    orderCard: {
+        borderRadius: 18,
+        borderWidth: 1,
+        marginBottom: 14,
+        overflow: 'hidden',
+        shadowColor: '#000',
+        shadowOpacity: 0.06,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 2,
+    },
+    cardContent: { flex: 1, padding: 14, gap: 2 },
+    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 },
+    serviceType: { fontSize: 16, fontWeight: '700', flex: 1, paddingRight: 6 },
+    cardPrice: { fontSize: 16, fontWeight: '700' },
+    cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
+    urgencyBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, borderWidth: 1 },
     urgencyText: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase' },
     locationContainer: { flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1 },
-    locationText: { fontSize: 11, flex: 1 },
-    description: { fontSize: 12, marginBottom: 10, lineHeight: 16 },
-    addressRow: { marginBottom: 10, gap: 8 },
-    addressTextRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    addressText: { fontSize: 12, flex: 1, lineHeight: 16 },
-    copyAddressBtn: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, borderWidth: 1 },
+    locationText: { fontSize: 12, flex: 1 },
+    description: { fontSize: 13, marginBottom: 8, lineHeight: 18 },
+    inlineHintRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+    inlineHintLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
+    inlineHintValue: { fontSize: 13, flex: 1, lineHeight: 18 },
+    cardInfoBlock: { borderRadius: 12, borderWidth: 1, padding: 10, gap: 6, marginBottom: 10 },
+    cardInfoRow: { gap: 3 },
+    cardInfoLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
+    cardInfoValue: { fontSize: 14, lineHeight: 20 },
+    copyAddressBtn: { alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
     copyAddressText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
     clientInfo: { paddingTop: 10, borderTopWidth: 1, gap: 4 },
     clientRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1326,23 +1605,47 @@ const styles = StyleSheet.create({
     clientPhone: { fontSize: 12, fontWeight: '600' },
     cardActions: { marginTop: 12 },
     actionRow: { flexDirection: 'row', gap: 8 },
-    actionButton: { paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-    actionButtonText: { color: '#fff', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-    outlineButton: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 2 },
-    outlineButtonText: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
+    actionButton: {
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#000',
+        shadowOpacity: 0.12,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 3,
+    },
+    actionButtonText: { color: '#fff', fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
+    outlineButton: {
+        paddingVertical: 11,
+        paddingHorizontal: 16,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1.5,
+        backgroundColor: 'transparent',
+    },
+    outlineButtonText: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
     pendingBadge: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, gap: 4 },
     pendingText: { fontSize: 11, fontStyle: 'italic' },
     bottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', paddingBottom: Platform.OS === 'ios' ? 24 : 10, paddingTop: 10, borderTopWidth: 1 },
     tabBtn: { flex: 1, alignItems: 'center', gap: 4 },
     tabLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-    accountContainer: { flex: 1, padding: 16 },
+    accountContainer: { flex: 1, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16 },
     balanceCard: { padding: 20, borderRadius: 16, borderWidth: 1, marginBottom: 16, alignItems: 'center' },
     balanceHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
     balanceLabel: { fontSize: 12, fontWeight: '600', textTransform: 'uppercase' },
     balanceValue: { fontSize: 36, fontWeight: '200' },
     blockedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, marginTop: 8 },
-    accountSectionTabs: { flexDirection: 'row', borderBottomWidth: 1, marginBottom: 16 },
-    accountSectionTab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12 },
+    accountHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+    accountBackBtn: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+    accountHeaderTitle: { fontSize: 16, fontWeight: '700' },
+    accountMenu: { gap: 10 },
+    accountMenuItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 14, borderWidth: 1 },
+    accountMenuIcon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+    accountMenuLabel: { flex: 1, fontSize: 13, fontWeight: '600' },
     earningsSection: {},
     periodFilter: { flexDirection: 'row', gap: 8, marginBottom: 16 },
     periodChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
@@ -1482,25 +1785,52 @@ const styles = StyleSheet.create({
         right: 16,
         bottom: 76,
         borderRadius: 16,
-        paddingVertical: 10,
+        paddingVertical: 12,
         paddingHorizontal: 14,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        justifyContent: 'space-between',
+        gap: 12,
         borderWidth: 1,
         shadowColor: '#000',
-        shadowOpacity: 0.2,
+        shadowOpacity: 0.16,
         shadowRadius: 10,
         shadowOffset: { width: 0, height: 4 },
         elevation: 8,
     },
-    sheetPeekHandle: { width: 28, height: 4, borderRadius: 999, backgroundColor: 'rgba(148,163,184,0.5)' },
-    sheetPeekContent: { flex: 1 },
-    sheetPeekLabel: { fontSize: 12, textTransform: 'uppercase', fontWeight: '700' },
-    sheetPeekValue: { fontSize: 16, fontWeight: '600' },
-    sheetPeekBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
-    sheetPeekBadgeText: { fontSize: 12, fontWeight: '700' },
+    sheetPeekLeft: { flex: 1, gap: 4 },
+    sheetPeekTopRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    sheetPeekLabel: { fontSize: 11, textTransform: 'uppercase', fontWeight: '700', letterSpacing: 0.4 },
+    sheetPeekValue: { fontSize: 16, fontWeight: '700' },
+    sheetPeekStatusPill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999 },
+    sheetPeekStatusText: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
+    sheetPeekChevron: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
     sheetModalRoot: { flex: 1, justifyContent: 'flex-end', zIndex: 999, elevation: 30 },
     sheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,23,42,0.5)', zIndex: 1 },
     sheetContainer: { width: '100%', zIndex: 2 },
+    settingsSection: { gap: 12 },
+    settingsCard: { borderRadius: 14, borderWidth: 1, padding: 14 },
+    settingsTitle: { fontSize: 13, fontWeight: '700', marginBottom: 10 },
+    settingsOptionsRow: { flexDirection: 'row', gap: 8 },
+    settingsOption: { flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, minWidth: 64, alignItems: 'center', justifyContent: 'center', gap: 4 },
+    settingsToggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    settingsToggle: { width: 48, height: 26, borderRadius: 999, justifyContent: 'center' },
+    settingsToggleThumb: { position: 'absolute', width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff' },
+    settingsSupportList: { gap: 8, marginTop: 4 },
+    settingsSupportRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1 },
+    settingsSupportLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    settingsSupportLabel: { fontSize: 12, fontWeight: '600' },
+    settingsSupportValue: { fontSize: 11 },
+    skeletonCard: { borderRadius: 18, borderWidth: 1, padding: 14, marginBottom: 14 },
+    skeletonHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+    skeletonMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+    skeletonDesc: { gap: 6, marginBottom: 10 },
+    skeletonInfoBlock: { borderRadius: 12, padding: 10, gap: 6, backgroundColor: 'rgba(148,163,184,0.12)' },
+    skeletonAction: { height: 36, borderRadius: 12, backgroundColor: 'rgba(148,163,184,0.25)', marginTop: 12 },
+    skeletonLineWide: { height: 14, borderRadius: 8, width: '55%', backgroundColor: 'rgba(148,163,184,0.25)' },
+    skeletonLineShort: { height: 14, borderRadius: 8, width: '20%', backgroundColor: 'rgba(148,163,184,0.25)' },
+    skeletonBadge: { height: 18, borderRadius: 999, width: 70, backgroundColor: 'rgba(148,163,184,0.22)' },
+    skeletonLineTiny: { height: 10, borderRadius: 6, width: 90, backgroundColor: 'rgba(148,163,184,0.22)' },
+    skeletonLineFull: { height: 10, borderRadius: 6, width: '100%', backgroundColor: 'rgba(148,163,184,0.22)' },
+    skeletonLineMid: { height: 10, borderRadius: 6, width: '70%', backgroundColor: 'rgba(148,163,184,0.22)' },
 });

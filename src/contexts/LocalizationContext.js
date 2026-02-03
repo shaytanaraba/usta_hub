@@ -55,11 +55,21 @@ const translations = {
         sectionEarnings: "Earnings",
         sectionHistory: "History",
         sectionProfile: "Profile",
+        sectionSettings: "Settings",
         sectionClient: "Client",
         sectionMaster: "Master",
         sectionDetails: "Order Details",
         sectionFinancials: "Financials",
         sectionNote: "Internal Note",
+
+        // Settings (Master)
+        settingsLanguage: "Language",
+        settingsTheme: "Theme",
+        settingsThemeHint: "Adjust appearance",
+        settingsSupport: "Support",
+        settingsSupportPhone: "Call Support",
+        settingsSupportWhatsApp: "WhatsApp",
+        settingsSupportTelegram: "Telegram",
 
         // Filters
         filterUrgency: "Urgency",
@@ -723,11 +733,21 @@ const translations = {
         sectionEarnings: "Доходы",
         sectionHistory: "История",
         sectionProfile: "Профиль",
+        sectionSettings: "Настройки",
         sectionClient: "Клиент",
         sectionMaster: "Мастер",
         sectionDetails: "Детали заказа",
         sectionFinancials: "Финансы",
         sectionNote: "Внутренняя заметка",
+
+        // Settings (Master)
+        settingsLanguage: "Язык",
+        settingsTheme: "Тема",
+        settingsThemeHint: "Настройте внешний вид",
+        settingsSupport: "Поддержка",
+        settingsSupportPhone: "Позвонить",
+        settingsSupportWhatsApp: "WhatsApp",
+        settingsSupportTelegram: "Telegram",
 
         // Filters
         filterUrgency: "Срочность",
@@ -1389,11 +1409,21 @@ const translations = {
         sectionEarnings: "Кирешелер",
         sectionHistory: "Тарых",
         sectionProfile: "Профиль",
+        sectionSettings: "Орнотуулар",
         sectionClient: "Кардар",
         sectionMaster: "Уста",
         sectionDetails: "Буйрутма чоо-жайы",
         sectionFinancials: "Финансы",
         sectionNote: "Ички белги",
+
+        // Settings (Master)
+        settingsLanguage: "Тил",
+        settingsTheme: "Тема",
+        settingsThemeHint: "Көрүнүшүн тууралаңыз",
+        settingsSupport: "Колдоо",
+        settingsSupportPhone: "Чалуу",
+        settingsSupportWhatsApp: "WhatsApp",
+        settingsSupportTelegram: "Telegram",
 
         // Filters
         filterUrgency: "Шашылыш",
