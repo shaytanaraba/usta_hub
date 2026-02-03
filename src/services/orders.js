@@ -382,7 +382,8 @@ class OrdersService {
         .from('orders')
         .select(`
           *,
-          client:client_id(full_name, phone, email)
+          client:client_id(full_name, phone, email),
+          dispatcher:dispatcher_id(full_name, phone)
         `, { count: 'exact' })
         .eq('master_id', masterId)
         .in('status', [

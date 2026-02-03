@@ -1,7 +1,7 @@
 /**
  * Master Dashboard - v6.0 (V2 Schema Compatible)
  * Changes:
- * - 2 tabs: Orders (with Available/My Jobs sections) + My Account
+ * - 2 tabs: Orders (Available only) + My Account (My Jobs/History/Profile)
  * - Balance system display
  * - Dynamic service types and cancellation reasons from DB
  * - Uses claim_order RPC with blocker handling
@@ -10,12 +10,14 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl,
-    Modal, TextInput, ScrollView, ActivityIndicator, Platform, Dimensions, Pressable,
+    Modal, TextInput, ScrollView, ActivityIndicator, Platform, Dimensions, Pressable, Clipboard, Linking, Animated, Easing, PanResponder,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-    ArrowLeft, ArrowRight, LogOut, ShieldCheck, Moon, Sun, MapPin, Check, X, Filter, ChevronDown, ChevronUp,
-    Inbox, ClipboardList, AlertCircle, CheckCircle2, Phone, User, Clock,
+    LogOut, ShieldCheck, Moon, Sun, MapPin, Check, X, Filter, ChevronDown, ChevronUp,
+    Inbox, ClipboardList, AlertCircle, CheckCircle2, Phone, User, Clock, Copy,
     DollarSign, RotateCw, Wallet, CreditCard
 } from 'lucide-react-native';
 
@@ -26,12 +28,12 @@ import { useToast } from '../contexts/ToastContext';
 import { useLocalization, LocalizationProvider } from '../contexts/LocalizationContext';
 import { useTheme, ThemeProvider } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useNavHistory } from '../contexts/NavigationHistoryContext';
 import deviceUtils from '../utils/device';
 import { getOrderStatusLabel, getServiceLabel } from '../utils/orderHelpers';
 
 const LOG_PREFIX = '[MasterDashboard]';
 const PAGE_LIMIT = 5;
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const sanitizeNumberInput = (value) => {
     if (value === null || value === undefined) return '';
     const cleaned = String(value).replace(/[^\d.]/g, '');
@@ -96,8 +98,8 @@ const Dropdown = ({ label, value, options, optionLabels = {}, onChange }) => {
 // ============================================
 // HEADER COMPONENT
 // ============================================
-const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, onRefresh, canGoBack, canGoForward, onBack, onForward }) => {
-    const { t, language } = useLocalization();
+const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, onRefresh }) => {
+    const { language } = useLocalization();
     const { theme, isDark } = useTheme();
     const getFlagEmoji = () => ({ ru: '🇷🇺', kg: '🇰🇬' }[language] || '🇬🇧');
 
@@ -120,20 +122,6 @@ const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, o
                 ) : <View style={[styles.skeletonName, { backgroundColor: theme.borderSecondary }]} />}
             </View>
             <View style={styles.headerRight}>
-                <TouchableOpacity
-                    style={[styles.headerButton, { backgroundColor: theme.bgCard, opacity: canGoBack ? 1 : 0.4 }]}
-                    onPress={onBack}
-                    disabled={!canGoBack}
-                >
-                    <ArrowLeft size={18} color={theme.accentIndigo} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.headerButton, { backgroundColor: theme.bgCard, opacity: canGoForward ? 1 : 0.4 }]}
-                    onPress={onForward}
-                    disabled={!canGoForward}
-                >
-                    <ArrowRight size={18} color={theme.accentIndigo} />
-                </TouchableOpacity>
                 <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onRefresh}><RotateCw size={18} color={theme.accentIndigo} /></TouchableOpacity>
                 <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onLanguageToggle}><Text style={{ fontSize: 16 }}>{getFlagEmoji()}</Text></TouchableOpacity>
                 <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onThemeToggle}>{isDark ? <Sun size={18} color="#FFD700" /> : <Moon size={18} color={theme.accentIndigo} />}</TouchableOpacity>
@@ -146,7 +134,7 @@ const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, o
 // ============================================
 // ORDER CARD COMPONENT
 // ============================================
-const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoading, onClaim, onStart, onComplete, onRefuse }) => {
+const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoading, onClaim, onStart, onComplete, onRefuse, onCopyAddress, onOpen }) => {
     const { t } = useLocalization();
     const { theme } = useTheme();
     const { width } = Dimensions.get('window');
@@ -180,10 +168,12 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
     const getLocationDisplay = () => {
         if (isPool) return order.area;
         if (isClaimed) return `${order.area} - ${t('cardStartToSeeAddress')}`;
-        if (isStarted) return order.full_address || order.area;
+        if (isStarted) return order.area || order.full_address;
         return order.area;
     };
 
+    const addressText = order.full_address || order.address || order.area;
+    const showAddressCopy = Boolean(isStarted && addressText);
     const showClientInfo = isStarted;
     const userCanClaim = userVerified && !userBalanceBlocked;
     const cardMargin = 6;
@@ -193,7 +183,11 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
     const cardWidth = columns === 1 ? '100%' : (availableWidth / columns) - cardMargin;
 
     return (
-        <View style={[styles.orderCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary, width: cardWidth, opacity: isConfirmed ? 0.6 : 1 }]}>
+        <TouchableOpacity
+            activeOpacity={isPool ? 1 : 0.8}
+            onPress={() => (!isPool ? onOpen?.(order) : null)}
+            style={[styles.orderCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary, width: cardWidth, opacity: isConfirmed ? 0.6 : 1 }]}
+        >
             <View style={[styles.statusStripe, { backgroundColor: getStatusColor() }]} />
             <View style={styles.cardContent}>
                 <View style={styles.cardHeader}>
@@ -214,6 +208,24 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
                     </View>
                 </View>
                 <Text style={[styles.description, { color: theme.textSecondary }]} numberOfLines={2}>{order.problem_description}</Text>
+                {showAddressCopy && (
+                    <View style={styles.addressRow}>
+                        <View style={styles.addressTextRow}>
+                            <MapPin size={12} color={theme.textMuted} />
+                            <Text style={[styles.addressText, { color: theme.textSecondary }]} numberOfLines={2}>
+                                {addressText}
+                            </Text>
+                        </View>
+                        <TouchableOpacity
+                            style={[styles.copyAddressBtn, { borderColor: theme.accentIndigo, backgroundColor: `${theme.accentIndigo}15` }]}
+                            onPress={() => onCopyAddress?.(addressText)}
+                        >
+                            <Text style={[styles.copyAddressText, { color: theme.accentIndigo }]}>
+                                {t('actionCopyAddress') || 'Copy address'}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
                 {showClientInfo && order.client && (
                     <View style={[styles.clientInfo, { borderTopColor: theme.borderLight }]}>
                         <View style={styles.clientRow}><User size={12} color={theme.textMuted} /><Text style={[styles.clientLabel, { color: theme.textMuted }]}>{order.client.full_name}</Text></View>
@@ -250,7 +262,7 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
                     </View>
                 )}
             </View>
-        </View>
+        </TouchableOpacity>
     );
 };
 
@@ -262,8 +274,14 @@ const SectionToggle = ({ sections, activeSection, onSectionChange }) => {
     return (
         <View style={[styles.sectionToggle, { backgroundColor: theme.bgSecondary, borderBottomColor: theme.borderPrimary }]}>
             {sections.map(sec => (
-                <TouchableOpacity key={sec.key} style={[styles.sectionBtn, activeSection === sec.key && { borderBottomColor: theme.accentIndigo, borderBottomWidth: 2 }]} onPress={() => onSectionChange(sec.key)}>
-                    <Text style={[styles.sectionBtnText, { color: activeSection === sec.key ? theme.accentIndigo : theme.textSecondary }]}>{sec.label} {sec.count !== undefined && `(${sec.count})`}</Text>
+                <TouchableOpacity
+                    key={sec.key}
+                    style={[styles.sectionBtn, activeSection === sec.key && { borderBottomColor: theme.accentIndigo, borderBottomWidth: 2 }]}
+                    onPress={() => onSectionChange(sec.key)}
+                >
+                    <Text style={[styles.sectionBtnText, { color: activeSection === sec.key ? theme.accentIndigo : theme.textSecondary }]}>
+                        {sec.label} {sec.count !== undefined && `(${sec.count})`}
+                    </Text>
                 </TouchableOpacity>
             ))}
         </View>
@@ -381,19 +399,27 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
                             // Render balance transaction (top-up, adjustment, etc)
                             if (item.type === 'transaction') {
                                 const isPositive = item.amount > 0;
+                                const isCommissionTx = String(item.transaction_type || '').includes('commission');
                                 const txTypeLabel = {
                                     top_up: t('transactionTopUp') || 'Top Up',
                                     adjustment: t('transactionAdjustment') || 'Adjustment',
                                     refund: t('transactionRefund') || 'Refund',
                                     waiver: t('transactionWaiver') || 'Waiver',
-                                    commission: t('transactionCommission') || 'Commission'
-                                }[item.transaction_type] || item.transaction_type;
+                                    commission: t('transactionCommission') || 'Commission',
+                                    commission_deduct: t('transactionCommission') || 'Commission'
+                                }[item.transaction_type] || (isCommissionTx ? (t('transactionCommission') || 'Commission') : item.transaction_type);
 
                                 return (
                                     <View key={`tx-${item.id}`} style={[styles.historyItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
                                         <View>
-                                            <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{txTypeLabel}</Text>
-                                            {item.notes && <Text style={{ color: theme.textMuted, fontSize: 11 }} numberOfLines={1}>{item.notes}</Text>}
+                                        <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{txTypeLabel}</Text>
+                                        {item.notes && (
+                                            <Text style={{ color: theme.textMuted, fontSize: 11 }} numberOfLines={1}>
+                                                {isCommissionTx
+                                                    ? (t('commissionClue') || 'Commission from a completed job')
+                                                    : item.notes}
+                                            </Text>
+                                        )}
                                             <Text style={{ color: theme.textMuted, fontSize: 10 }}>{item.date.toLocaleDateString()}</Text>
                                         </View>
                                         <View style={{ alignItems: 'flex-end' }}>
@@ -474,9 +500,14 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
 // ============================================
 const DashboardContent = ({ navigation }) => {
     const { t, language } = useLocalization();
-    const { theme, toggleTheme } = useTheme();
+    const { theme, toggleTheme, isDark } = useTheme();
     const { cycleLanguage } = useLocalization();
     const { showToast } = useToast();
+    const insets = useSafeAreaInsets();
+    const safeT = useCallback((key, fallback) => {
+        const value = t(key);
+        return value && value !== key ? value : fallback;
+    }, [t]);
 
     const [user, setUser] = useState(null);
     const [activeTab, setActiveTab] = useState('orders');
@@ -501,12 +532,82 @@ const DashboardContent = ({ navigation }) => {
     const [modalState, setModalState] = useState({ type: null, order: null });
     const [completeData, setCompleteData] = useState({});
     const [refuseData, setRefuseData] = useState({});
+    const [activeSheetOrder, setActiveSheetOrder] = useState(null);
+    const [sheetSnap, setSheetSnap] = useState('full'); // 'peek' | 'half' | 'full'
+    const [sheetModalVisible, setSheetModalVisible] = useState(false);
+    const sheetAnim = useRef(new Animated.Value(0)).current;
+    const sheetSnapAnim = useRef(new Animated.Value(0)).current;
 
     const { logout } = useAuth();
-    const { canGoBack, canGoForward, goBack, goForward } = useNavHistory();
 
     useEffect(() => { loadData(); }, []);
     useEffect(() => { if (user) reloadPool(); }, [filters]);
+    useEffect(() => {
+        if (activeTab !== 'orders') return;
+        if (activeSheetOrder) return;
+        const active = myOrders.find(o => o.status === ORDER_STATUS.STARTED || o.status === ORDER_STATUS.CLAIMED);
+        if (active) {
+            setActiveSheetOrder(active);
+            setSheetSnap('full');
+        }
+    }, [activeTab, myOrders, activeSheetOrder]);
+
+    useEffect(() => {
+        if (activeSheetOrder && sheetSnap !== 'peek') {
+            setSheetModalVisible(true);
+            Animated.timing(sheetAnim, {
+                toValue: 1,
+                duration: 240,
+                easing: Easing.out(Easing.cubic),
+                useNativeDriver: true,
+            }).start();
+            return;
+        }
+        if (sheetModalVisible) {
+            Animated.timing(sheetAnim, {
+                toValue: 0,
+                duration: 180,
+                easing: Easing.in(Easing.cubic),
+                useNativeDriver: true,
+            }).start(({ finished }) => {
+                if (finished) setSheetModalVisible(false);
+            });
+        }
+    }, [activeSheetOrder, sheetSnap, sheetModalVisible, sheetAnim]);
+
+    useEffect(() => {
+        const target = sheetSnap === 'full' ? 1 : 0;
+        Animated.timing(sheetSnapAnim, {
+            toValue: target,
+            duration: 220,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+        }).start();
+    }, [sheetSnap, sheetSnapAnim]);
+
+    useEffect(() => {
+        if (!activeSheetOrder) return;
+        const updated = myOrders.find(o => o.id === activeSheetOrder.id);
+        if (!updated) return;
+        if (updated.status !== activeSheetOrder.status) {
+            if (['completed', 'confirmed', 'canceled_by_master', 'canceled_by_client', 'expired'].includes(updated.status)) {
+                setActiveSheetOrder(null);
+                setSheetSnap('peek');
+                return;
+            }
+            setActiveSheetOrder(updated);
+            return;
+        }
+        const hasNewDetails = (
+            (updated.full_address && updated.full_address !== activeSheetOrder.full_address)
+            || (updated.orientir && updated.orientir !== activeSheetOrder.orientir)
+            || (updated.area && updated.area !== activeSheetOrder.area)
+            || (updated.client_phone && updated.client_phone !== activeSheetOrder.client_phone)
+            || (updated.client_name && updated.client_name !== activeSheetOrder.client_name)
+            || (updated.dispatcher_id && updated.dispatcher_id !== activeSheetOrder.dispatcher_id)
+        );
+        if (hasNewDetails) setActiveSheetOrder(updated);
+    }, [myOrders, activeSheetOrder]);
 
     const loadData = async (reset = true) => {
         if (reset) setLoading(true);
@@ -553,22 +654,52 @@ const DashboardContent = ({ navigation }) => {
         }
     };
 
-    const sortJobs = (jobs) => {
-        const score = (s) => ({ claimed: 4, started: 3, completed: 2, confirmed: 1 }[s] || 0);
-        return [...jobs].sort((a, b) => score(b.status) - score(a.status) || new Date(b.created_at) - new Date(a.created_at));
-    };
-
     const processedOrders = useMemo(() => {
-        if (orderSection === 'available') return availableOrders;
-        let list = sortJobs(myOrders);
-        return list.filter(o => {
+        const isHistoryStatus = (status) => (
+            status === 'completed'
+            || status === 'confirmed'
+            || status === 'canceled_by_master'
+            || status === 'canceled_by_client'
+            || status === 'expired'
+        );
+        if (orderSection === 'myJobs') {
+            return myOrders.filter(o => !isHistoryStatus(o.status));
+        }
+        return availableOrders.filter(o => {
             if (filters.urgency !== 'all' && o.urgency !== filters.urgency) return false;
             if (filters.service !== 'all' && o.service_type !== filters.service) return false;
             if (filters.area !== 'all' && o.area !== filters.area) return false;
             if (filters.pricing !== 'all' && o.pricing_type !== filters.pricing) return false;
             return true;
         });
-    }, [orderSection, availableOrders, myOrders, filters]);
+    }, [availableOrders, filters, myOrders, orderSection]);
+
+    const activeJobsCount = myOrders.filter(o => !['completed', 'confirmed', 'canceled_by_master', 'canceled_by_client', 'expired'].includes(o.status)).length;
+    const sheetAddress = activeSheetOrder?.full_address || activeSheetOrder?.address || '';
+    const sheetArea = activeSheetOrder?.area || '';
+    const sheetOrientir = activeSheetOrder?.orientir || activeSheetOrder?.landmark || '';
+    const sheetClientName = activeSheetOrder?.client_name || activeSheetOrder?.client?.full_name || '';
+    const sheetClientPhone = activeSheetOrder?.client_phone || activeSheetOrder?.client?.phone || '';
+    const sheetDispatcherName = activeSheetOrder?.dispatcher?.full_name || activeSheetOrder?.dispatcher_name || '';
+    const sheetDispatcherPhone = activeSheetOrder?.dispatcher?.phone || activeSheetOrder?.dispatcher_phone || '';
+    const sheetCanSeeDetails = activeSheetOrder?.status === ORDER_STATUS.STARTED;
+    const screenHeight = Dimensions.get('window').height || 800;
+    const tabBarHeight = Platform.OS === 'ios' ? 72 : 56;
+    const sheetBottomInset = tabBarHeight + (insets?.bottom || 0); // keep above tab bar + safe area
+    const sheetFooterHeight = activeSheetOrder?.status === ORDER_STATUS.STARTED ? 80 : 68; // reserve space for sticky actions
+    const sheetBodyPaddingBottom = sheetFooterHeight + sheetBottomInset + 8;
+    const sheetTopInset = Math.max(8, (insets?.top || 0) + 6);
+    const sheetFullHeight = Math.max(0, screenHeight - sheetTopInset);
+    const sheetHalfMin = sheetFooterHeight + sheetBottomInset + 320;
+    const sheetHalfHeight = Math.min(sheetFullHeight - 16, Math.max(screenHeight * 0.75, sheetHalfMin));
+    const sheetSnapTranslate = sheetSnapAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [sheetFullHeight - sheetHalfHeight, 0],
+    });
+    const sheetOpenTranslate = sheetAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [sheetFullHeight + 40, 0],
+    });
 
     const availableServices = useMemo(() => {
         const codes = serviceTypes.map(s => s.code);
@@ -631,7 +762,8 @@ const DashboardContent = ({ navigation }) => {
         const result = await ordersService.claimOrder(orderId);
         if (result.success) {
             showToast?.(result.message, 'success');
-            setOrderSection('myJobs');
+            setActiveSheetOrder(order ? { ...order, status: ORDER_STATUS.CLAIMED } : { id: orderId, status: ORDER_STATUS.CLAIMED });
+            setSheetSnap('full');
             await loadData();
         } else showToast?.(result.message, 'error');
         setActionLoading(false);
@@ -641,15 +773,62 @@ const DashboardContent = ({ navigation }) => {
         setActionLoading(true);
         try {
             const res = await fn(...args);
-            if (res.success) { showToast?.(res.message, 'success'); setModalState({ type: null, order: null }); await loadData(); }
+            if (res.success) {
+                showToast?.(res.message, 'success');
+                setModalState({ type: null, order: null });
+                if (res.order && res.order.id === activeSheetOrder?.id) {
+                    setActiveSheetOrder(res.order);
+                }
+                await loadData();
+            }
             else showToast?.(res.message, 'error');
+            return res;
         } catch (e) { showToast?.('Action failed', 'error'); }
         finally { setActionLoading(false); }
     };
-    const activeJobsCount = myOrders.filter(o => o.status !== 'confirmed').length;
 
+    const handleCopyAddress = (text) => {
+        if (!text) {
+            showToast?.(t('toastClipboardEmpty') || 'Nothing to copy', 'info');
+            return;
+        }
+        Clipboard.setString(text);
+        showToast?.(t('toastCopied') || 'Copied', 'success');
+    };
+
+    const handleCopyPhone = (text) => {
+        if (!text) {
+            showToast?.(t('toastClipboardEmpty') || 'Nothing to copy', 'info');
+            return;
+        }
+        Clipboard.setString(text);
+        showToast?.(t('toastCopied') || 'Copied', 'success');
+    };
+
+
+    const handleOpenOrderSheet = (order) => {
+        if (!order) return;
+        setActiveSheetOrder(order);
+        setSheetSnap('full');
+    };
+
+    const handleCloseOrderSheet = () => {
+        setSheetSnap('peek');
+    };
+
+    const sheetPan = useMemo(() => PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 6,
+        onPanResponderRelease: (_, gesture) => {
+            if (gesture.dy > 80) {
+                handleCloseOrderSheet();
+            }
+        }
+    }), [handleCloseOrderSheet]);
     return (
-        <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
+        <LinearGradient
+            colors={isDark ? ['#0b1220', '#111827'] : ['#f8fafc', '#eef2ff']}
+            style={styles.container}
+        >
             <Header
                 user={user}
                 financials={financials}
@@ -657,65 +836,97 @@ const DashboardContent = ({ navigation }) => {
                 onLanguageToggle={cycleLanguage}
                 onThemeToggle={toggleTheme}
                 onRefresh={() => loadData(true)}
-                canGoBack={canGoBack}
-                canGoForward={canGoForward}
-                onBack={goBack}
-                onForward={goForward}
             />
 
             {activeTab === 'orders' && (
                 <>
-                    <SectionToggle sections={[{ key: 'available', label: t('sectionAvailable'), count: availableOrders.length }, { key: 'myJobs', label: t('sectionMyJobs'), count: activeJobsCount }]} activeSection={orderSection} onSectionChange={setOrderSection} />
-                    <View style={[styles.filterBar, { backgroundColor: theme.bgSecondary, borderBottomColor: theme.borderPrimary }]}>
-                        <View style={styles.filterBarRow}>
-                            {/* Filter toggle button - left side */}
-                            <TouchableOpacity
-                                style={[styles.filterToggleBtn, {
-                                    backgroundColor: showFilters ? `${theme.accentIndigo}15` : theme.bgCard,
-                                    borderColor: showFilters ? theme.accentIndigo : theme.borderPrimary
-                                }]}
-                                onPress={() => setShowFilters(!showFilters)}
-                            >
-                                <Filter size={14} color={showFilters ? theme.accentIndigo : theme.textSecondary} />
-                                {showFilters ? <ChevronUp size={14} color={theme.accentIndigo} /> : <ChevronDown size={14} color={theme.textSecondary} />}
-                            </TouchableOpacity>
-
-                            {/* Filter dropdowns - center/scrollable */}
-                            {showFilters && (
-                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScrollContent} style={styles.filterScroll}>
-                                    <Dropdown label={t('filterUrgency')} value={filters.urgency} options={['all', 'emergency', 'urgent', 'planned']} optionLabels={{ all: t('filterAll'), emergency: t('urgencyEmergency'), urgent: t('urgencyUrgent'), planned: t('urgencyPlanned') }} onChange={v => setFilters({ ...filters, urgency: v })} />
-                                    <Dropdown label={t('filterService')} value={filters.service} options={['all', ...availableServices]} optionLabels={serviceOptionLabels} onChange={v => setFilters({ ...filters, service: v })} />
-                                    <Dropdown label={t('filterArea')} value={filters.area} options={['all', ...availableAreas]} optionLabels={{ all: t('filterAll') }} onChange={v => setFilters({ ...filters, area: v })} />
-                                </ScrollView>
-                            )}
-
-                            {/* Clear Filters button - right side, only visible when filters are active */}
-                            {(filters.urgency !== 'all' || filters.service !== 'all' || filters.area !== 'all' || filters.pricing !== 'all') && (
+                    <SectionToggle
+                        sections={[
+                            { key: 'available', label: t('sectionAvailable'), count: availableOrders.length },
+                            { key: 'myJobs', label: t('sectionMyJobs'), count: activeJobsCount }
+                        ]}
+                        activeSection={orderSection}
+                        onSectionChange={setOrderSection}
+                    />
+                    {orderSection === 'available' && (
+                        <View style={[styles.filterBar, { backgroundColor: theme.bgSecondary, borderBottomColor: theme.borderPrimary }]}>
+                            <View style={styles.filterBarRow}>
+                                {/* Filter toggle button - left side */}
                                 <TouchableOpacity
-                                    style={[styles.clearFiltersBtn, { borderColor: theme.textMuted, marginLeft: 'auto' }]}
-                                    onPress={() => setFilters({ urgency: 'all', service: 'all', area: 'all', pricing: 'all' })}
+                                    style={[styles.filterToggleBtn, {
+                                        backgroundColor: showFilters ? `${theme.accentIndigo}15` : theme.bgCard,
+                                        borderColor: showFilters ? theme.accentIndigo : theme.borderPrimary
+                                    }]}
+                                    onPress={() => setShowFilters(!showFilters)}
                                 >
-                                    <X size={14} color={theme.textMuted} />
+                                    <Filter size={14} color={showFilters ? theme.accentIndigo : theme.textSecondary} />
+                                    {showFilters ? <ChevronUp size={14} color={theme.accentIndigo} /> : <ChevronDown size={14} color={theme.textSecondary} />}
                                 </TouchableOpacity>
-                            )}
+
+                                {/* Filter dropdowns - center/scrollable */}
+                                {showFilters && (
+                                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScrollContent} style={styles.filterScroll}>
+                                        <Dropdown label={t('filterUrgency')} value={filters.urgency} options={['all', 'emergency', 'urgent', 'planned']} optionLabels={{ all: t('filterAll'), emergency: t('urgencyEmergency'), urgent: t('urgencyUrgent'), planned: t('urgencyPlanned') }} onChange={v => setFilters({ ...filters, urgency: v })} />
+                                        <Dropdown label={t('filterService')} value={filters.service} options={['all', ...availableServices]} optionLabels={serviceOptionLabels} onChange={v => setFilters({ ...filters, service: v })} />
+                                        <Dropdown label={t('filterArea')} value={filters.area} options={['all', ...availableAreas]} optionLabels={{ all: t('filterAll') }} onChange={v => setFilters({ ...filters, area: v })} />
+                                    </ScrollView>
+                                )}
+
+                                {/* Clear Filters button - right side, only visible when filters are active */}
+                                {(filters.urgency !== 'all' || filters.service !== 'all' || filters.area !== 'all' || filters.pricing !== 'all') && (
+                                    <TouchableOpacity
+                                        style={[styles.clearFiltersBtn, { borderColor: theme.textMuted, marginLeft: 'auto' }]}
+                                        onPress={() => setFilters({ urgency: 'all', service: 'all', area: 'all', pricing: 'all' })}
+                                    >
+                                        <X size={14} color={theme.textMuted} />
+                                    </TouchableOpacity>
+                                )}
+                            </View>
                         </View>
-                    </View>
+                    )}
                 </>
             )}
 
             {loading && !refreshing ? (
                 <View style={styles.center}><ActivityIndicator color={theme.accentIndigo} size="large" /></View>
             ) : activeTab === 'account' ? (
-                <MyAccountTab user={user} financials={financials} earnings={earnings} orderHistory={orderHistory} balanceTransactions={balanceTransactions} refreshing={refreshing} onRefresh={onRefresh} />
+                <MyAccountTab
+                    user={user}
+                    financials={financials}
+                    earnings={earnings}
+                    orderHistory={orderHistory}
+                    balanceTransactions={balanceTransactions}
+                    refreshing={refreshing}
+                    onRefresh={onRefresh}
+                />
             ) : (
                 <FlatList data={processedOrders} key={deviceUtils.getGridColumns()} numColumns={deviceUtils.getGridColumns()} keyExtractor={item => item.id} contentContainerStyle={styles.list}
                     columnWrapperStyle={deviceUtils.getGridColumns() > 1 ? styles.colWrapper : null} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}
                     renderItem={({ item }) => (
-                        <OrderCard order={item} isPool={orderSection === 'available'} userVerified={user?.is_verified} userBalanceBlocked={financials?.balanceBlocked}
-                            actionLoading={actionLoading} onClaim={handleClaim} onStart={(id) => handleAction(ordersService.startJob, id, user.id)}
-                            onComplete={(o) => setModalState({ type: 'complete', order: o })} onRefuse={(o) => setModalState({ type: 'refuse', order: o })} />
+                        <OrderCard
+                            order={item}
+                            isPool={orderSection === 'available'}
+                            userVerified={user?.is_verified}
+                            userBalanceBlocked={financials?.balanceBlocked}
+                            actionLoading={actionLoading}
+                            onClaim={handleClaim}
+                            onStart={(id) => handleAction(ordersService.startJob, id, user.id)}
+                            onCopyAddress={handleCopyAddress}
+                            onComplete={(o) => setModalState({ type: 'complete', order: o })}
+                            onRefuse={(o) => setModalState({ type: 'refuse', order: o })}
+                            onOpen={orderSection === 'myJobs' ? handleOpenOrderSheet : null}
+                        />
                     )}
-                    ListEmptyComponent={<View style={styles.center}><Inbox size={48} color={theme.textMuted} /><Text style={{ color: theme.textMuted, marginTop: 10 }}>{t(orderSection === 'available' ? 'emptyPoolTitle' : 'emptyJobsTitle')}</Text></View>}
+                    ListEmptyComponent={
+                        <View style={styles.center}>
+                            <Inbox size={48} color={theme.textMuted} />
+                            <Text style={{ color: theme.textMuted, marginTop: 10 }}>
+                                {orderSection === 'available'
+                                    ? safeT('emptyPoolTitle', 'No available orders')
+                                    : safeT('emptyJobsTitle', 'No active jobs')}
+                            </Text>
+                        </View>
+                    }
                 />
             )}
 
@@ -730,6 +941,253 @@ const DashboardContent = ({ navigation }) => {
                     <Text style={[styles.tabLabel, { color: activeTab === 'account' ? theme.accentIndigo : theme.textSecondary }]}>{t('tabMyAccount')}</Text>
                 </TouchableOpacity>
             </View>
+
+            {/* Active Order Bottom Sheet */}
+            {activeSheetOrder && sheetModalVisible && (
+                <Modal visible transparent animationType="none" onRequestClose={handleCloseOrderSheet}>
+                    <View style={styles.sheetModalRoot}>
+                        <AnimatedPressable style={[styles.sheetBackdrop, { opacity: sheetAnim }]} onPress={handleCloseOrderSheet} />
+                        <Animated.View
+                            style={[
+                                styles.sheetContainer,
+                                {
+                                    height: sheetFullHeight,
+                                    transform: [{
+                                        translateY: Animated.add(sheetOpenTranslate, sheetSnapTranslate)
+                                    }]
+                                }
+                            ]}
+                            {...sheetPan.panHandlers}
+                        >
+                            <Pressable style={[styles.modalContent, styles.claimModalContent, { backgroundColor: theme.bgSecondary }]} onPress={() => {}}>
+                                <LinearGradient
+                                    pointerEvents="none"
+                                    colors={isDark ? ['#111827', '#0f172a'] : ['#ffffff', '#f1f5f9']}
+                                    style={StyleSheet.absoluteFill}
+                                />
+                                <Pressable style={styles.claimHandle} onPress={() => setSheetSnap(sheetSnap === 'half' ? 'full' : 'half')} />
+                                <View style={styles.sheetContent}>
+                                    <View style={[styles.sheetBody, { paddingBottom: sheetBodyPaddingBottom }]}>
+                                    <View style={styles.sheetHeaderBlock}>
+                                        <View style={styles.claimHeaderRow}>
+                                            <View style={styles.claimHeaderText}>
+                                                <View style={styles.sheetTitleRow}>
+                                                    <Text style={[styles.claimTitle, { color: theme.textPrimary }]}>
+                                                        {safeT('activeOrderTitle', 'Active order')}
+                                                    </Text>
+                                                    <View style={[styles.sheetStatusPill, { backgroundColor: `${theme.accentIndigo}20` }]}>
+                                                        <Text style={[styles.sheetStatusText, { color: theme.accentIndigo }]}>
+                                                            {getOrderStatusLabel(activeSheetOrder.status, t)}
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                            </View>
+                                            <TouchableOpacity
+                                                style={[styles.claimCloseBtn, { backgroundColor: `${theme.borderSecondary}55` }]}
+                                                onPress={handleCloseOrderSheet}
+                                            >
+                                                <ChevronDown size={18} color={theme.textMuted} />
+                                            </TouchableOpacity>
+                                        </View>
+                                    </View>
+                                    <View style={[styles.claimDetails, { backgroundColor: 'transparent', borderColor: 'transparent' }]}>
+                                        <View style={styles.sheetHeroRow}>
+                                            <View style={[styles.sheetHeroCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                                                <Text style={[styles.sheetHeroLabel, { color: theme.textMuted }]}>{safeT('serviceType', 'Service')}</Text>
+                                                <Text style={[styles.sheetValueBase, styles.sheetValuePrimary, { color: theme.textPrimary }]}>
+                                                    {getServiceLabel(activeSheetOrder.service_type, t)}
+                                                </Text>
+                                            </View>
+                                            <View style={[styles.sheetHeroCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                                                <Text style={[styles.sheetHeroLabel, { color: theme.textMuted }]}>{safeT('price', 'Price')}</Text>
+                                                <Text style={[styles.sheetValueBase, styles.sheetValuePrimary, { color: theme.accentSuccess }]}>
+                                                    {activeSheetOrder.final_price ?? activeSheetOrder.initial_price ?? activeSheetOrder.callout_fee ?? safeT('priceOpen', 'Open')}
+                                                </Text>
+                                            </View>
+                                        </View>
+                                        {sheetCanSeeDetails ? (
+                                            <View style={styles.sheetDetailsBlock}>
+                                                {sheetAddress ? (
+                                                    <View style={[styles.sheetInfoCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                                                        <View style={styles.sheetInfoMain}>
+                                                            <View style={styles.sheetInfoText}>
+                                                                <View style={styles.sheetAddressBlock}>
+                                                                    {sheetArea ? (
+                                                                        <View style={styles.sheetFieldBlock}>
+                                                                            <Text style={[styles.sheetFieldLabel, { color: theme.textMuted }]}>{safeT('district', 'District')}</Text>
+                                                                            <Text style={[styles.sheetValueBase, styles.sheetValueSecondary, { color: theme.textPrimary }]} numberOfLines={1}>
+                                                                                {sheetArea}
+                                                                            </Text>
+                                                                        </View>
+                                                                    ) : null}
+                                                                    {sheetOrientir ? (
+                                                                        <View style={styles.sheetFieldBlock}>
+                                                                            <Text style={[styles.sheetFieldLabel, { color: theme.textMuted }]}>{safeT('labelOrientir', 'Landmark')}</Text>
+                                                                            <Text style={[styles.sheetValueBase, styles.sheetValueSecondary, { color: theme.textPrimary }]} numberOfLines={1}>
+                                                                                {sheetOrientir}
+                                                                            </Text>
+                                                                        </View>
+                                                                    ) : null}
+                                                                    {sheetAddress ? (
+                                                                        <View style={styles.sheetFieldBlock}>
+                                                                            <Text style={[styles.sheetFieldLabel, { color: theme.textMuted }]}>{safeT('address', 'Address')}</Text>
+                                                                            <Text style={[styles.sheetValueBase, styles.sheetValuePrimary, { color: theme.textPrimary }]} numberOfLines={2}>
+                                                                                {sheetAddress}
+                                                                            </Text>
+                                                                        </View>
+                                                                    ) : null}
+                                                                </View>
+                                                            </View>
+                                                        </View>
+                                                        <TouchableOpacity
+                                                            style={[styles.sheetIconBtn, { backgroundColor: `${theme.accentIndigo}14` }]}
+                                                            onPress={() => handleCopyAddress(sheetAddress)}
+                                                        >
+                                                            <Copy size={16} color={theme.accentIndigo} />
+                                                        </TouchableOpacity>
+                                                    </View>
+                                                ) : null}
+                                                {(sheetClientName || sheetClientPhone) ? (
+                                                    <View style={[styles.sheetInfoCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                                                        <View style={styles.sheetInfoMain}>
+                                                            <View style={styles.sheetInfoText}>
+                                                                <Text style={[styles.sheetInfoLabel, { color: theme.textMuted }]}>{safeT('clientName', 'Client')}</Text>
+                                                                <Text style={[styles.sheetValueBase, styles.sheetValuePrimary, { color: theme.textPrimary }]} numberOfLines={1}>
+                                                                    {sheetClientName || '-'}
+                                                                </Text>
+                                                                {sheetClientPhone ? (
+                                                                    <View style={styles.sheetPhoneRow}>
+                                                                        <Text style={[styles.sheetValueBase, styles.sheetValuePhone, { color: theme.textPrimary }]}>
+                                                                            {sheetClientPhone}
+                                                                        </Text>
+                                                                        <View style={styles.sheetInfoActions}>
+                                                                            <TouchableOpacity
+                                                                                style={[styles.sheetIconBtn, { backgroundColor: `${theme.accentIndigo}14` }]}
+                                                                                onPress={() => handleCopyPhone(sheetClientPhone)}
+                                                                            >
+                                                                                <Copy size={16} color={theme.accentIndigo} />
+                                                                            </TouchableOpacity>
+                                                                            <TouchableOpacity
+                                                                                style={[styles.sheetIconBtn, { backgroundColor: `${theme.accentSuccess}14` }]}
+                                                                                onPress={() => Linking.openURL(`tel:${sheetClientPhone}`)}
+                                                                            >
+                                                                                <Phone size={16} color={theme.accentSuccess} />
+                                                                            </TouchableOpacity>
+                                                                        </View>
+                                                                    </View>
+                                                                ) : null}
+                                                            </View>
+                                                        </View>
+                                                    </View>
+                                                ) : null}
+                                                {(sheetDispatcherName || sheetDispatcherPhone) ? (
+                                                    <View style={[styles.sheetInfoCard, { backgroundColor: theme.bgCard, borderColor: theme.accentIndigo }]}>
+                                                        <View style={styles.sheetInfoMain}>
+                                                            <View style={styles.sheetInfoText}>
+                                                                <Text style={[styles.sheetInfoLabel, { color: theme.textMuted }]}>{safeT('dispatcherLabel', 'Dispatcher')}</Text>
+                                                                <Text style={[styles.sheetValueBase, styles.sheetValueSecondary, { color: theme.textPrimary }]} numberOfLines={1}>
+                                                                    {sheetDispatcherName || '-'}
+                                                                </Text>
+                                                                {sheetDispatcherPhone ? (
+                                                                    <View style={styles.sheetPhoneRow}>
+                                                                        <Text style={[styles.sheetValueBase, styles.sheetValuePhone, { color: theme.textPrimary }]}>
+                                                                            {sheetDispatcherPhone}
+                                                                        </Text>
+                                                                        <View style={styles.sheetInfoActions}>
+                                                                            <TouchableOpacity
+                                                                                style={[styles.sheetIconBtn, { backgroundColor: `${theme.accentIndigo}14` }]}
+                                                                                onPress={() => handleCopyPhone(sheetDispatcherPhone)}
+                                                                            >
+                                                                                <Copy size={16} color={theme.accentIndigo} />
+                                                                            </TouchableOpacity>
+                                                                            <TouchableOpacity
+                                                                                style={[styles.sheetIconBtn, { backgroundColor: `${theme.accentSuccess}14` }]}
+                                                                                onPress={() => Linking.openURL(`tel:${sheetDispatcherPhone}`)}
+                                                                            >
+                                                                                <Phone size={16} color={theme.accentSuccess} />
+                                                                            </TouchableOpacity>
+                                                                        </View>
+                                                                    </View>
+                                                                ) : null}
+                                                            </View>
+                                                        </View>
+                                                    </View>
+                                                ) : null}
+                                            </View>
+                                        ) : (
+                                            <View style={styles.sheetDetailsBlock}>
+                                                <View style={[styles.sheetInfoCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                                                    <View style={styles.sheetInfoMain}>
+                                                        <View style={styles.sheetInfoText}>
+                                                            <Text style={[styles.sheetInfoLabel, { color: theme.textMuted }]}>{safeT('address', 'Address')}</Text>
+                                                            <Text style={[styles.sheetInfoValue, { color: theme.textSecondary }]}>
+                                                                {safeT('cardStartToSeeAddress', 'Start job to see address')}
+                                                            </Text>
+                                                        </View>
+                                                    </View>
+                                                </View>
+                                            </View>
+                                        )}
+                                    </View>
+                                </View>
+                                <View style={[styles.sheetFooter, { backgroundColor: theme.bgSecondary, borderTopColor: theme.borderPrimary, paddingBottom: sheetBottomInset }]}>
+                                    <View style={styles.sheetFooterActions}>
+                                        {activeSheetOrder.status === ORDER_STATUS.CLAIMED && (
+                                            <TouchableOpacity
+                                                style={[styles.primarySheetButton, { backgroundColor: theme.accentIndigo, shadowColor: theme.accentIndigo, shadowOpacity: 0.35 }]}
+                                                disabled={actionLoading}
+                                                onPress={() => handleAction(ordersService.startJob, activeSheetOrder.id, user.id)}
+                                            >
+                                                {actionLoading ? (
+                                                    <ActivityIndicator color="#fff" />
+                                                ) : (
+                                                    <Text style={styles.primarySheetButtonText}>{safeT('actionStart', 'Start job')}</Text>
+                                                )}
+                                            </TouchableOpacity>
+                                        )}
+                                        {activeSheetOrder.status === ORDER_STATUS.STARTED && (
+                                            <>
+                                                <TouchableOpacity
+                                                    style={[styles.secondarySheetButton, { borderColor: theme.accentDanger, backgroundColor: `${theme.accentDanger}12`, shadowColor: theme.accentDanger, shadowOpacity: 0.25 }]}
+                                                    onPress={() => setModalState({ type: 'refuse', order: activeSheetOrder })}
+                                                >
+                                                    <Text style={[styles.secondarySheetButtonText, { color: theme.accentDanger }]}>
+                                                        {safeT('actionCancel', 'Cancel')}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                                <TouchableOpacity
+                                                    style={[styles.primarySheetButton, { backgroundColor: theme.accentSuccess, shadowColor: theme.accentSuccess, shadowOpacity: 0.35 }]}
+                                                    onPress={() => setModalState({ type: 'complete', order: activeSheetOrder })}
+                                                >
+                                                    <Text style={styles.primarySheetButtonText}>{safeT('actionComplete', 'Complete')}</Text>
+                                                </TouchableOpacity>
+                                            </>
+                                        )}
+                                    </View>
+                                </View>
+                            </View>
+                            </Pressable>
+                        </Animated.View>
+                    </View>
+                </Modal>
+            )}
+            {activeTab === 'orders' && activeSheetOrder && sheetSnap === 'peek' && !sheetModalVisible && (
+                <Pressable
+                    style={[styles.sheetPeek, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary, bottom: sheetBottomInset + 8 }]}
+                    onPress={() => setSheetSnap('full')}
+                >
+                    <View style={styles.sheetPeekHandle} />
+                    <View style={styles.sheetPeekContent}>
+                        <Text style={[styles.sheetPeekLabel, { color: theme.textMuted }]}>{safeT('activeOrderTitle', 'Active order')}</Text>
+                        <Text style={[styles.sheetPeekValue, { color: theme.textPrimary }]} numberOfLines={1}>
+                            {getServiceLabel(activeSheetOrder.service_type, t)}
+                        </Text>
+                    </View>
+                    <View style={[styles.sheetPeekBadge, { backgroundColor: `${theme.accentIndigo}20` }]}>
+                        <Text style={[styles.sheetPeekBadgeText, { color: theme.accentIndigo }]}>{getOrderStatusLabel(activeSheetOrder.status, t)}</Text>
+                    </View>
+                </Pressable>
+            )}
 
             {/* Complete Modal */}
             {modalState.type === 'complete' && modalState.order && (
@@ -789,13 +1247,22 @@ const DashboardContent = ({ navigation }) => {
                             <TextInput style={[styles.modalInput, { backgroundColor: theme.bgCard, color: theme.textPrimary, borderColor: theme.borderPrimary, marginTop: 10 }]} placeholder={t('modalAdditionalNotes')} placeholderTextColor={theme.textMuted} multiline numberOfLines={2} value={refuseData.notes || ''} onChangeText={text => setRefuseData({ ...refuseData, notes: text })} />
                             <View style={styles.modalActions}>
                                 <TouchableOpacity style={[styles.modalButton, { backgroundColor: theme.borderSecondary }]} onPress={() => { setModalState({ type: null, order: null }); setRefuseData({}); }}><Text style={[styles.modalButtonText, { color: theme.textSecondary }]}>{t('actionBack')}</Text></TouchableOpacity>
-                                <TouchableOpacity style={[styles.modalButton, { backgroundColor: theme.accentDanger, flex: 1 }]} disabled={!refuseData.reason} onPress={() => { if (!refuseData.reason) { showToast?.('Please select a reason', 'error'); return; } handleAction(ordersService.refuseJob, modalState.order.id, user.id, refuseData.reason, refuseData.notes); setRefuseData({}); }}><Text style={styles.modalButtonText}>{t('actionSubmit')}</Text></TouchableOpacity>
+                                <TouchableOpacity style={[styles.modalButton, { backgroundColor: theme.accentDanger, flex: 1 }]} disabled={!refuseData.reason} onPress={async () => {
+                                    if (!refuseData.reason) { showToast?.('Please select a reason', 'error'); return; }
+                                    const res = await handleAction(ordersService.refuseJob, modalState.order.id, user.id, refuseData.reason, refuseData.notes);
+                                    if (res?.success) {
+                                        setActiveSheetOrder(null);
+                                        setSheetSnap('peek');
+                                        setSheetModalVisible(false);
+                                    }
+                                    setRefuseData({});
+                                }}><Text style={styles.modalButtonText}>{t('actionSubmit')}</Text></TouchableOpacity>
                             </View>
                         </View>
                     </View>
                 </Modal>
             )}
-        </View>
+        </LinearGradient>
     );
 };
 
@@ -848,6 +1315,11 @@ const styles = StyleSheet.create({
     locationContainer: { flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1 },
     locationText: { fontSize: 11, flex: 1 },
     description: { fontSize: 12, marginBottom: 10, lineHeight: 16 },
+    addressRow: { marginBottom: 10, gap: 8 },
+    addressTextRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    addressText: { fontSize: 12, flex: 1, lineHeight: 16 },
+    copyAddressBtn: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, borderWidth: 1 },
+    copyAddressText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
     clientInfo: { paddingTop: 10, borderTopWidth: 1, gap: 4 },
     clientRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     clientLabel: { fontSize: 12 },
@@ -906,4 +1378,129 @@ const styles = StyleSheet.create({
     modalButton: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
     modalButtonText: { color: '#fff', fontSize: 13, fontWeight: '700', textTransform: 'uppercase' },
     reasonItem: { padding: 12, borderRadius: 8, borderWidth: 1, marginBottom: 8 },
+    claimOverlay: { padding: 0, alignItems: 'stretch', justifyContent: 'flex-end' },
+    claimModalContent: {
+        width: '100%',
+        maxWidth: '100%',
+        alignSelf: 'stretch',
+        flex: 1,
+        maxHeight: '100%',
+        padding: 0,
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        borderBottomLeftRadius: 0,
+        borderBottomRightRadius: 0,
+        overflow: 'hidden',
+        paddingTop: 6,
+        paddingHorizontal: 18,
+        paddingBottom: 0
+    },
+    claimHandle: { alignSelf: 'center', width: 48, height: 5, borderRadius: 999, backgroundColor: 'rgba(148,163,184,0.5)', marginBottom: 6 },
+    claimScroll: { paddingBottom: 12 },
+    claimHeader: { alignItems: 'center', gap: 10, marginBottom: 6 },
+    claimHeaderRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 6, position: 'relative' },
+    claimHeaderText: { flex: 1, alignItems: 'center' },
+    claimCloseBtn: { position: 'absolute', right: 0, top: 0, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+    claimCloseText: { fontSize: 18, fontWeight: '700' },
+    sheetContent: { flex: 1, position: 'relative', justifyContent: 'flex-start' },
+    sheetBody: { flex: 1, gap: 6 },
+    sheetHeaderBlock: { marginTop: 16, marginBottom: 20 },
+    claimTitle: { fontSize: 22, fontWeight: '700', textAlign: 'center' },
+    claimSubtitle: { fontSize: 13, textAlign: 'center', marginBottom: 16, lineHeight: 18 },
+    claimDetails: { borderRadius: 16, borderWidth: 1, padding: 12, gap: 10, marginBottom: 12 },
+    claimRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    claimLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4 },
+    claimValue: { fontSize: 16, fontWeight: '600', lineHeight: 22 },
+    claimWarningBox: { marginTop: 6, gap: 4 },
+    claimActions: { position: 'absolute', left: 18, right: 18, bottom: 16, flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+    claimButton: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+    claimButtonText: { fontSize: 13, fontWeight: '700', textTransform: 'uppercase', color: '#fff' },
+    sheetSubTitle: { fontSize: 12, marginTop: 2, lineHeight: 16, textAlign: 'center' },
+    sheetHeroRow: { flexDirection: 'row', gap: 8 },
+    sheetHeroCard: { flex: 1, borderRadius: 16, padding: 12, gap: 6, borderWidth: 1 },
+    sheetHeroLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 },
+    sheetValueBase: { fontSize: 18, lineHeight: 24 },
+    sheetValuePrimary: { fontWeight: '400' },
+    sheetValueSecondary: { fontWeight: '400' },
+    sheetValuePhone: { fontWeight: '400' },
+    sheetMetaRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+    sheetMetaCard: { flex: 1, borderRadius: 14, padding: 10, gap: 6, borderWidth: 1 },
+    sheetMetaLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 },
+    sheetMetaValue: { fontSize: 18, fontWeight: '400', lineHeight: 24 },
+    sheetLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4 },
+    sheetValue: { fontSize: 18, fontWeight: '400', lineHeight: 24 },
+    sheetStatusPill: { alignSelf: 'center', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, marginLeft: 8 },
+    sheetStatusText: { fontSize: 12, fontWeight: '700' },
+    sheetTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+    sheetDetailsBlock: { marginTop: 6, gap: 6 },
+    sheetDetailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
+    sheetDetailMain: { flex: 1, gap: 4 },
+    sheetDetailSide: { flex: 1, gap: 6, alignItems: 'flex-start' },
+    sheetInlineActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
+    sheetInlineBtn: { borderWidth: 1, borderRadius: 10, paddingVertical: 6, paddingHorizontal: 10, alignSelf: 'flex-start' },
+    sheetInlineText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
+    sheetInfoCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, borderRadius: 16, padding: 12, borderWidth: 1 },
+    sheetInfoMain: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, flex: 1 },
+    sheetInfoText: { flex: 1, gap: 1 },
+    sheetInfoLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 },
+    sheetInfoValue: { fontSize: 18, fontWeight: '400', lineHeight: 24 },
+    sheetAddressBlock: { gap: 10 },
+    sheetFieldBlock: { gap: 4 },
+    sheetFieldLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
+    sheetInfoActions: { flexDirection: 'row', gap: 8 },
+    sheetPhoneRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4 },
+    sheetIconBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+    sheetFooter: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: 1, paddingTop: 10, paddingHorizontal: 18 },
+    sheetFooterActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+    primarySheetButton: {
+        flex: 1,
+        paddingVertical: 16,
+        borderRadius: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowOffset: { width: 0, height: 6 },
+        shadowRadius: 10,
+        elevation: 6,
+    },
+    primarySheetButtonText: { fontSize: 13, fontWeight: '800', textTransform: 'uppercase', color: '#fff' },
+    secondarySheetButton: {
+        flex: 1,
+        paddingVertical: 14,
+        borderRadius: 14,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'transparent',
+        shadowOffset: { width: 0, height: 4 },
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    secondarySheetButtonText: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase' },
+    sheetPeek: {
+        position: 'absolute',
+        left: 16,
+        right: 16,
+        bottom: 76,
+        borderRadius: 16,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        borderWidth: 1,
+        shadowColor: '#000',
+        shadowOpacity: 0.2,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 8,
+    },
+    sheetPeekHandle: { width: 28, height: 4, borderRadius: 999, backgroundColor: 'rgba(148,163,184,0.5)' },
+    sheetPeekContent: { flex: 1 },
+    sheetPeekLabel: { fontSize: 12, textTransform: 'uppercase', fontWeight: '700' },
+    sheetPeekValue: { fontSize: 16, fontWeight: '600' },
+    sheetPeekBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
+    sheetPeekBadgeText: { fontSize: 12, fontWeight: '700' },
+    sheetModalRoot: { flex: 1, justifyContent: 'flex-end', zIndex: 999, elevation: 30 },
+    sheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,23,42,0.5)', zIndex: 1 },
+    sheetContainer: { width: '100%', zIndex: 2 },
 });

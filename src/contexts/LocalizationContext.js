@@ -322,12 +322,18 @@ const translations = {
         actionPay: "Pay",
         actionCall: "Call",
         actionCopy: "Copy",
+        actionCopyAddress: "Copy address",
+        actionCopyPhone: "Copy phone",
+        actionClose: "Close",
+        actionCopyAddress: "Copy address",
+        actionCopyPhone: "Copy phone",
 
         // Cards
         cardStartToSeeAddress: "Start job to see address",
         cardPendingApproval: "Pending Approval",
         cardUnassigned: "Unassigned",
         cardStuck: "Stuck",
+        activeOrderTitle: "Active order",
 
         // Order Details
         clientName: "Client Name",
@@ -344,6 +350,7 @@ const translations = {
         calloutFee: "Call-out Fee",
         fixedPrice: "Fixed Price",
         priceOpen: "Open",
+        labelStatus: "Status",
         priceBase: "base",
         currencySom: "som",
 
@@ -983,12 +990,18 @@ const translations = {
         actionPay: "Оплатить",
         actionCall: "Звонок",
         actionCopy: "Копия",
+        actionCopyAddress: "Копировать адрес",
+        actionCopyPhone: "Копировать телефон",
+        actionClose: "Закрыть",
+        actionCopyAddress: "Копировать адрес",
+        actionCopyPhone: "Копировать телефон",
 
         // Cards
         cardStartToSeeAddress: "Начните, чтобы увидеть адрес",
         cardPendingApproval: "Ожидает подтверждения",
         cardUnassigned: "Не назначен",
         cardStuck: "Застрял",
+        activeOrderTitle: "Активный заказ",
 
         // Order Details
         clientName: "Имя клиента",
@@ -1005,6 +1018,7 @@ const translations = {
         calloutFee: "Плата за выезд",
         fixedPrice: "Фикс. цена",
         priceOpen: "Открыто",
+        labelStatus: "Статус",
         priceBase: "фикс",
         currencySom: "сом",
 
@@ -1641,12 +1655,18 @@ const translations = {
         actionPay: "Төлөө",
         actionCall: "Чалуу",
         actionCopy: "Көчүрүү",
+        actionCopyAddress: "Даректи көчүрүү",
+        actionCopyPhone: "Телефонду көчүрүү",
+        actionClose: "Жабуу",
+        actionCopyAddress: "Даректи көчүрүү",
+        actionCopyPhone: "Телефонду көчүрүү",
 
         // Cards
         cardStartToSeeAddress: "Даректи көрүү үчүн баштаңыз",
         cardPendingApproval: "Тастыктоону күтүүдө",
         cardUnassigned: "Дайындала элек",
         cardStuck: "Токтоп калды",
+        activeOrderTitle: "Активдүү заказ",
 
         // Order Details
         clientName: "Кардардын аты",
@@ -1663,6 +1683,7 @@ const translations = {
         calloutFee: "Чыгуу акысы",
         fixedPrice: "Белгиленген баа",
         priceOpen: "Ачык",
+        labelStatus: "Абалы",
         priceBase: "негиз",
         currencySom: "сом",
 
