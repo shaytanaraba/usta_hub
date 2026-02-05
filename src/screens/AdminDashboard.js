@@ -3,7 +3,7 @@
  * Replicates the "Deep Navy" web dashboard look with sidebar navigation and rich charts.
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     View,
     Text,
@@ -28,6 +28,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { BarChart } from 'react-native-chart-kit';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import Svg, { G, Path, Circle, Rect, Line, Text as SvgText } from 'react-native-svg';
 
 // Services & Context
 import authService from '../services/auth';
@@ -59,6 +60,60 @@ const sanitizeNumberInput = (value) => {
 const formatNumber = (value) => (Number.isFinite(value) ? Number(value).toLocaleString() : '—');
 const formatMoney = (value) => (Number.isFinite(value) ? `${Math.round(value).toLocaleString()}` : '—');
 const formatPercent = (value) => (Number.isFinite(value) ? `${Math.round(value * 100)}%` : '—');
+const formatShortDate = (date, locale = 'en-US') => {
+    if (!date) return '—';
+    const d = date instanceof Date ? date : new Date(date);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString(locale, { month: 'short', day: 'numeric' });
+};
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const percentile = (sortedValues, p) => {
+    if (!sortedValues.length) return 0;
+    const n = sortedValues.length;
+    const index = (p / 100) * (n - 1);
+    const lower = Math.floor(index);
+    const upper = Math.ceil(index);
+    if (lower === upper) return sortedValues[lower];
+    const weight = index - lower;
+    return sortedValues[lower] + (sortedValues[upper] - sortedValues[lower]) * weight;
+};
+
+const calcStats = (values) => {
+    if (!values.length) {
+        return {
+            n: 0,
+            min: 0,
+            max: 0,
+            mean: 0,
+            std: 0,
+            p5: 0,
+            p25: 0,
+            p50: 0,
+            p75: 0,
+            p90: 0,
+            p95: 0,
+            iqr: 0,
+            cv: 0,
+        };
+    }
+    const sorted = [...values].sort((a, b) => a - b);
+    const n = sorted.length;
+    const min = sorted[0];
+    const max = sorted[n - 1];
+    const mean = sorted.reduce((sum, val) => sum + val, 0) / n;
+    const variance = sorted.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / n;
+    const std = Math.sqrt(variance);
+    const p5 = percentile(sorted, 5);
+    const p25 = percentile(sorted, 25);
+    const p50 = percentile(sorted, 50);
+    const p75 = percentile(sorted, 75);
+    const p90 = percentile(sorted, 90);
+    const p95 = percentile(sorted, 95);
+    const iqr = p75 - p25;
+    const cv = mean ? std / mean : 0;
+    return { n, min, max, mean, std, p5, p25, p50, p75, p90, p95, iqr, cv };
+};
 const hoursSince = (dateValue) => {
     if (!dateValue) return null;
     const ts = new Date(dateValue).getTime();
@@ -68,39 +123,50 @@ const hoursSince = (dateValue) => {
 const normalizeStatus = (status) => String(status || '').toLowerCase();
 const COMPLETED_STATUSES = new Set(['completed', 'confirmed']);
 const CANCELED_STATUSES = new Set(['canceled', 'cancelled', 'canceled_by_client', 'canceled_by_master', 'canceled_by_admin']);
+const isReopenableStatus = (status) => {
+    const normalized = normalizeStatus(status);
+    return normalized === 'expired' || normalized.startsWith('canceled') || normalized.startsWith('cancelled');
+};
 const getAnalyticsColumns = () => {
     if (SCREEN_WIDTH >= 1024) return 3;
     if (SCREEN_WIDTH >= 768) return 2;
     return 1;
 };
 
-const AnalyticsMetricCard = ({ label, value, subLabel, onPress, isDark, sparkData }) => (
-    <TouchableOpacity
-        style={[styles.analyticsMetricCard, !isDark && styles.cardLight]}
-        onPress={onPress}
-        activeOpacity={onPress ? 0.8 : 1}
-    >
-        <View style={styles.analyticsMetricTopRow}>
-            <View style={{ flex: 1 }}>
-                <Text style={[styles.analyticsMetricLabel, { color: isDark ? '#94a3b8' : '#64748b' }]}>{label}</Text>
-                <Text style={[styles.analyticsMetricValue, !isDark && styles.textDark]}>{value}</Text>
+const AnalyticsMetricCard = ({ label, value, subLabel, onPress, isDark, sparkData, infoText, infoHandlers }) => {
+    const safeSubLabel = subLabel ?? '\u00A0';
+    return (
+        <TouchableOpacity
+            style={[styles.analyticsMetricCard, !isDark && styles.cardLight]}
+            onPress={onPress}
+            activeOpacity={onPress ? 0.8 : 1}
+        >
+            <View style={styles.analyticsMetricTopRow}>
+                <View style={{ flex: 1 }}>
+                    <View style={styles.analyticsMetricLabelRow}>
+                        <Text style={[styles.analyticsMetricLabel, { color: isDark ? '#94a3b8' : '#64748b' }]}>{label}</Text>
+                        {infoText ? <InfoTip text={infoText} isDark={isDark} handlers={infoHandlers} /> : null}
+                    </View>
+                    <Text style={[styles.analyticsMetricValue, !isDark && styles.textDark]}>{value}</Text>
+                </View>
+                {sparkData?.length ? <MiniBars data={sparkData} isDark={isDark} height={22} barWidth={5} /> : null}
             </View>
-            {sparkData?.length ? <MiniBars data={sparkData} isDark={isDark} height={22} barWidth={5} /> : null}
-        </View>
-        {subLabel ? (
-            <Text style={[styles.analyticsMetricSub, { color: isDark ? '#94a3b8' : '#64748b' }]}>{subLabel}</Text>
-        ) : null}
-    </TouchableOpacity>
-);
+            <Text style={[styles.analyticsMetricSub, { color: isDark ? '#94a3b8' : '#64748b' }]}>{safeSubLabel}</Text>
+        </TouchableOpacity>
+    );
+};
 
-const AnalyticsListCard = ({ title, items, emptyLabel, onPress, isDark, actionLabel = 'View' }) => (
+const AnalyticsListCard = ({ title, items, emptyLabel, onPress, isDark, actionLabel = 'View', infoText, infoHandlers }) => (
     <TouchableOpacity
         style={[styles.analyticsListCard, !isDark && styles.cardLight]}
         onPress={onPress}
         activeOpacity={onPress ? 0.8 : 1}
     >
         <View style={styles.analyticsListHeader}>
-            <Text style={[styles.analyticsListTitle, !isDark && styles.textDark]}>{title}</Text>
+            <View style={styles.analyticsListTitleRow}>
+                <Text style={[styles.analyticsListTitle, !isDark && styles.textDark]}>{title}</Text>
+                {infoText ? <InfoTip text={infoText} isDark={isDark} handlers={infoHandlers} /> : null}
+            </View>
             {onPress ? (
                 <Text style={[styles.analyticsListAction, { color: '#3b82f6' }]}>{actionLabel}</Text>
             ) : null}
@@ -108,15 +174,19 @@ const AnalyticsListCard = ({ title, items, emptyLabel, onPress, isDark, actionLa
         {items?.length ? (
             items.slice(0, 4).map((item, idx) => (
                 <View key={`${item.label}-${idx}`} style={styles.analyticsListItem}>
-                    <View style={{ flex: 1 }}>
-                        <Text style={[styles.analyticsListLabel, { color: isDark ? '#cbd5e1' : '#0f172a' }]} numberOfLines={1}>{item.label}</Text>
-                        {Number.isFinite(item.ratio) && (
-                            <View style={styles.analyticsListBar}>
-                                <View style={[styles.analyticsListBarFill, { width: `${Math.min(100, Math.round(item.ratio * 100))}%` }]} />
-                            </View>
-                        )}
+                    <View style={styles.analyticsListRow}>
+                        <Text style={[styles.analyticsListLabel, { color: isDark ? '#cbd5e1' : '#0f172a' }]} numberOfLines={1}>
+                            {item.label}
+                        </Text>
+                        <Text style={[styles.analyticsListValue, { color: isDark ? '#fff' : '#0f172a' }]} numberOfLines={1}>
+                            {item.value}
+                        </Text>
                     </View>
-                    <Text style={[styles.analyticsListValue, { color: isDark ? '#fff' : '#0f172a' }]}>{item.value}</Text>
+                    {Number.isFinite(item.ratio) && (
+                        <View style={styles.analyticsListBar}>
+                            <View style={[styles.analyticsListBarFill, { width: `${Math.min(100, Math.round(item.ratio * 100))}%` }]} />
+                        </View>
+                    )}
                 </View>
             ))
         ) : (
@@ -124,6 +194,59 @@ const AnalyticsListCard = ({ title, items, emptyLabel, onPress, isDark, actionLa
         )}
     </TouchableOpacity>
 );
+
+const InfoTip = ({ text, isDark, handlers }) => {
+    const onShow = handlers?.onShow;
+    const onMove = handlers?.onMove;
+    const onHide = handlers?.onHide;
+    const stopEvent = (event) => {
+        event?.stopPropagation?.();
+        event?.nativeEvent?.stopPropagation?.();
+    };
+
+    const handleShow = (event) => {
+        stopEvent(event);
+        if (!onShow) return;
+        const payload = {
+            text,
+            x: event?.nativeEvent?.pageX,
+            y: event?.nativeEvent?.pageY,
+        };
+        onShow(payload, true);
+    };
+
+    const handleMove = (event) => {
+        stopEvent(event);
+        if (!onMove) return;
+        const x = event?.nativeEvent?.pageX;
+        const y = event?.nativeEvent?.pageY;
+        if (x == null || y == null) return;
+        onMove(x, y);
+    };
+
+    const handlePress = () => {
+        stopEvent();
+        if (!onShow) return;
+        onShow({ text }, true);
+    };
+
+    return (
+        <View style={styles.infoTipWrap}>
+            <TouchableOpacity
+                style={[styles.infoTipIcon, !isDark && styles.infoTipIconLight]}
+                onPress={Platform.OS === 'web' ? undefined : handlePress}
+                onMouseEnter={Platform.OS === 'web' ? handleShow : undefined}
+                onMouseMove={Platform.OS === 'web' ? handleMove : undefined}
+                onMouseLeave={Platform.OS === 'web' ? onHide : undefined}
+                onMouseDown={Platform.OS === 'web' ? stopEvent : undefined}
+                onPressIn={Platform.OS !== 'web' ? stopEvent : undefined}
+                activeOpacity={0.8}
+            >
+                <Text style={[styles.infoTipText, !isDark && styles.textDark]}>i</Text>
+            </TouchableOpacity>
+        </View>
+    );
+};
 
 const MiniBars = ({ data = [], isDark, height = 34, barWidth = 8 }) => {
     const max = Math.max(...data, 1);
@@ -146,50 +269,392 @@ const MiniBars = ({ data = [], isDark, height = 34, barWidth = 8 }) => {
     );
 };
 
-const DualMiniBars = ({ seriesA = [], seriesB = [], isDark }) => {
-    const max = Math.max(...seriesA, ...seriesB, 1);
+const StatusLegend = ({ segments, total, hasData, isDark }) => (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.analyticsStatusLegend}>
+        {segments.map((seg) => (
+            <View key={`${seg.label}-legend`} style={styles.analyticsStatusLegendItem}>
+                <View style={[styles.analyticsStatusDot, { backgroundColor: seg.color, opacity: hasData ? 1 : 0.5 }]} />
+                <Text style={[styles.analyticsStatusLegendText, { color: isDark ? '#cbd5e1' : '#0f172a' }]} numberOfLines={1}>
+                    {seg.label}
+                </Text>
+                <View style={styles.analyticsStatusLegendMeta}>
+                    <Text style={[styles.analyticsStatusLegendCount, { color: isDark ? '#e2e8f0' : '#0f172a' }]}>
+                        {formatNumber(seg.value)}
+                    </Text>
+                    <Text style={[styles.analyticsStatusLegendValue, { color: isDark ? '#94a3b8' : '#64748b' }]}>
+                        {hasData ? Math.round((seg.value / total) * 100) : 0}%
+                    </Text>
+                </View>
+            </View>
+        ))}
+    </ScrollView>
+);
+
+const polarToCartesian = (centerX, centerY, radius, angleInDegrees) => {
+    const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
+    return {
+        x: centerX + radius * Math.cos(angleInRadians),
+        y: centerY + radius * Math.sin(angleInRadians),
+    };
+};
+
+const describeArc = (x, y, radius, startAngle, endAngle) => {
+    const start = polarToCartesian(x, y, radius, endAngle);
+    const end = polarToCartesian(x, y, radius, startAngle);
+    const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
+    return [
+        'M', start.x, start.y,
+        'A', radius, radius, 0, largeArcFlag, 0, end.x, end.y,
+        'L', x, y,
+        'Z',
+    ].join(' ');
+};
+
+const StatusPie = ({ segments = [], isDark, size = 140 }) => {
+    const safeSegments = segments.map(seg => ({
+        ...seg,
+        value: Number.isFinite(seg.value) ? Math.max(0, seg.value) : 0,
+    }));
+    const total = safeSegments.reduce((sum, seg) => sum + seg.value, 0);
+    const hasData = total > 0;
+    const radius = size / 2;
+    const innerRadius = radius * 0.62;
+    let currentAngle = 0;
+
     return (
-        <View style={styles.analyticsDualBars}>
-            {seriesA.map((value, idx) => {
-                const secondary = seriesB[idx] || 0;
-                const heightA = 4 + Math.round((value / max) * 28);
-                const heightB = 4 + Math.round((secondary / max) * 28);
-                return (
-                    <View key={`dual-${idx}`} style={styles.analyticsDualBarTrack}>
-                        <View style={[styles.analyticsDualBarPrimary, { height: heightA, backgroundColor: isDark ? '#3b82f6' : '#2563eb' }]} />
-                        <View style={[styles.analyticsDualBarSecondary, { height: heightB, backgroundColor: isDark ? '#22c55e' : '#16a34a' }]} />
-                    </View>
-                );
-            })}
+        <View style={styles.analyticsPieWrap}>
+            <Svg width={size} height={size}>
+                <G>
+                    {hasData ? safeSegments.map(seg => {
+                        if (!seg.value) return null;
+                        const angle = (seg.value / total) * 360;
+                        const path = describeArc(radius, radius, radius, currentAngle, currentAngle + angle);
+                        currentAngle += angle;
+                        return <Path key={seg.label} d={path} fill={seg.color} />;
+                    }) : (
+                        <Circle cx={radius} cy={radius} r={radius} fill={isDark ? 'rgba(148,163,184,0.2)' : '#e2e8f0'} />
+                    )}
+                    <Circle cx={radius} cy={radius} r={innerRadius} fill={isDark ? '#1e293b' : '#f8fafc'} />
+                </G>
+            </Svg>
+            <StatusLegend segments={safeSegments} total={total || 1} hasData={hasData} isDark={isDark} />
         </View>
     );
 };
 
 const StatusStrip = ({ segments = [], isDark }) => {
-    const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
+    const safeSegments = segments.map(seg => ({
+        ...seg,
+        value: Number.isFinite(seg.value) ? Math.max(0, seg.value) : 0,
+    }));
+    const total = safeSegments.reduce((sum, seg) => sum + seg.value, 0);
+    const hasData = total > 0;
     return (
         <View>
-            <View style={styles.analyticsStatusStrip}>
-                {segments.map((seg) => (
-                    <View
-                        key={seg.label}
-                        style={[
-                            styles.analyticsStatusSegment,
-                            { flex: Math.max(seg.value, 1), backgroundColor: seg.color },
-                        ]}
-                    />
-                ))}
+            <View style={[styles.analyticsStatusStrip, !hasData && styles.analyticsStatusStripEmpty]}>
+                {hasData ? (
+                    safeSegments.map((seg) => (
+                        <View
+                            key={seg.label}
+                            style={[
+                                styles.analyticsStatusSegment,
+                                { flex: seg.value, backgroundColor: seg.color },
+                            ]}
+                        />
+                    ))
+                ) : (
+                    <View style={styles.analyticsStatusStripEmptyFill} />
+                )}
             </View>
-            <View style={styles.analyticsStatusLegend}>
-                {segments.map((seg) => (
-                    <View key={`${seg.label}-legend`} style={styles.analyticsStatusLegendItem}>
-                        <View style={[styles.analyticsStatusDot, { backgroundColor: seg.color }]} />
-                        <Text style={[styles.analyticsStatusLegendText, { color: isDark ? '#cbd5e1' : '#0f172a' }]}>{seg.label}</Text>
-                        <Text style={[styles.analyticsStatusLegendValue, { color: isDark ? '#94a3b8' : '#64748b' }]}>
-                            {Math.round((seg.value / total) * 100)}%
-                        </Text>
+            <StatusLegend segments={safeSegments} total={total || 1} hasData={hasData} isDark={isDark} />
+        </View>
+    );
+};
+
+const BoxPlotChart = ({
+    buckets = [],
+    width = 0,
+    height = 200,
+    isDark,
+    p90 = 0,
+    yLabel,
+    yTicks = [],
+    yHighlights,
+    onBucketPress,
+    onBucketHover,
+    onBucketMove,
+    onBucketLeave,
+}) => {
+    if (!width || !buckets.length) {
+        return <Text style={styles.analyticsTrendEmptyText}>No data</Text>;
+    }
+
+    const yAxisWidth = 60;
+    const labelPad = yAxisWidth;
+    const padding = { top: 14, bottom: 26, left: 48, right: 12 };
+    const plotHeight = height - padding.top - padding.bottom;
+    const bucketCount = buckets.length;
+    const plotWidth = Math.max(0, width - labelPad);
+    const bucketWidth = (plotWidth - padding.left - padding.right) / bucketCount;
+    const maxValue = Math.max(
+        p90 || 0,
+        ...buckets.map(b => (b.stats?.n ? (b.stats.p95 || b.stats.max || 0) : 0)),
+        1
+    );
+
+    const yPos = (value) => padding.top + (1 - Math.min(value / maxValue, 1)) * plotHeight;
+    const niceStep = (range) => {
+        if (range <= 0) return 1;
+        const rough = range / 4;
+        const magnitude = Math.pow(10, Math.floor(Math.log10(rough)));
+        const residual = rough / magnitude;
+        if (residual >= 5) return 5 * magnitude;
+        if (residual >= 2) return 2 * magnitude;
+        return magnitude;
+    };
+    const buildNiceTicks = (max) => {
+        const step = niceStep(max);
+        const ticks = [];
+        const roundedMax = Math.ceil(max / step) * step;
+        for (let val = 0; val <= roundedMax + step; val += step) {
+            ticks.push(Math.round(val));
+        }
+        return ticks;
+    };
+
+    const highlightValues = [
+        yHighlights?.max,
+        yHighlights?.mean,
+        yHighlights?.p75,
+        yHighlights?.p50,
+        yHighlights?.p25,
+        yHighlights?.min,
+    ].filter((val) => Number.isFinite(val));
+    const baseTicks = buildNiceTicks(maxValue);
+    const mergedTicks = Array.from(new Set([...baseTicks, ...highlightValues].map(val => Math.max(0, Math.round(val)))));
+    mergedTicks.sort((a, b) => b - a);
+
+    const mustValues = new Set(
+        [yHighlights?.max, yHighlights?.mean]
+            .filter(val => Number.isFinite(val))
+            .map(val => Math.max(0, Math.round(val)))
+    );
+    const tickPositions = [];
+    mergedTicks.forEach((value) => {
+        const y = yPos(value);
+        const last = tickPositions[tickPositions.length - 1];
+        if (mustValues.has(value) || !last || Math.abs(last.y - y) > 14) {
+            tickPositions.push({ value, y, isMust: mustValues.has(value) });
+        }
+    });
+    const sortedByY = [...tickPositions].sort((a, b) => a.y - b.y);
+    for (let i = 1; i < sortedByY.length; i += 1) {
+        if (sortedByY[i].y - sortedByY[i - 1].y < 12) {
+            sortedByY[i].labelY = sortedByY[i - 1].y + 12;
+        } else {
+            sortedByY[i].labelY = sortedByY[i].y;
+        }
+    }
+    if (sortedByY.length) {
+        sortedByY[0].labelY = sortedByY[0].y;
+    }
+    const tickLabels = sortedByY.map((tick) => ({
+        ...tick,
+        labelY: Number.isFinite(tick.labelY) ? tick.labelY : tick.y,
+    }));
+
+    const medianPoints = buckets.map((b, idx) => {
+        if (!b.stats?.n) return null;
+        return {
+            x: padding.left + bucketWidth * idx + bucketWidth / 2,
+            y: yPos(b.stats.p50),
+        };
+    }).filter(Boolean);
+
+    const medianPath = medianPoints.length
+        ? medianPoints.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
+        : null;
+
+    const hasData = buckets.some(b => b.stats?.n);
+    const labelStep = bucketCount > 30 ? 5 : bucketCount > 24 ? 4 : bucketCount > 18 ? 3 : bucketCount > 12 ? 2 : 1;
+    const rotateLabels = bucketCount > 10;
+    const hideLabels = bucketWidth < 16;
+
+    return (
+        <View style={{ width, height: height + 56 }}>
+            <View style={styles.analyticsBoxplotRow}>
+                <View style={styles.analyticsBoxplotYAxis}>
+                    <Text
+                        style={[
+                            styles.analyticsBoxplotYAxisText,
+                            !isDark && styles.analyticsBoxplotYAxisTextLight,
+                        ]}
+                        numberOfLines={2}
+                    >
+                        {yLabel}
+                    </Text>
+                </View>
+                <View style={{ width: plotWidth }}>
+                    <View style={styles.analyticsBoxplotChart}>
+                        <Svg width={plotWidth} height={height}>
+                            <Rect
+                                x={0}
+                                y={0}
+                                width={plotWidth}
+                                height={height}
+                                fill={isDark ? '#0f172a' : '#f8fafc'}
+                            />
+
+                            <Line
+                                x1={padding.left - 2}
+                                x2={padding.left - 2}
+                                y1={padding.top}
+                                y2={padding.top + plotHeight}
+                                stroke={isDark ? 'rgba(148,163,184,0.4)' : '#cbd5e1'}
+                                strokeWidth="1"
+                            />
+
+                            {tickLabels.map((tick) => (
+                                <G key={`tick-${tick.value}`}>
+                                    <Line
+                                        x1={padding.left}
+                                        x2={plotWidth - padding.right}
+                                        y1={tick.y}
+                                        y2={tick.y}
+                                        stroke={isDark ? 'rgba(148,163,184,0.18)' : '#e2e8f0'}
+                                        strokeWidth="1"
+                                    />
+                                    <Line
+                                        x1={padding.left - 8}
+                                        x2={padding.left - 2}
+                                        y1={tick.y}
+                                        y2={tick.y}
+                                        stroke={isDark ? '#94a3b8' : '#64748b'}
+                                        strokeWidth="1"
+                                    />
+                                    <SvgText
+                                        x={padding.left - 10}
+                                        y={tick.labelY + 4}
+                                        fontSize={11}
+                                        fill={isDark ? '#94a3b8' : '#64748b'}
+                                        textAnchor="end"
+                                        fontWeight={tick.isMust ? '700' : '500'}
+                                    >
+                                        {formatMoney(tick.value)}
+                                    </SvgText>
+                                </G>
+                            ))}
+
+                            {p90 > 0 && hasData && (
+                                <Rect
+                                    x={padding.left}
+                                    y={yPos(p90)}
+                                    width={plotWidth - padding.left - padding.right}
+                                    height={padding.top + plotHeight - yPos(p90)}
+                                    fill={isDark ? 'rgba(249, 115, 22, 0.1)' : 'rgba(234, 88, 12, 0.08)'}
+                                />
+                            )}
+
+                            {medianPath ? (
+                                <Path
+                                    d={medianPath}
+                                    stroke={isDark ? '#38bdf8' : '#2563eb'}
+                                    strokeWidth="2.5"
+                                    fill="none"
+                                />
+                            ) : null}
+
+                            {buckets.map((bucket, idx) => {
+                                const stats = bucket.stats;
+                                const xCenter = padding.left + bucketWidth * idx + bucketWidth / 2;
+                                const boxWidth = Math.min(22, Math.max(6, bucketWidth * 0.4));
+                                if (!stats?.n) return null;
+
+                                const boxTop = yPos(stats.p75);
+                                const boxBottom = yPos(stats.p25);
+                                const medianY = yPos(stats.p50);
+                                const whiskerLow = yPos(stats.p5);
+                                const whiskerHigh = yPos(stats.p95);
+
+                                const showWhiskers = !bucket.smallSample;
+
+                                return (
+                                    <G key={bucket.key}>
+                                        {showWhiskers && (
+                                            <>
+                                                <Path
+                                                    d={`M ${xCenter} ${whiskerLow} L ${xCenter} ${whiskerHigh}`}
+                                                    stroke={isDark ? '#94a3b8' : '#64748b'}
+                                                    strokeWidth="1"
+                                                />
+                                                <Path
+                                                    d={`M ${xCenter - boxWidth / 4} ${whiskerLow} L ${xCenter + boxWidth / 4} ${whiskerLow}`}
+                                                    stroke={isDark ? '#94a3b8' : '#64748b'}
+                                                    strokeWidth="1"
+                                                />
+                                                <Path
+                                                    d={`M ${xCenter - boxWidth / 4} ${whiskerHigh} L ${xCenter + boxWidth / 4} ${whiskerHigh}`}
+                                                    stroke={isDark ? '#94a3b8' : '#64748b'}
+                                                    strokeWidth="1"
+                                                />
+                                            </>
+                                        )}
+                                        <Path
+                                            d={`M ${xCenter - boxWidth / 2} ${boxTop} L ${xCenter + boxWidth / 2} ${boxTop} L ${xCenter + boxWidth / 2} ${boxBottom} L ${xCenter - boxWidth / 2} ${boxBottom} Z`}
+                                            fill={isDark ? 'rgba(59,130,246,0.22)' : 'rgba(37,99,235,0.12)'}
+                                            stroke={isDark ? '#60a5fa' : '#2563eb'}
+                                            strokeWidth="1"
+                                        />
+                                        <Path
+                                            d={`M ${xCenter - boxWidth / 2} ${medianY} L ${xCenter + boxWidth / 2} ${medianY}`}
+                                            stroke={isDark ? '#38bdf8' : '#2563eb'}
+                                            strokeWidth="2.5"
+                                        />
+                                    </G>
+                                );
+                            })}
+                        </Svg>
+                        <View style={styles.analyticsBoxplotHitRow}>
+                            {buckets.map((bucket, idx) => (
+                                <TouchableOpacity
+                                    key={`${bucket.key}-hit`}
+                                    style={[styles.analyticsBoxplotHit, { width: bucketWidth }]}
+                                    activeOpacity={0.9}
+                                    onPress={(event) => onBucketPress?.(bucket, event)}
+                                    onMouseEnter={Platform.OS === 'web' ? (event) => onBucketHover?.(bucket, event) : undefined}
+                                    onMouseMove={Platform.OS === 'web' ? onBucketMove : undefined}
+                                    onMouseLeave={Platform.OS === 'web' ? onBucketLeave : undefined}
+                                />
+                            ))}
+                        </View>
                     </View>
-                ))}
+
+                    <View style={[styles.analyticsBoxplotLabels, { paddingLeft: padding.left, paddingRight: padding.right }]}>
+                        {buckets.map((bucket, idx) => {
+                            const showLabel = !hideLabels && (idx % labelStep === 0 || idx === bucketCount - 1);
+                            const showWarning = showLabel && bucket.smallSample && bucketWidth > 22;
+                            return (
+                                <View key={`${bucket.key}-label`} style={[styles.analyticsBoxplotLabel, { width: bucketWidth }]}>
+                                    {showLabel ? (
+                                        <Text
+                                            style={[
+                                                styles.analyticsBoxplotLabelText,
+                                                !isDark && styles.textSecondary,
+                                                rotateLabels && styles.analyticsBoxplotLabelTextRotated,
+                                            ]}
+                                            numberOfLines={1}
+                                        >
+                                            {bucket.label}
+                                        </Text>
+                                    ) : null}
+                                    {showWarning ? (
+                                        <Ionicons name="warning" size={10} color={isDark ? '#f59e0b' : '#d97706'} />
+                                    ) : null}
+                                </View>
+                            );
+                        })}
+                    </View>
+                </View>
             </View>
         </View>
     );
@@ -213,23 +678,30 @@ const FunnelBars = ({ steps = [], isDark }) => {
     );
 };
 
-const LabeledBarChart = ({ title, series, labels, formatter, isDark, color = '#3b82f6', subtitle }) => {
+const LabeledBarChart = ({ title, series, labels, formatter, isDark, color = '#3b82f6', subtitle, barHeight = 70, cardless = false }) => {
     const max = Math.max(...series, 1);
+    const trackHeight = barHeight + 8;
+    const barsHeight = trackHeight + 22;
+    const trackWidth = series.length <= 4 ? '45%' : series.length <= 6 ? '55%' : series.length <= 9 ? '65%' : '75%';
     return (
-        <View style={[styles.analyticsChartCard, !isDark && styles.cardLight]}>
+        <View style={[cardless ? styles.analyticsChartBare : styles.analyticsChartCard, !cardless && !isDark && styles.cardLight]}>
             <View style={styles.analyticsChartHeader}>
                 <Text style={[styles.analyticsChartTitle, !isDark && styles.textDark]}>{title}</Text>
                 {subtitle ? <Text style={[styles.analyticsChartSubtitle, !isDark && styles.textSecondary]}>{subtitle}</Text> : null}
             </View>
-            <View style={styles.analyticsChartBars}>
+            <View style={[styles.analyticsChartBars, { height: barsHeight }]}>
                 {series.map((value, idx) => {
-                    const height = 8 + Math.round((value / max) * 70);
+                    const height = 8 + Math.round((value / max) * barHeight);
                     return (
                         <View key={`chart-${idx}`} style={styles.analyticsChartColumn}>
                             <Text style={[styles.analyticsChartValue, !isDark && styles.textDark]} numberOfLines={1}>
                                 {formatter(value)}
                             </Text>
-                            <View style={styles.analyticsChartTrack}>
+                            <View style={[
+                                styles.analyticsChartTrack,
+                                { height: trackHeight, width: trackWidth },
+                                !isDark && styles.analyticsChartTrackLight,
+                            ]}>
                                 <View style={[styles.analyticsChartFill, { height, backgroundColor: color }]} />
                             </View>
                             <Text style={[styles.analyticsChartLabel, !isDark && styles.textSecondary]} numberOfLines={1}>
@@ -296,6 +768,15 @@ export default function AdminDashboard({ navigation }) {
     const { translations, language, cycleLanguage, t } = useLocalization();
     const TRANSLATIONS = translations[language] || translations['en'] || {};
     const { logout } = useAuth();
+    const analyticsLocale = useMemo(() => (language === 'ru' ? 'ru-RU' : language === 'kg' ? 'ky-KG' : 'en-US'), [language]);
+    const getLocalizedName = useCallback((item, fallback = '') => {
+        if (!item) return fallback;
+        const primary = language === 'ru' ? item.name_ru : language === 'kg' ? item.name_kg : item.name_en;
+        const secondary = language === 'kg'
+            ? (item.name_ru || item.name_en)
+            : (item.name_en || item.name_ru || item.name_kg);
+        return primary || secondary || item.label || item.code || item.id || fallback;
+    }, [language]);
 
     // UI State
     const [activeTab, setActiveTab] = useState('analytics');
@@ -304,20 +785,34 @@ export default function AdminDashboard({ navigation }) {
     const [refreshing, setRefreshing] = useState(false);
     const [stats, setStats] = useState({});
     const [commissionStats, setCommissionStats] = useState({});
+    const [balanceTopUpStats, setBalanceTopUpStats] = useState({ totalTopUps: 0, avgTopUp: 0, count: 0 });
     const [analyticsRange, setAnalyticsRange] = useState('30d');
     const [analyticsGranularity, setAnalyticsGranularity] = useState('day');
-    const [analyticsSection, setAnalyticsSection] = useState('overview');
+    const [analyticsSection, setAnalyticsSection] = useState('operations');
     const [analyticsFilters, setAnalyticsFilters] = useState({ urgency: 'all', service: 'all', area: 'all' });
     const [analyticsCustomRange, setAnalyticsCustomRange] = useState({ start: null, end: null });
+    const [analyticsDispatcherId, setAnalyticsDispatcherId] = useState('all');
+    const [analyticsMasterId, setAnalyticsMasterId] = useState('all');
     const [showAnalyticsStartPicker, setShowAnalyticsStartPicker] = useState(false);
     const [showAnalyticsEndPicker, setShowAnalyticsEndPicker] = useState(false);
     const [analyticsDetail, setAnalyticsDetail] = useState({ type: null });
     const [analyticsUpdatedAt, setAnalyticsUpdatedAt] = useState(null);
+    const [analyticsTooltip, setAnalyticsTooltip] = useState(null);
+    const analyticsTooltipTimer = useRef(null);
+    const [analyticsTrendTooltip, setAnalyticsTrendTooltip] = useState(null);
+    const analyticsTrendTooltipTimer = useRef(null);
+    const [priceDistRange, setPriceDistRange] = useState('30d');
+    const [priceDistGrouping, setPriceDistGrouping] = useState('week');
+    const [priceDistScope, setPriceDistScope] = useState('completed');
+    const [priceDistChartWidth, setPriceDistChartWidth] = useState(0);
+    const [priceDistTooltip, setPriceDistTooltip] = useState(null);
+    const [priceDistGroupingNotice, setPriceDistGroupingNotice] = useState(null);
 
     // Data State
     const [orders, setOrders] = useState([]);
     const [masters, setMasters] = useState([]);
     const [dispatchers, setDispatchers] = useState([]);
+    const [adminUsers, setAdminUsers] = useState([]);
     const [settings, setSettings] = useState({});
     const [tempSettings, setTempSettings] = useState({});
     const [user, setUser] = useState(null);
@@ -354,13 +849,18 @@ export default function AdminDashboard({ navigation }) {
     const [serviceTypes, setServiceTypes] = useState([]);
     const [districts, setDistricts] = useState([]);
     const [managedDistricts, setManagedDistricts] = useState([]);
+    const [cancellationReasons, setCancellationReasons] = useState([]);
     const [serviceTypeModal, setServiceTypeModal] = useState({ visible: false, type: null });
     const [tempServiceType, setTempServiceType] = useState({});
     const [districtModal, setDistrictModal] = useState({ visible: false, district: null });
     const [tempDistrict, setTempDistrict] = useState({ code: '', name_en: '', name_ru: '', name_kg: '', region: '', sort_order: '', is_active: true });
+    const [cancellationReasonModal, setCancellationReasonModal] = useState({ visible: false, reason: null });
+    const [tempCancellationReason, setTempCancellationReason] = useState({ code: '', name_en: '', name_ru: '', applicable_to: 'both', sort_order: '', is_active: true });
     const [districtSearch, setDistrictSearch] = useState('');
+    const [cancellationSearch, setCancellationSearch] = useState('');
     const [serviceTypesCollapsed, setServiceTypesCollapsed] = useState(false);
     const [districtsCollapsed, setDistrictsCollapsed] = useState(false);
+    const [cancellationReasonsCollapsed, setCancellationReasonsCollapsed] = useState(false);
 
     const openDistrictPicker = () => {
         setPickerModal({
@@ -443,6 +943,70 @@ export default function AdminDashboard({ navigation }) {
         ];
     }, [orders, language]);
 
+    const matchesDispatcher = useCallback((order, dispatcherId) => {
+        if (!order) return false;
+        const createdId = order.dispatcher_id ? String(order.dispatcher_id) : null;
+        const assignedId = order.assigned_dispatcher_id ? String(order.assigned_dispatcher_id) : createdId;
+        if (dispatcherId === 'all') return !!(createdId || assignedId);
+        const target = String(dispatcherId);
+        return createdId === target || assignedId === target;
+    }, []);
+
+    const matchesMaster = useCallback((order, masterId) => {
+        if (!order) return false;
+        const assignedId = order.master?.id || order.master_id;
+        if (!assignedId) return false;
+        if (masterId === 'all') return true;
+        return String(assignedId) === String(masterId);
+    }, []);
+
+    const analyticsDispatcherOptions = useMemo(() => {
+        const roleLabel = (role) => {
+            if (!role) return '';
+            if (role === 'admin') return TRANSLATIONS.roleAdmin || 'Admin';
+            if (role === 'dispatcher') return TRANSLATIONS.roleDispatcher || 'Dispatcher';
+            return role;
+        };
+
+        const map = new Map();
+        const addOption = (id, name, role) => {
+            if (!id) return;
+            const key = String(id);
+            if (map.has(key)) return;
+            const roleName = roleLabel(role);
+            const displayName = name || (roleName ? `${roleName} ${key.slice(0, 6)}` : `User ${key.slice(0, 6)}`);
+            const label = roleName ? `${displayName} (${roleName})` : displayName;
+            map.set(key, { id: key, label });
+        };
+
+        (dispatchers || []).forEach(d => addOption(d.id, d.full_name || d.name || d.phone || d.email, d.role || 'dispatcher'));
+        (adminUsers || []).forEach(a => addOption(a.id, a.full_name || a.name || a.phone || a.email, a.role || 'admin'));
+        (orders || []).forEach(o => {
+            addOption(o.dispatcher_id, o.dispatcher?.full_name, 'dispatcher');
+            addOption(o.assigned_dispatcher_id, o.assigned_dispatcher?.full_name, 'dispatcher');
+        });
+
+        const sorted = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+        return [{ id: 'all', label: TRANSLATIONS.analyticsAllDispatchers || 'All dispatchers' }, ...sorted];
+    }, [dispatchers, adminUsers, orders, TRANSLATIONS]);
+
+    const analyticsMasterOptions = useMemo(() => {
+        const map = new Map();
+        const addOption = (id, name) => {
+            if (!id) return;
+            const key = String(id);
+            if (map.has(key)) return;
+            const displayName = name || `Master ${key.slice(0, 6)}`;
+            map.set(key, { id: key, label: displayName });
+        };
+
+        (masters || []).forEach(m => addOption(m.id, m.full_name || m.name || m.phone || m.email));
+        (orders || []).forEach(o => addOption(o.master?.id || o.master_id, o.master?.full_name || o.master_name));
+
+        const sorted = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+        return [{ id: 'all', label: TRANSLATIONS.analyticsAllMasters || 'All masters' }, ...sorted];
+    }, [masters, orders, TRANSLATIONS]);
+
     const analyticsRangeWindow = useMemo(() => {
         if (analyticsRange === 'all') return null;
         const now = new Date();
@@ -462,12 +1026,18 @@ export default function AdminDashboard({ navigation }) {
         return { start, end: now };
     }, [analyticsRange, analyticsCustomRange]);
 
-    const analyticsOrders = useMemo(() => {
+    const analyticsFilteredOrders = useMemo(() => {
         return orders.filter(order => {
             if (!order) return false;
             if (analyticsFilters.urgency !== 'all' && order.urgency !== analyticsFilters.urgency) return false;
             if (analyticsFilters.service !== 'all' && order.service_type !== analyticsFilters.service) return false;
             if (analyticsFilters.area !== 'all' && order.area !== analyticsFilters.area) return false;
+            return true;
+        });
+    }, [orders, analyticsFilters]);
+
+    const analyticsOrders = useMemo(() => {
+        return analyticsFilteredOrders.filter(order => {
             if (!analyticsRangeWindow) return true;
             const stamp = order.completed_at || order.confirmed_at || order.updated_at || order.created_at;
             if (!stamp) return true;
@@ -475,7 +1045,15 @@ export default function AdminDashboard({ navigation }) {
             if (Number.isNaN(ts.getTime())) return true;
             return ts >= analyticsRangeWindow.start && ts <= analyticsRangeWindow.end;
         });
-    }, [orders, analyticsFilters, analyticsRangeWindow]);
+    }, [analyticsFilteredOrders, analyticsRangeWindow]);
+
+    const dispatcherFilteredOrders = useMemo(() => {
+        return analyticsOrders.filter(order => matchesDispatcher(order, analyticsDispatcherId));
+    }, [analyticsOrders, analyticsDispatcherId, matchesDispatcher]);
+
+    const masterFilteredOrders = useMemo(() => {
+        return analyticsOrders.filter(order => matchesMaster(order, analyticsMasterId));
+    }, [analyticsOrders, analyticsMasterId, matchesMaster]);
 
     const analyticsStats = useMemo(() => {
         const totalOrders = analyticsOrders.length;
@@ -514,7 +1092,59 @@ export default function AdminDashboard({ navigation }) {
         };
 
         const totalBalances = masters.reduce((sum, m) => sum + (m.prepaid_balance || 0), 0);
+        const avgBalance = masters.length ? totalBalances / masters.length : 0;
         const lowBalanceCount = masters.filter(m => (m.prepaid_balance || 0) < 500).length;
+        const commissionCollected = Number(commissionStats.totalCollected || 0);
+        const commissionOutstanding = Number(commissionStats.totalOutstanding || 0);
+        const avgCommissionPerOrder = completedOrders ? commissionCollected / completedOrders : 0;
+        const commissionRate = Number(settings?.commission_rate) || 0;
+
+        const avgOrderValueForLost = avgTicket || 0;
+        let lostEarningsTotal = 0;
+        let lostEarningsCount = 0;
+
+        analyticsOrders.forEach(order => {
+            const status = normalizeStatus(order.status);
+            if (!CANCELED_STATUSES.has(status)) return;
+            if (status === 'canceled_by_admin') return;
+
+            if (status === 'canceled_by_master') {
+                const reason = String(order.cancellation_reason || '').toLowerCase();
+                if (reason.includes('reopen') || reason.includes('dispatcher') || reason.includes('admin')) {
+                    return;
+                }
+                lostEarningsTotal += avgOrderValueForLost;
+                lostEarningsCount += 1;
+                return;
+            }
+
+            const price = Number(order.final_price ?? order.initial_price ?? order.callout_fee ?? 0);
+            if (Number.isFinite(price) && price > 0) {
+                lostEarningsTotal += price;
+            } else if (avgOrderValueForLost) {
+                lostEarningsTotal += avgOrderValueForLost;
+            }
+            lostEarningsCount += 1;
+        });
+        const lostEarningsAvg = lostEarningsCount ? lostEarningsTotal / lostEarningsCount : 0;
+
+        const dailyCommissionMap = {};
+        analyticsOrders.forEach(order => {
+            if (!COMPLETED_STATUSES.has(normalizeStatus(order.status))) return;
+            const stamp = order.completed_at || order.confirmed_at || order.updated_at || order.created_at;
+            if (!stamp) return;
+            const ts = new Date(stamp);
+            if (Number.isNaN(ts.getTime())) return;
+            const key = ts.toISOString().slice(0, 10);
+            const price = Number(order.final_price ?? order.initial_price ?? order.callout_fee ?? 0);
+            if (!Number.isFinite(price)) return;
+            dailyCommissionMap[key] = (dailyCommissionMap[key] || 0) + price * commissionRate;
+        });
+        const dailyCommissionValues = Object.values(dailyCommissionMap);
+        const dailyCommissionStats = calcStats(dailyCommissionValues);
+        const commissionVolatilityRatio = dailyCommissionStats.p50
+            ? dailyCommissionStats.std / dailyCommissionStats.p50
+            : 0;
 
         return {
             totalOrders,
@@ -540,13 +1170,22 @@ export default function AdminDashboard({ navigation }) {
             reopenRate,
             activeJobs,
             availablePool,
-            commissionCollected: Number(commissionStats.totalCollected || 0),
-            commissionOutstanding: Number(commissionStats.totalOutstanding || 0),
+            commissionCollected,
+            commissionOutstanding,
+            avgCommissionPerOrder,
+            lostEarningsTotal,
+            lostEarningsCount,
+            lostEarningsAvg,
             totalBalances,
+            avgBalance,
             lowBalanceCount,
+            commissionVolatilityRatio,
+            topUpTotal: Number(balanceTopUpStats.totalTopUps || 0),
+            topUpAvg: Number(balanceTopUpStats.avgTopUp || 0),
+            topUpCount: Number(balanceTopUpStats.count || 0),
             statusBreakdown,
         };
-    }, [analyticsOrders, commissionStats, masters]);
+    }, [analyticsOrders, commissionStats, masters, balanceTopUpStats, settings]);
 
     const analyticsLists = useMemo(() => {
         const buildTopList = (entries) => {
@@ -854,10 +1493,485 @@ export default function AdminDashboard({ navigation }) {
         };
     }, [analyticsOrders, TRANSLATIONS]);
 
+    const analyticsDispatchers = useMemo(() => {
+        const map = {};
+        analyticsOrders.forEach(order => {
+            const handlerId = order.assigned_dispatcher_id || order.dispatcher_id;
+            if (!handlerId) return;
+            const key = String(handlerId);
+            if (!map[key]) {
+                map[key] = {
+                    id: handlerId,
+                    name: order.assigned_dispatcher?.full_name || order.dispatcher?.full_name || `Dispatcher ${String(handlerId).slice(0, 6)}`,
+                    orders: 0,
+                    revenue: 0,
+                };
+            }
+            const entry = map[key];
+            entry.orders += 1;
+            if (COMPLETED_STATUSES.has(normalizeStatus(order.status))) {
+                const price = Number(order.final_price ?? order.initial_price ?? 0);
+                if (Number.isFinite(price)) entry.revenue += price;
+            }
+        });
+        const list = Object.values(map);
+        const byOrders = [...list].sort((a, b) => b.orders - a.orders);
+        const byRevenue = [...list].sort((a, b) => b.revenue - a.revenue);
+
+        const buildList = (items, valueKey, formatter) => {
+            const max = Math.max(...items.map(item => item[valueKey] || 0), 1);
+            return items.slice(0, 5).map(item => ({
+                label: item.name,
+                value: formatter(item),
+                ratio: (item[valueKey] || 0) / max,
+            }));
+        };
+
+        return {
+            topByOrders: buildList(byOrders, 'orders', item => `${formatNumber(item.orders)} ${TRANSLATIONS.analyticsOrders || TRANSLATIONS.orders || 'orders'}`),
+            topByRevenue: buildList(byRevenue, 'revenue', item => `${formatMoney(item.revenue)} ${TRANSLATIONS.currency || 'som'}`),
+        };
+    }, [analyticsOrders, TRANSLATIONS]);
+
+    const dispatcherStatusBreakdown = useMemo(() => {
+        const counts = { open: 0, active: 0, completed: 0, canceled: 0 };
+        dispatcherFilteredOrders.forEach(order => {
+            const status = normalizeStatus(order.status);
+            if (CANCELED_STATUSES.has(status)) {
+                counts.canceled += 1;
+                return;
+            }
+            if (COMPLETED_STATUSES.has(status)) {
+                counts.completed += 1;
+                return;
+            }
+            if (['claimed', 'started', 'wip'].includes(status)) {
+                counts.active += 1;
+                return;
+            }
+            counts.open += 1;
+        });
+        return counts;
+    }, [dispatcherFilteredOrders]);
+
+    const masterStatusBreakdown = useMemo(() => {
+        const counts = { open: 0, active: 0, completed: 0, canceled: 0 };
+        masterFilteredOrders.forEach(order => {
+            const status = normalizeStatus(order.status);
+            if (CANCELED_STATUSES.has(status)) {
+                counts.canceled += 1;
+                return;
+            }
+            if (COMPLETED_STATUSES.has(status)) {
+                counts.completed += 1;
+                return;
+            }
+            if (['claimed', 'started', 'wip'].includes(status)) {
+                counts.active += 1;
+                return;
+            }
+            counts.open += 1;
+        });
+        return counts;
+    }, [masterFilteredOrders]);
+
+    const analyticsDispatcherStats = useMemo(() => {
+        const targetId = analyticsDispatcherId;
+        const commissionRate = Number(settings?.commission_rate) || 0;
+        const stats = {
+            totalOrders: 0,
+            createdOrders: 0,
+            handledOrders: 0,
+            canceledOrders: 0,
+            transferredOrders: 0,
+            totalAmount: 0,
+            commissionCollected: 0,
+        };
+
+        if (!dispatcherFilteredOrders?.length) return stats;
+
+        dispatcherFilteredOrders.forEach(order => {
+            const createdId = order.dispatcher_id ? String(order.dispatcher_id) : null;
+            const assignedId = order.assigned_dispatcher_id ? String(order.assigned_dispatcher_id) : createdId;
+            const target = String(targetId);
+
+            stats.totalOrders += 1;
+
+            if (createdId && (targetId === 'all' || createdId === target)) {
+                stats.createdOrders += 1;
+            }
+
+            if (assignedId && (targetId === 'all' || assignedId === target)) {
+                stats.handledOrders += 1;
+            }
+
+            const normalized = normalizeStatus(order.status);
+            if (CANCELED_STATUSES.has(normalized) && (targetId === 'all' || assignedId === target)) {
+                stats.canceledOrders += 1;
+            }
+
+            const isTransferred = createdId && assignedId && createdId !== assignedId;
+            if (isTransferred && (targetId === 'all' || createdId === target || assignedId === target)) {
+                stats.transferredOrders += 1;
+            }
+
+            if (COMPLETED_STATUSES.has(normalized) && (targetId === 'all' || assignedId === target)) {
+                const price = Number(order.final_price ?? order.initial_price ?? order.callout_fee ?? 0);
+                if (Number.isFinite(price)) {
+                    stats.totalAmount += price;
+                    const commissionAmount = Number(order.commission_amount);
+                    if (Number.isFinite(commissionAmount) && commissionAmount > 0) {
+                        stats.commissionCollected += commissionAmount;
+                    } else {
+                        stats.commissionCollected += price * commissionRate;
+                    }
+                }
+            }
+        });
+
+        return stats;
+    }, [dispatcherFilteredOrders, analyticsDispatcherId, settings]);
+
+    const analyticsMasterStats = useMemo(() => {
+        const stats = {
+            totalOrders: 0,
+            activeJobs: 0,
+            completedOrders: 0,
+            canceledOrders: 0,
+            totalAmount: 0,
+            avgOrderValue: 0,
+        };
+
+        if (!masterFilteredOrders?.length) return stats;
+
+        masterFilteredOrders.forEach(order => {
+            const status = normalizeStatus(order.status);
+            stats.totalOrders += 1;
+            if (CANCELED_STATUSES.has(status)) {
+                stats.canceledOrders += 1;
+            } else if (COMPLETED_STATUSES.has(status)) {
+                stats.completedOrders += 1;
+                const price = Number(order.final_price ?? order.initial_price ?? order.callout_fee ?? 0);
+                if (Number.isFinite(price)) stats.totalAmount += price;
+            } else if (['claimed', 'started', 'wip'].includes(status)) {
+                stats.activeJobs += 1;
+            }
+        });
+
+        stats.avgOrderValue = stats.completedOrders ? stats.totalAmount / stats.completedOrders : 0;
+        return stats;
+    }, [masterFilteredOrders]);
+
+    const getTrendWindow = useCallback((rangeKey) => {
+        const days = rangeKey === 'month' ? 30 : 7;
+        const anchor = analyticsRangeWindow?.end ? new Date(analyticsRangeWindow.end) : new Date();
+        const end = new Date(anchor);
+        end.setHours(23, 59, 59, 999);
+        const start = new Date(end);
+        start.setDate(start.getDate() - (days - 1));
+        start.setHours(0, 0, 0, 0);
+        return { days, start, end };
+    }, [analyticsRangeWindow]);
+
+    const derivedTrendRange = useMemo(() => {
+        if (analyticsRange === 'today' || analyticsRange === '7d') return 'week';
+        if (analyticsRange === 'custom') {
+            const start = analyticsCustomRange?.start;
+            const end = analyticsCustomRange?.end;
+            if (start && end) {
+                const diffDays = Math.max(1, Math.ceil((end - start) / DAY_MS));
+                return diffDays <= 14 ? 'week' : 'month';
+            }
+            return 'month';
+        }
+        return 'month';
+    }, [analyticsRange, analyticsCustomRange]);
+
+    const dispatcherTrendWindow = useMemo(() => getTrendWindow(derivedTrendRange), [getTrendWindow, derivedTrendRange]);
+    const masterTrendWindow = useMemo(() => getTrendWindow(derivedTrendRange), [getTrendWindow, derivedTrendRange]);
+
+    const buildTrendSeries = useCallback((ordersList, startDate, days, dateGetter, valueGetter) => {
+        const series = new Array(days).fill(0);
+        if (!ordersList?.length || !startDate) return series;
+        ordersList.forEach(order => {
+            const stamp = dateGetter ? dateGetter(order) : null;
+            if (!stamp) return;
+            const ts = new Date(stamp);
+            if (Number.isNaN(ts.getTime())) return;
+            const index = Math.floor((ts.getTime() - startDate.getTime()) / DAY_MS);
+            if (index < 0 || index >= days) return;
+            const addValue = valueGetter ? valueGetter(order) : 1;
+            if (!Number.isFinite(addValue)) return;
+            series[index] += addValue;
+        });
+        return series;
+    }, []);
+
+    const getSeriesMeta = useCallback((series = []) => {
+        if (!series.length) return { max: 0, avg: 0, activeDays: 0 };
+        const max = Math.max(...series, 0);
+        const total = series.reduce((sum, val) => sum + (Number.isFinite(val) ? val : 0), 0);
+        const avg = series.length ? total / series.length : 0;
+        const activeDays = series.filter(val => val > 0).length;
+        return { max, avg, activeDays };
+    }, []);
+
+    const dispatcherCreatedOrdersForTrend = useMemo(() => {
+        return dispatcherFilteredOrders.filter(order => {
+            const createdId = order.dispatcher_id ? String(order.dispatcher_id) : null;
+            if (!createdId) return false;
+            if (analyticsDispatcherId === 'all') return true;
+            return createdId === String(analyticsDispatcherId);
+        });
+    }, [dispatcherFilteredOrders, analyticsDispatcherId]);
+
+    const dispatcherHandledOrdersForTrend = useMemo(() => {
+        return dispatcherFilteredOrders.filter(order => {
+            const assignedId = order.assigned_dispatcher_id ? String(order.assigned_dispatcher_id) : (order.dispatcher_id ? String(order.dispatcher_id) : null);
+            if (!assignedId) return false;
+            if (analyticsDispatcherId === 'all') return true;
+            return assignedId === String(analyticsDispatcherId);
+        });
+    }, [dispatcherFilteredOrders, analyticsDispatcherId]);
+
+    const dispatcherCreatedSeries = useMemo(
+        () => buildTrendSeries(dispatcherCreatedOrdersForTrend, dispatcherTrendWindow.start, dispatcherTrendWindow.days, o => o.created_at),
+        [buildTrendSeries, dispatcherCreatedOrdersForTrend, dispatcherTrendWindow]
+    );
+
+    const dispatcherHandledSeries = useMemo(
+        () => buildTrendSeries(dispatcherHandledOrdersForTrend, dispatcherTrendWindow.start, dispatcherTrendWindow.days, o => o.updated_at || o.created_at),
+        [buildTrendSeries, dispatcherHandledOrdersForTrend, dispatcherTrendWindow]
+    );
+
+    const dispatcherCreatedMeta = useMemo(() => getSeriesMeta(dispatcherCreatedSeries), [getSeriesMeta, dispatcherCreatedSeries]);
+    const dispatcherHandledMeta = useMemo(() => getSeriesMeta(dispatcherHandledSeries), [getSeriesMeta, dispatcherHandledSeries]);
+
+    const masterCompletedOrdersForTrend = useMemo(() => {
+        return masterFilteredOrders.filter(order => COMPLETED_STATUSES.has(normalizeStatus(order.status)));
+    }, [masterFilteredOrders]);
+
+    const masterRevenueOrdersForTrend = useMemo(() => {
+        return masterFilteredOrders.filter(order => COMPLETED_STATUSES.has(normalizeStatus(order.status)));
+    }, [masterFilteredOrders]);
+
+    const masterCompletedSeries = useMemo(
+        () => buildTrendSeries(masterCompletedOrdersForTrend, masterTrendWindow.start, masterTrendWindow.days, o => o.completed_at || o.confirmed_at || o.updated_at || o.created_at),
+        [buildTrendSeries, masterCompletedOrdersForTrend, masterTrendWindow]
+    );
+
+    const masterRevenueSeries = useMemo(
+        () => buildTrendSeries(
+            masterRevenueOrdersForTrend,
+            masterTrendWindow.start,
+            masterTrendWindow.days,
+            o => o.completed_at || o.confirmed_at || o.updated_at || o.created_at,
+            o => Number(o.final_price ?? o.initial_price ?? o.callout_fee ?? 0)
+        ),
+        [buildTrendSeries, masterRevenueOrdersForTrend, masterTrendWindow]
+    );
+
+    const masterCompletedMeta = useMemo(() => getSeriesMeta(masterCompletedSeries), [getSeriesMeta, masterCompletedSeries]);
+    const masterRevenueMeta = useMemo(() => getSeriesMeta(masterRevenueSeries), [getSeriesMeta, masterRevenueSeries]);
+
+    const priceDistData = useMemo(() => {
+        const now = new Date();
+        let rangeStart = null;
+        let rangeEnd = new Date(now);
+        rangeEnd.setHours(23, 59, 59, 999);
+
+        if (priceDistRange !== 'all') {
+            if (priceDistRange === '7d') {
+                rangeStart = new Date(now.getTime() - 6 * DAY_MS);
+            } else if (priceDistRange === '30d') {
+                rangeStart = new Date(now.getTime() - 29 * DAY_MS);
+            } else if (priceDistRange === '90d') {
+                rangeStart = new Date(now.getTime() - 89 * DAY_MS);
+            } else if (priceDistRange === 'ytd') {
+                rangeStart = new Date(now.getFullYear(), 0, 1);
+            }
+        }
+
+        if (rangeStart) {
+            rangeStart.setHours(0, 0, 0, 0);
+        }
+
+        const scopeOrders = priceDistScope === 'completed'
+            ? analyticsFilteredOrders.filter(o => COMPLETED_STATUSES.has(normalizeStatus(o.status)))
+            : analyticsFilteredOrders;
+
+        const getOrderStamp = (order) => {
+            if (priceDistScope === 'completed') {
+                return order.completed_at || order.confirmed_at || order.updated_at || order.created_at;
+            }
+            return order.created_at || order.updated_at;
+        };
+
+        const eligibleOrders = scopeOrders.filter(order => {
+            const stamp = getOrderStamp(order);
+            if (!stamp) return false;
+            const ts = new Date(stamp);
+            if (Number.isNaN(ts.getTime())) return false;
+            if (rangeStart && ts < rangeStart) return false;
+            if (ts > rangeEnd) return false;
+            return true;
+        });
+
+        if (priceDistRange === 'all' && eligibleOrders.length > 0) {
+            const stamps = eligibleOrders
+                .map(o => new Date(getOrderStamp(o)))
+                .filter(d => !Number.isNaN(d.getTime()));
+            if (stamps.length) {
+                rangeStart = new Date(Math.min(...stamps.map(d => d.getTime())));
+                rangeStart.setHours(0, 0, 0, 0);
+                rangeEnd = new Date(Math.max(...stamps.map(d => d.getTime())));
+                rangeEnd.setHours(23, 59, 59, 999);
+            }
+        }
+
+        if (!rangeStart) {
+            rangeStart = new Date(now.getTime() - 29 * DAY_MS);
+            rangeStart.setHours(0, 0, 0, 0);
+        }
+
+        const startOfWeek = (date) => {
+            const d = new Date(date);
+            const day = d.getDay();
+            const diff = day === 0 ? -6 : 1 - day;
+            d.setDate(d.getDate() + diff);
+            d.setHours(0, 0, 0, 0);
+            return d;
+        };
+
+        const getBucketStart = (date) => {
+            const d = new Date(date);
+            if (priceDistGrouping === 'day') {
+                d.setHours(0, 0, 0, 0);
+                return d;
+            }
+            if (priceDistGrouping === 'week') {
+                return startOfWeek(d);
+            }
+            return new Date(d.getFullYear(), d.getMonth(), 1);
+        };
+
+        const formatBucketLabel = (date) => {
+            if (priceDistGrouping === 'month') {
+                if (priceDistRange === 'all') {
+                    return date.toLocaleDateString(analyticsLocale, { month: 'short', year: '2-digit' });
+                }
+                return date.toLocaleDateString(analyticsLocale, { month: 'short' });
+            }
+            if (priceDistGrouping === 'day' && priceDistRange === '7d') {
+                return date.toLocaleDateString(analyticsLocale, { day: 'numeric' });
+            }
+            return date.toLocaleDateString(analyticsLocale, { month: 'short', day: 'numeric' });
+        };
+
+        const bucketList = [];
+        let cursor = new Date(getBucketStart(rangeStart));
+        const endCursor = new Date(rangeEnd);
+
+        while (cursor <= endCursor) {
+            const start = new Date(cursor);
+            let end = new Date(start);
+            if (priceDistGrouping === 'day') {
+                end.setDate(end.getDate() + 1);
+            } else if (priceDistGrouping === 'week') {
+                end.setDate(end.getDate() + 7);
+            } else {
+                end = new Date(end.getFullYear(), end.getMonth() + 1, 1);
+            }
+            end.setMilliseconds(end.getMilliseconds() - 1);
+
+            const key = start.toISOString();
+            bucketList.push({
+                key,
+                start,
+                end,
+                label: formatBucketLabel(start),
+                orders: [],
+            });
+
+            cursor = new Date(end);
+            cursor.setDate(cursor.getDate() + 1);
+            cursor.setHours(0, 0, 0, 0);
+        }
+
+        const bucketMap = new Map(bucketList.map(bucket => [bucket.key, bucket]));
+        const allValues = [];
+
+        eligibleOrders.forEach(order => {
+            const stamp = getOrderStamp(order);
+            if (!stamp) return;
+            const ts = new Date(stamp);
+            if (Number.isNaN(ts.getTime())) return;
+            const bucketStart = getBucketStart(ts);
+            const key = bucketStart.toISOString();
+            const bucket = bucketMap.get(key);
+            if (!bucket) return;
+            bucket.orders.push(order);
+        });
+
+        const buckets = bucketList.map(bucket => {
+            const values = bucket.orders
+                .map(order => Number(order.final_price ?? order.initial_price ?? order.callout_fee ?? 0))
+                .filter(val => Number.isFinite(val) && val > 0);
+            values.forEach(val => allValues.push(val));
+            const stats = calcStats(values);
+            return {
+                ...bucket,
+                values,
+                stats,
+                smallSample: stats.n > 0 && stats.n < 5,
+            };
+        });
+
+        const summary = calcStats(allValues);
+        return {
+            buckets,
+            summary,
+            rangeStart,
+            rangeEnd,
+            totalOrders: allValues.length,
+        };
+    }, [analyticsFilteredOrders, priceDistRange, priceDistGrouping, priceDistScope, analyticsLocale]);
+
+    const priceDistGroupingRules = useMemo(() => ({
+        '7d': ['day'],
+        '30d': ['day', 'week'],
+        '90d': ['week'],
+        ytd: ['week', 'month'],
+        all: ['month'],
+    }), []);
+
+    useEffect(() => {
+        const allowed = priceDistGroupingRules[priceDistRange] || ['week'];
+        if (!allowed.includes(priceDistGrouping)) {
+            const next = allowed[0];
+            setPriceDistGrouping(next);
+            setPriceDistGroupingNotice(TRANSLATIONS.analyticsPriceDistributionAutoAdjusted || 'Grouping adjusted to match range.');
+        } else {
+            setPriceDistGroupingNotice(null);
+        }
+    }, [priceDistRange, priceDistGrouping, priceDistGroupingRules, TRANSLATIONS.analyticsPriceDistributionAutoAdjusted]);
+
     useEffect(() => {
         if (activeTab !== 'analytics') return;
         setAnalyticsUpdatedAt(new Date());
     }, [analyticsOrders.length, analyticsRange, analyticsFilters, analyticsGranularity, activeTab]);
+
+    useEffect(() => {
+        if (loading) return;
+        loadCommissionData();
+        loadBalanceTopUpStats();
+    }, [analyticsRangeWindow, loading]);
+
+    useEffect(() => {
+        if (analyticsSection === 'quality') {
+            setAnalyticsSection('overview');
+        }
+    }, [analyticsSection]);
 
     const needsActionOrders = useMemo(() => {
         const now = Date.now();
@@ -974,6 +2088,16 @@ export default function AdminDashboard({ navigation }) {
         }
     }, [districtModal]);
 
+    useEffect(() => {
+        if (cancellationReasonModal.visible) {
+            setTempCancellationReason(
+                cancellationReasonModal.reason
+                    ? { ...cancellationReasonModal.reason }
+                    : { code: '', name_en: '', name_ru: '', applicable_to: 'both', sort_order: 0, is_active: true }
+            );
+        }
+    }, [cancellationReasonModal]);
+
     // --- Ported State ---
     const [detailsOrder, setDetailsOrder] = useState(null);
     const [isEditing, setIsEditing] = useState(false);
@@ -1065,7 +2189,8 @@ export default function AdminDashboard({ navigation }) {
             || showPaymentModal
             || showMasterDetails
             || serviceTypeModal.visible
-            || districtModal.visible;
+            || districtModal.visible
+            || cancellationReasonModal.visible;
         if (anyOverlayOpen && isSidebarOpen) {
             setIsSidebarOpen(false);
         }
@@ -1083,6 +2208,7 @@ export default function AdminDashboard({ navigation }) {
         showMasterDetails,
         serviceTypeModal.visible,
         districtModal.visible,
+        cancellationReasonModal.visible,
         isSidebarOpen
     ]);
 
@@ -1104,13 +2230,16 @@ export default function AdminDashboard({ navigation }) {
         await Promise.all([
             loadStats(),
             loadCommissionData(),
+            loadBalanceTopUpStats(),
             loadOrders(),
             loadMasters(),
             loadDispatchers(), // Load dispatchers if available
+            loadAdmins(),
             loadSettings(),
             loadServiceTypes(),
             loadDistricts(),
             loadManagedDistricts(),
+            loadCancellationReasons(),
         ]);
         setLoading(false);
     };
@@ -1126,10 +2255,24 @@ export default function AdminDashboard({ navigation }) {
 
     const loadCommissionData = async () => {
         try {
-            const data = await earningsService.getCommissionStats(dashboardFilter);
+            const dateFilter = analyticsRangeWindow
+                ? { type: 'custom', start: analyticsRangeWindow.start, end: analyticsRangeWindow.end }
+                : { type: 'all' };
+            const data = await earningsService.getCommissionStats(dateFilter);
             setCommissionStats(data || {});
         } catch (e) {
             console.error('Commission error', e);
+        }
+    };
+
+    const loadBalanceTopUpStats = async () => {
+        try {
+            const start = analyticsRangeWindow?.start || null;
+            const end = analyticsRangeWindow?.end || null;
+            const data = await earningsService.getBalanceTopUpStats(start, end);
+            setBalanceTopUpStats(data || { totalTopUps: 0, avgTopUp: 0, count: 0 });
+        } catch (e) {
+            console.error('Balance top-up stats error', e);
         }
     };
 
@@ -1151,6 +2294,15 @@ export default function AdminDashboard({ navigation }) {
             if (authService.getAllDispatchers) {
                 const data = await authService.getAllDispatchers();
                 setDispatchers(data || []);
+            }
+        } catch (e) { }
+    };
+
+    const loadAdmins = async () => {
+        try {
+            if (authService.getAllAdmins) {
+                const data = await authService.getAllAdmins();
+                setAdminUsers(data || []);
             }
         } catch (e) { }
     };
@@ -1190,6 +2342,15 @@ export default function AdminDashboard({ navigation }) {
             if (ordersService.getAllDistricts) {
                 const data = await ordersService.getAllDistricts();
                 setManagedDistricts(data || []);
+            }
+        } catch (e) { console.error(e); }
+    };
+
+    const loadCancellationReasons = async () => {
+        try {
+            if (ordersService.getAllCancellationReasons) {
+                const data = await ordersService.getAllCancellationReasons();
+                setCancellationReasons(data || []);
             }
         } catch (e) { console.error(e); }
     };
@@ -1312,6 +2473,52 @@ export default function AdminDashboard({ navigation }) {
                         await ordersService.deleteDistrict(id);
                         loadManagedDistricts();
                         loadDistricts();
+                    } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
+                }
+            }
+        ]);
+    };
+
+    const handleSaveCancellationReason = async (reasonData) => {
+        if (!reasonData?.code || !reasonData?.name_en) {
+            showToast(TRANSLATIONS.toastFillRequired || 'Please fill required fields', 'error');
+            return;
+        }
+        setActionLoading(true);
+        try {
+            const payload = {
+                code: reasonData.code,
+                name_en: reasonData.name_en,
+                name_ru: reasonData.name_ru || null,
+                applicable_to: reasonData.applicable_to || 'both',
+                sort_order: reasonData.sort_order ? parseInt(reasonData.sort_order, 10) : 0,
+                is_active: reasonData.is_active !== false,
+            };
+            if (reasonData.id) {
+                await ordersService.updateCancellationReason(reasonData.id, payload);
+            } else {
+                await ordersService.addCancellationReason(payload);
+            }
+            setCancellationReasonModal({ visible: false, reason: null });
+            loadCancellationReasons();
+            showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
+        } catch (e) {
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleDeleteCancellationReason = async (id) => {
+        Alert.alert(TRANSLATIONS.deleteCancellationReason || 'Delete Reason', TRANSLATIONS.confirmDeleteCancellationReason || 'Are you sure?', [
+            { text: TRANSLATIONS.cancel || 'Cancel', style: 'cancel' },
+            {
+                text: TRANSLATIONS.delete || 'Delete',
+                style: 'destructive',
+                onPress: async () => {
+                    try {
+                        await ordersService.deleteCancellationReason(id);
+                        loadCancellationReasons();
                     } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
                 }
             }
@@ -1525,25 +2732,34 @@ export default function AdminDashboard({ navigation }) {
 
     // --- NEW: Missing Admin Handlers ---
     const handleReopenOrder = async (orderId) => {
+        const runReopen = async () => {
+            setActionLoading(true);
+            try {
+                const result = await ordersService.reopenOrderAdmin(orderId, 'Reopened by admin');
+                if (result.success) {
+                    showToast(TRANSLATIONS.filterStatusReopened || TRANSLATIONS.toastUpdated || 'Updated', 'success');
+                    setDetailsOrder(null);
+                    loadOrders();
+                } else {
+                    showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                }
+            } catch (e) {
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+            } finally {
+                setActionLoading(false);
+            }
+        };
+
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && window.confirm) {
+            if (window.confirm('Return this order to the pool for new claims?')) {
+                runReopen();
+            }
+            return;
+        }
+
         Alert.alert('Reopen Order', 'Return this order to the pool for new claims?', [
             { text: 'Cancel' },
-            {
-                text: 'Reopen',
-                onPress: async () => {
-                    setActionLoading(true);
-                    try {
-                        const result = await ordersService.reopenOrderAdmin(orderId, 'Reopened by admin');
-                        if (result.success) {
-                            showToast(TRANSLATIONS.filterStatusReopened || TRANSLATIONS.toastUpdated || 'Updated', 'success');
-                            setDetailsOrder(null);
-                            loadOrders();
-                        } else {
-                            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
-                        }
-                    } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
-                    finally { setActionLoading(false); }
-                }
-            }
+            { text: 'Reopen', onPress: runReopen }
         ]);
     };
 
@@ -1762,6 +2978,52 @@ export default function AdminDashboard({ navigation }) {
         }
     };
 
+    const openTransferPicker = (order) => {
+        if (!order) return;
+        const currentAssigned = order.assigned_dispatcher_id || order.dispatcher_id;
+        const options = [
+            ...(dispatchers || []).map(d => ({
+                id: d.id,
+                label: d.full_name || d.email || d.phone || `Dispatcher ${String(d.id).slice(0, 6)}`
+            })),
+            ...(adminUsers || []).map(a => ({
+                id: a.id,
+                label: a.full_name || a.email || a.phone || `Admin ${String(a.id).slice(0, 6)}`
+            })),
+        ].filter(opt => opt.id && String(opt.id) !== String(currentAssigned));
+
+        if (options.length === 0) {
+            showToast?.(TRANSLATIONS.noDispatchersFound || 'No other dispatchers found', 'info');
+            return;
+        }
+        setPickerModal({
+            visible: true,
+            title: TRANSLATIONS.pickerDispatcher || 'Select dispatcher',
+            options,
+            value: '',
+            onChange: async (targetId) => handleTransferDispatcher(order, targetId),
+        });
+    };
+
+    const handleTransferDispatcher = async (order, targetDispatcherId) => {
+        if (!order?.id || !user?.id || !targetDispatcherId) return;
+        setActionLoading(true);
+        try {
+            const result = await ordersService.transferOrderToDispatcher(order.id, user.id, targetDispatcherId, user?.role);
+            if (result.success) {
+                showToast?.(TRANSLATIONS.toastTransferSuccess || 'Order transferred', 'success');
+                setDetailsOrder(null);
+                loadOrders();
+            } else {
+                showToast?.(TRANSLATIONS.toastTransferFailed || 'Transfer failed', 'error');
+            }
+        } catch (e) {
+            showToast?.(TRANSLATIONS.toastTransferFailed || 'Transfer failed', 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
     const handleVerifyPaymentProof = async (orderId, isValid) => {
         setActionLoading(true);
         try {
@@ -1936,6 +3198,79 @@ export default function AdminDashboard({ navigation }) {
         }
     }, [showOrderHistoryModal, selectedMaster]);
 
+    const clearAnalyticsTooltipTimer = useCallback(() => {
+        if (analyticsTooltipTimer.current) {
+            clearTimeout(analyticsTooltipTimer.current);
+            analyticsTooltipTimer.current = null;
+        }
+    }, []);
+
+    const showAnalyticsTooltip = useCallback((payload, resetTimer = true) => {
+        if (!payload?.text) return;
+        setAnalyticsTooltip(payload);
+        if (resetTimer) {
+            clearAnalyticsTooltipTimer();
+            analyticsTooltipTimer.current = setTimeout(() => {
+                setAnalyticsTooltip(null);
+            }, 2200);
+        }
+    }, [clearAnalyticsTooltipTimer]);
+
+    const updateAnalyticsTooltipPos = useCallback((x, y) => {
+        setAnalyticsTooltip(prev => (prev ? { ...prev, x, y } : prev));
+    }, []);
+
+    const hideAnalyticsTooltip = useCallback(() => {
+        clearAnalyticsTooltipTimer();
+        setAnalyticsTooltip(null);
+    }, [clearAnalyticsTooltipTimer]);
+
+    const clearAnalyticsTrendTooltipTimer = useCallback(() => {
+        if (analyticsTrendTooltipTimer.current) {
+            clearTimeout(analyticsTrendTooltipTimer.current);
+            analyticsTrendTooltipTimer.current = null;
+        }
+    }, []);
+
+    const showAnalyticsTrendTooltip = useCallback((payload, resetTimer = true) => {
+        if (!payload?.title) return;
+        setAnalyticsTrendTooltip(payload);
+        if (resetTimer) {
+            clearAnalyticsTrendTooltipTimer();
+            analyticsTrendTooltipTimer.current = setTimeout(() => {
+                setAnalyticsTrendTooltip(null);
+            }, 2200);
+        }
+    }, [clearAnalyticsTrendTooltipTimer]);
+
+    const updateAnalyticsTrendTooltipPos = useCallback((x, y) => {
+        setAnalyticsTrendTooltip(prev => (prev ? { ...prev, x, y } : prev));
+    }, []);
+
+    const hideAnalyticsTrendTooltip = useCallback(() => {
+        clearAnalyticsTrendTooltipTimer();
+        setAnalyticsTrendTooltip(null);
+    }, [clearAnalyticsTrendTooltipTimer]);
+
+    const showPriceDistTooltip = useCallback((payload) => {
+        if (!payload) return;
+        setPriceDistTooltip(payload);
+    }, []);
+
+    const updatePriceDistTooltipPos = useCallback((x, y) => {
+        setPriceDistTooltip(prev => (prev ? { ...prev, x, y } : prev));
+    }, []);
+
+    const hidePriceDistTooltip = useCallback(() => {
+        setPriceDistTooltip(null);
+    }, []);
+
+    const analyticsInfoHandlers = useMemo(() => ({
+        onShow: showAnalyticsTooltip,
+        onMove: updateAnalyticsTooltipPos,
+        onHide: hideAnalyticsTooltip,
+    }), [showAnalyticsTooltip, updateAnalyticsTooltipPos, hideAnalyticsTooltip]);
+
     // ============================================
     // RENDERERS
     // ============================================
@@ -2067,7 +3402,7 @@ export default function AdminDashboard({ navigation }) {
                 <Ionicons name="search" size={16} color="#64748b" style={{ marginRight: 8 }} />
                 <TextInput
                     style={styles.searchInput}
-                    placeholder="Search..."
+                    placeholder={TRANSLATIONS.placeholderSearch || 'Search...'}
                     placeholderTextColor="#64748b"
                     value={searchQuery}
                     onChangeText={setSearchQuery}
@@ -2088,8 +3423,6 @@ export default function AdminDashboard({ navigation }) {
         const cardWidth = columns === 1 ? '100%' : columns === 2 ? '48%' : '31%';
         const listWidth = columns === 1 ? '100%' : '48%';
         const showClearFilters = analyticsFilters.urgency !== 'all' || analyticsFilters.service !== 'all' || analyticsFilters.area !== 'all';
-        const analyticsLocale = language === 'ru' ? 'ru-RU' : language === 'kg' ? 'ky-KG' : 'en-US';
-
         const rangeOptions = [
             { key: 'today', label: TRANSLATIONS.filterToday || 'Today' },
             { key: '7d', label: '7D' },
@@ -2110,6 +3443,141 @@ export default function AdminDashboard({ navigation }) {
 
         const granularityLabel = granularityOptions.find(opt => opt.key === analyticsGranularity)?.label || analyticsGranularity;
         const chartSubtitle = `${TRANSLATIONS.analyticsViewBy || 'View by'} ${granularityLabel}`;
+        const priceDistRangeOptions = [
+            { key: '7d', label: '7D' },
+            { key: '30d', label: '30D' },
+            { key: '90d', label: '90D' },
+            { key: 'ytd', label: TRANSLATIONS.analyticsPriceDistributionRangeYTD || 'YTD' },
+            { key: 'all', label: TRANSLATIONS.analyticsPriceDistributionRangeAll || TRANSLATIONS.filterAll || 'All' },
+        ];
+        const priceDistGroupingOptions = [
+            { key: 'day', label: TRANSLATIONS.analyticsPriceDistributionDaily || 'Daily' },
+            { key: 'week', label: TRANSLATIONS.analyticsPriceDistributionWeekly || 'Weekly' },
+            { key: 'month', label: TRANSLATIONS.analyticsPriceDistributionMonthly || 'Monthly' },
+        ];
+        const priceDistScopeOptions = [
+            { key: 'completed', label: TRANSLATIONS.analyticsPriceDistributionScopeCompleted || 'Completed' },
+            { key: 'all', label: TRANSLATIONS.analyticsPriceDistributionScopeAll || 'All orders' },
+        ];
+        const allowedGroupings = priceDistGroupingRules[priceDistRange] || ['week'];
+        const priceDistSummary = priceDistData?.summary || {};
+        const formatMoneyCurrency = (value) => (Number.isFinite(value) ? `${formatMoney(value)} ${TRANSLATIONS.currency || 'som'}` : '—');
+        const formatPriceDistStat = (value) => (priceDistSummary.n ? formatMoneyCurrency(value) : '—');
+        const priceDistYAxisLabel = `${TRANSLATIONS.analyticsPriceDistributionMetricPrice || 'Order price'}\n(${TRANSLATIONS.currency || 'som'})`;
+        const priceDistTicks = [
+            priceDistSummary.max,
+            priceDistSummary.mean,
+            priceDistSummary.p75,
+            priceDistSummary.p50,
+            priceDistSummary.p25,
+            priceDistSummary.min,
+        ].filter(val => Number.isFinite(val) && val >= 0);
+        const formatBucketRangeLabel = (bucket) => {
+            if (!bucket?.start) return bucket?.label || '—';
+            if (priceDistGrouping === 'day') return formatShortDate(bucket.start, analyticsLocale);
+            return `${formatShortDate(bucket.start, analyticsLocale)} — ${formatShortDate(bucket.end, analyticsLocale)}`;
+        };
+        const getVolatilityLabel = (cv) => {
+            if (!priceDistSummary?.n) return '—';
+            if (!Number.isFinite(cv)) return '—';
+            if (cv < 0.3) return TRANSLATIONS.analyticsPriceDistributionStabilityHigh || 'High stability';
+            if (cv < 0.6) return TRANSLATIONS.analyticsPriceDistributionStabilityModerate || 'Moderate stability';
+            return TRANSLATIONS.analyticsPriceDistributionStabilityLow || 'Low stability';
+        };
+        const priceDistStatItems = [
+            {
+                key: 'n',
+                label: TRANSLATIONS.analyticsPriceDistributionN || 'N',
+                value: formatNumber(priceDistSummary.n),
+            },
+            {
+                key: 'median',
+                label: TRANSLATIONS.analyticsPriceDistributionMedian || 'Median',
+                value: formatPriceDistStat(priceDistSummary.p50),
+                primary: true,
+            },
+            {
+                key: 'p25',
+                label: TRANSLATIONS.analyticsPriceDistributionP25 || 'P25',
+                value: formatPriceDistStat(priceDistSummary.p25),
+            },
+            {
+                key: 'p75',
+                label: TRANSLATIONS.analyticsPriceDistributionP75 || 'P75',
+                value: formatPriceDistStat(priceDistSummary.p75),
+            },
+            {
+                key: 'top10',
+                label: TRANSLATIONS.analyticsPriceDistributionTop10Label || 'Top 10% jobs',
+                value: formatPriceDistStat(priceDistSummary.p90),
+            },
+            {
+                key: 'mean',
+                label: TRANSLATIONS.analyticsPriceDistributionMean || 'Mean',
+                value: formatPriceDistStat(priceDistSummary.mean),
+            },
+            {
+                key: 'std',
+                label: TRANSLATIONS.analyticsPriceDistributionStd || 'STD',
+                value: formatPriceDistStat(priceDistSummary.std),
+            },
+            {
+                key: 'iqr',
+                label: TRANSLATIONS.analyticsPriceDistributionIQR || 'IQR',
+                value: formatPriceDistStat(priceDistSummary.iqr),
+            },
+            {
+                key: 'min',
+                label: TRANSLATIONS.analyticsPriceDistributionMin || 'Min',
+                value: formatPriceDistStat(priceDistSummary.min),
+            },
+            {
+                key: 'max',
+                label: TRANSLATIONS.analyticsPriceDistributionMax || 'Max',
+                value: formatPriceDistStat(priceDistSummary.max),
+            },
+            {
+                key: 'p90',
+                label: TRANSLATIONS.analyticsPriceDistributionP90 || 'P90',
+                value: formatPriceDistStat(priceDistSummary.p90),
+            },
+            {
+                key: 'stability',
+                label: TRANSLATIONS.analyticsPriceDistributionStability || 'Stability',
+                value: priceDistSummary.n
+                    ? `${getVolatilityLabel(priceDistSummary.cv)} (${formatPercent(priceDistSummary.cv)})`
+                    : '—',
+            },
+        ];
+        const handlePriceDistHover = (bucket, event) => {
+            if (!bucket?.stats?.n) return;
+            const stats = bucket.stats;
+            showPriceDistTooltip({
+                title: formatBucketRangeLabel(bucket),
+                n: stats.n,
+                min: stats.min,
+                p25: stats.p25,
+                p50: stats.p50,
+                p75: stats.p75,
+                max: stats.max,
+                mean: stats.mean,
+                std: stats.std,
+                p90: stats.p90,
+                smallSample: bucket.smallSample,
+                x: event?.nativeEvent?.pageX,
+                y: event?.nativeEvent?.pageY,
+            });
+        };
+        const handlePriceDistMove = (event) => updatePriceDistTooltipPos(event?.nativeEvent?.pageX, event?.nativeEvent?.pageY);
+        const handlePriceDistLeave = () => hidePriceDistTooltip();
+        const handlePriceDistPress = (bucket, event) => {
+            if (!bucket?.orders?.length) return;
+            if (Platform.OS !== 'web') {
+                handlePriceDistHover(bucket, event);
+            }
+            const title = `${TRANSLATIONS.analyticsPriceDistributionOrders || 'Orders'} · ${formatBucketRangeLabel(bucket)}`;
+            openAnalyticsOrdersModal(title, null, bucket.orders);
+        };
 
         const urgencyOptions = URGENCY_OPTIONS.map(opt => ({
             id: opt.id,
@@ -2119,6 +3587,11 @@ export default function AdminDashboard({ navigation }) {
         const currentUrgencyLabel = urgencyOptions.find(o => o.id === analyticsFilters.urgency)?.label || analyticsFilters.urgency;
         const currentServiceLabel = serviceFilterOptions.find(o => o.id === analyticsFilters.service)?.label || analyticsFilters.service;
         const currentAreaLabel = analyticsAreaOptions.find(o => o.id === analyticsFilters.area)?.label || analyticsFilters.area;
+        const currentDispatcherLabel = analyticsDispatcherOptions.find(o => o.id === analyticsDispatcherId)?.label
+            || (analyticsDispatcherId === 'all' ? (TRANSLATIONS.analyticsAllDispatchers || 'All dispatchers') : analyticsDispatcherId);
+        const currentMasterLabel = analyticsMasterOptions.find(o => o.id === analyticsMasterId)?.label
+            || (analyticsMasterId === 'all' ? (TRANSLATIONS.analyticsAllMasters || 'All masters') : analyticsMasterId);
+        const showPeopleFilter = analyticsSection === 'dispatchers' || analyticsSection === 'masters';
 
         const detailTitleMap = {
             topAreas: TRANSLATIONS.analyticsTopAreas || 'Top Areas',
@@ -2126,9 +3599,10 @@ export default function AdminDashboard({ navigation }) {
             urgencyMix: TRANSLATIONS.analyticsUrgencyMix || 'Urgency Mix',
             cancelReasons: TRANSLATIONS.analyticsCancelReasons || 'Cancellation Reasons',
             backlog: TRANSLATIONS.analyticsBacklog || 'Backlog Orders',
-            funnel: TRANSLATIONS.analyticsOrderFunnel || 'Order Funnel',
             topPerformersCompleted: TRANSLATIONS.analyticsTopByCompleted || 'Top by Completed Jobs',
             topPerformersRevenue: TRANSLATIONS.analyticsTopByRevenue || 'Top by Revenue',
+            topDispatchersOrders: TRANSLATIONS.analyticsTopByOrders || 'Top by Orders',
+            topDispatchersRevenue: TRANSLATIONS.analyticsTopByRevenue || 'Top by Revenue',
         };
 
         const detailItemsMap = {
@@ -2137,9 +3611,10 @@ export default function AdminDashboard({ navigation }) {
             urgencyMix: analyticsLists.urgencyMix,
             cancelReasons: analyticsLists.cancelReasons,
             backlog: analyticsLists.backlogOrders,
-            funnel: analyticsLists.funnel,
             topPerformersCompleted: analyticsPeople.topByCompleted,
             topPerformersRevenue: analyticsPeople.topByRevenue,
+            topDispatchersOrders: analyticsDispatchers.topByOrders,
+            topDispatchersRevenue: analyticsDispatchers.topByRevenue,
         };
 
         const handleCustomDateChange = (field, event, selectedDate) => {
@@ -2162,14 +3637,108 @@ export default function AdminDashboard({ navigation }) {
             date ? date.toLocaleDateString(analyticsLocale) : (TRANSLATIONS.selectDate || 'Select date')
         );
 
+        const getTrendEventPos = (event) => {
+            const native = event?.nativeEvent || {};
+            const x = native.pageX ?? native.locationX ?? 0;
+            const y = native.pageY ?? native.locationY ?? 0;
+            return { x, y };
+        };
+
+        const renderTrendDots = (series, maxValue, color, title, windowStart, windowEnd, avgValue, valueLabel, valueFormatter) => (
+            <View style={styles.analyticsTrendArea}>
+                <View style={styles.analyticsTrendGrid}>
+                    <View style={styles.analyticsTrendGridLine} />
+                    <View style={styles.analyticsTrendGridLine} />
+                </View>
+                <View style={styles.analyticsTrendYAxis}>
+                    <Text style={[styles.analyticsTrendAxisText, !isDark && styles.analyticsTrendAxisTextLight]}>{formatNumber(maxValue)}</Text>
+                    <Text style={[styles.analyticsTrendAxisText, !isDark && styles.analyticsTrendAxisTextLight]}>0</Text>
+                </View>
+                <View style={styles.analyticsTrendDots}>
+                    {series.map((value, index) => {
+                        const pct = maxValue === 0 ? 0 : value / maxValue;
+                        const dotSize = 6 + Math.round(pct * 6);
+                        const offset = Math.round(pct * (72 - dotSize));
+                        const dotDate = new Date(windowStart.getTime() + (index * DAY_MS));
+                        const showAt = (event, resetTimer = true) => {
+                            const pos = getTrendEventPos(event);
+                            showAnalyticsTrendTooltip({
+                                title,
+                                date: dotDate,
+                                value: valueFormatter ? valueFormatter(value) : formatNumber(value),
+                                valueLabel,
+                                x: pos.x,
+                                y: pos.y,
+                            }, resetTimer);
+                        };
+                        return (
+                            <View key={`${title}-${index}`} style={styles.analyticsTrendSlot}>
+                                <TouchableOpacity
+                                    onPress={(event) => showAt(event, true)}
+                                    onMouseEnter={Platform.OS === 'web' ? (event) => showAt(event, true) : undefined}
+                                    onMouseMove={Platform.OS === 'web'
+                                        ? (event) => {
+                                            if (!analyticsTrendTooltip) {
+                                                showAt(event, true);
+                                                return;
+                                            }
+                                            const pos = getTrendEventPos(event);
+                                            updateAnalyticsTrendTooltipPos(pos.x, pos.y);
+                                        }
+                                        : undefined}
+                                    onMouseLeave={Platform.OS === 'web' ? hideAnalyticsTrendTooltip : undefined}
+                                    style={[
+                                        styles.analyticsTrendDot,
+                                        { width: dotSize, height: dotSize, backgroundColor: color, marginBottom: Math.max(0, offset) }
+                                    ]}
+                                />
+                            </View>
+                        );
+                    })}
+                </View>
+                <View style={[styles.analyticsTrendAvgLine, { top: 6 + (72 - (maxValue ? (avgValue / maxValue) * 72 : 0)) }]} />
+                <View style={styles.analyticsTrendAxis}>
+                    <Text style={[styles.analyticsTrendAxisText, !isDark && styles.analyticsTrendAxisTextLight]}>{formatShortDate(windowStart, analyticsLocale)}</Text>
+                    <Text style={[styles.analyticsTrendAxisText, !isDark && styles.analyticsTrendAxisTextLight]}>
+                        {formatShortDate(new Date((windowStart.getTime() + windowEnd.getTime()) / 2), analyticsLocale)}
+                    </Text>
+                    <Text style={[styles.analyticsTrendAxisText, !isDark && styles.analyticsTrendAxisTextLight]}>{formatShortDate(windowEnd, analyticsLocale)}</Text>
+                </View>
+            </View>
+        );
+
         return (
             <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
                 {renderHeader(TRANSLATIONS.analyticsTitle || 'Analytics')}
 
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.analyticsSectionTabs}>
+                    {[
+                    { key: 'operations', label: TRANSLATIONS.analyticsOperations || 'Operations' },
+                        { key: 'financial', label: TRANSLATIONS.analyticsFinancial || 'Financial' },
+                        { key: 'dispatchers', label: TRANSLATIONS.analyticsDispatchers || 'Dispatchers' },
+                        { key: 'masters', label: TRANSLATIONS.analyticsMasters || 'Masters' },
+                    ].map(section => {
+                        const isActive = analyticsSection === section.key;
+                        return (
+                            <TouchableOpacity
+                                key={section.key}
+                                style={[styles.analyticsSectionTab, isActive && styles.analyticsSectionTabActive]}
+                                onPress={() => setAnalyticsSection(section.key)}
+                            >
+                                <Text style={[styles.analyticsSectionTabText, isActive && styles.analyticsSectionTabTextActive]}>
+                                    {section.label}
+                                </Text>
+                            </TouchableOpacity>
+                        );
+                    })}
+                </ScrollView>
+
                 <View style={[styles.analyticsFilterCard, !isDark && styles.cardLight]}>
-                    <View style={styles.analyticsFilterHeader}>
-                        <Text style={[styles.analyticsSectionLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS.analyticsTimeRange || 'Time Range'}</Text>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.analyticsRangeRow}>
+                    <View style={styles.analyticsFilterTopRow}>
+                        <Text style={[styles.analyticsSectionLabel, !isDark && styles.textSecondary]}>
+                            {TRANSLATIONS.analyticsTimeRange || 'Time Range'}
+                        </Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.analyticsRangeScroll} contentContainerStyle={styles.analyticsRangeRow}>
                             {rangeOptions.map((opt) => (
                                 <TouchableOpacity
                                     key={opt.key}
@@ -2186,6 +3755,7 @@ export default function AdminDashboard({ navigation }) {
                                 </TouchableOpacity>
                             ))}
                         </ScrollView>
+
                     </View>
 
                     <View style={styles.analyticsFilterRow}>
@@ -2252,6 +3822,34 @@ export default function AdminDashboard({ navigation }) {
                             <Ionicons name="chevron-down" size={14} color={isDark ? '#64748b' : '#475569'} />
                         </TouchableOpacity>
 
+                        {showPeopleFilter && (
+                            <TouchableOpacity
+                                style={[
+                                    styles.analyticsFilterPill,
+                                    styles.analyticsDispatcherPill,
+                                    (analyticsSection === 'dispatchers' ? analyticsDispatcherId !== 'all' : analyticsMasterId !== 'all') && styles.analyticsFilterPillActive,
+                                    !isDark && styles.analyticsFilterPillLight,
+                                ]}
+                                onPress={() => setPickerModal({
+                                    visible: true,
+                                    title: analyticsSection === 'dispatchers'
+                                        ? (TRANSLATIONS.analyticsDispatcher || 'Dispatcher')
+                                        : (TRANSLATIONS.analyticsMaster || 'Master'),
+                                    options: analyticsSection === 'dispatchers' ? analyticsDispatcherOptions : analyticsMasterOptions,
+                                    value: analyticsSection === 'dispatchers' ? analyticsDispatcherId : analyticsMasterId,
+                                    onChange: analyticsSection === 'dispatchers' ? setAnalyticsDispatcherId : setAnalyticsMasterId,
+                                })}
+                            >
+                                <View style={styles.analyticsFilterPillRow}>
+                                    <Ionicons name="person-outline" size={14} color={isDark ? '#cbd5e1' : '#0f172a'} />
+                                    <Text style={[styles.analyticsFilterPillText, !isDark && styles.textDark]} numberOfLines={1}>
+                                        {analyticsSection === 'dispatchers' ? currentDispatcherLabel : currentMasterLabel}
+                                    </Text>
+                                </View>
+                                <Ionicons name="chevron-down" size={14} color={isDark ? '#64748b' : '#475569'} />
+                            </TouchableOpacity>
+                        )}
+
                         {showClearFilters && (
                             <TouchableOpacity style={styles.analyticsClearBtn} onPress={() => setAnalyticsFilters({ urgency: 'all', service: 'all', area: 'all' })}>
                                 <Text style={styles.analyticsClearBtnText}>{TRANSLATIONS.clear || 'Clear'}</Text>
@@ -2301,29 +3899,6 @@ export default function AdminDashboard({ navigation }) {
                     )}
                 </View>
 
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.analyticsSectionTabs}>
-                    {[
-                        { key: 'overview', label: TRANSLATIONS.analyticsOverview || 'Overview' },
-                        { key: 'operations', label: TRANSLATIONS.analyticsOperations || 'Operations' },
-                        { key: 'financial', label: TRANSLATIONS.analyticsFinancial || 'Financial' },
-                        { key: 'quality', label: TRANSLATIONS.analyticsQuality || 'Quality' },
-                        { key: 'people', label: TRANSLATIONS.analyticsPeople || 'People' },
-                    ].map(section => {
-                        const isActive = analyticsSection === section.key;
-                        return (
-                            <TouchableOpacity
-                                key={section.key}
-                                style={[styles.analyticsSectionTab, isActive && styles.analyticsSectionTabActive]}
-                                onPress={() => setAnalyticsSection(section.key)}
-                            >
-                                <Text style={[styles.analyticsSectionTabText, isActive && styles.analyticsSectionTabTextActive]}>
-                                    {section.label}
-                                </Text>
-                            </TouchableOpacity>
-                        );
-                    })}
-                </ScrollView>
-
                 {(analyticsSection === 'overview' || analyticsSection === 'financial') && (
                     <View style={styles.analyticsGranularityRow}>
                         <Text style={[styles.analyticsGranularityLabel, !isDark && styles.textSecondary]}>
@@ -2347,10 +3922,10 @@ export default function AdminDashboard({ navigation }) {
                 )}
 
                 {analyticsSection === 'overview' && (
-                    <View style={styles.analyticsChartGrid}>
-                        <View style={{ width: listWidth }}>
+                    <View style={styles.analyticsRow}>
+                        <View style={styles.analyticsRowItem}>
                             <LabeledBarChart
-                                title={TRANSLATIONS.analyticsDailyOrders || 'Daily Orders'}
+                                title={TRANSLATIONS.analyticsOrders || TRANSLATIONS.analyticsDailyOrders || 'Orders'}
                                 subtitle={chartSubtitle}
                                 series={analyticsChartSeries.ordersSeries}
                                 labels={analyticsChartSeries.labels}
@@ -2359,9 +3934,9 @@ export default function AdminDashboard({ navigation }) {
                                 color="#3b82f6"
                             />
                         </View>
-                        <View style={{ width: listWidth }}>
+                        <View style={styles.analyticsRowItem}>
                             <LabeledBarChart
-                                title={TRANSLATIONS.analyticsDailyGMV || 'Daily GMV'}
+                                title={TRANSLATIONS.analyticsGMVFull || 'Gross Merchandise Value (GMV)'}
                                 subtitle={chartSubtitle}
                                 series={analyticsChartSeries.revenueSeries}
                                 labels={analyticsChartSeries.labels}
@@ -2374,63 +3949,761 @@ export default function AdminDashboard({ navigation }) {
                 )}
 
                 {analyticsSection === 'financial' && (
-                    <View style={styles.analyticsChartGrid}>
-                        <View style={{ width: listWidth }}>
-                            <LabeledBarChart
-                                title={TRANSLATIONS.analyticsDailyGMV || 'Daily GMV'}
-                                subtitle={chartSubtitle}
-                                series={analyticsChartSeries.revenueSeries}
-                                labels={analyticsChartSeries.labels}
-                                formatter={formatMoney}
-                                isDark={isDark}
-                                color="#22c55e"
-                            />
+                    <View style={styles.analyticsRow}>
+                        <View style={styles.analyticsRowItem}>
+                            <View style={[styles.analyticsVisualCard, styles.analyticsStackedChartBlock, !isDark && styles.cardLight]}>
+                                <View style={styles.analyticsStackedCharts}>
+                                    <LabeledBarChart
+                                        title={TRANSLATIONS.analyticsGMVFull || 'Gross Merchandise Value (GMV)'}
+                                        subtitle={chartSubtitle}
+                                        series={analyticsChartSeries.revenueSeries}
+                                        labels={analyticsChartSeries.labels}
+                                        formatter={formatMoney}
+                                        isDark={isDark}
+                                        color="#22c55e"
+                                        barHeight={90}
+                                        cardless
+                                    />
+                                    <View style={styles.analyticsStackedChartDivider} />
+                                    <LabeledBarChart
+                                        title={TRANSLATIONS.analyticsCommission || 'Commission'}
+                                        subtitle={chartSubtitle}
+                                        series={analyticsChartSeries.commissionSeries}
+                                        labels={analyticsChartSeries.labels}
+                                        formatter={formatMoney}
+                                        isDark={isDark}
+                                        color="#f59e0b"
+                                        barHeight={90}
+                                        cardless
+                                    />
+                                </View>
+                            </View>
                         </View>
-                        <View style={{ width: listWidth }}>
-                            <LabeledBarChart
-                                title={TRANSLATIONS.analyticsDailyCommission || 'Daily Commission'}
-                                subtitle={chartSubtitle}
-                                series={analyticsChartSeries.commissionSeries}
-                                labels={analyticsChartSeries.labels}
-                                formatter={formatMoney}
-                                isDark={isDark}
-                                color="#f59e0b"
-                            />
+                        <View style={styles.analyticsRowItem}>
+                            <View style={styles.analyticsFinancialMetricsBlock}>
+                                <View style={styles.analyticsFinancialMetricsGrid}>
+                                    <View style={styles.analyticsFinancialMetricItem}>
+                                        <AnalyticsMetricCard
+                                            label={TRANSLATIONS.analyticsGMVFull || 'Gross Merchandise Value (GMV)'}
+                                            value={formatMoney(analyticsStats.gmv)}
+                                            subLabel={`${TRANSLATIONS.analyticsAvgOrderValue || 'Average Order Value'} ${formatMoney(analyticsStats.avgTicket)}`}
+                                            isDark={isDark}
+                                        />
+                                    </View>
+                                    <View style={styles.analyticsFinancialMetricItem}>
+                                        <AnalyticsMetricCard
+                                            label={TRANSLATIONS.analyticsCommission || 'Commission'}
+                                            value={formatMoney(analyticsStats.commissionCollected)}
+                                            subLabel={`${TRANSLATIONS.analyticsAvgCommission || 'Avg commission per order'} ${formatMoney(analyticsStats.avgCommissionPerOrder)}`}
+                                            isDark={isDark}
+                                        />
+                                    </View>
+                                <View style={styles.analyticsFinancialMetricItem}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsPotentialEarningsLost || 'Potential Earnings Lost'}
+                                        value={formatMoney(analyticsStats.lostEarningsTotal)}
+                                        subLabel={`${TRANSLATIONS.analyticsAvgLost || 'Avg lost'} ${formatMoney(analyticsStats.lostEarningsAvg)}`}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                    <View style={styles.analyticsFinancialMetricItem}>
+                                        <AnalyticsMetricCard
+                                            label={TRANSLATIONS.analyticsTopUpTotal || 'Topped Up Balance'}
+                                            value={formatMoney(analyticsStats.topUpTotal)}
+                                            subLabel={`${TRANSLATIONS.analyticsTopUpAvg || 'Average Top Up'} ${formatMoney(analyticsStats.topUpAvg)}`}
+                                            isDark={isDark}
+                                        />
+                                    </View>
+                                    <View style={styles.analyticsFinancialMetricItem}>
+                                        <AnalyticsMetricCard
+                                            label={TRANSLATIONS.analyticsCommissionVolatility || 'Commission Volatility'}
+                                            value={formatPercent(analyticsStats.commissionVolatilityRatio)}
+                                            subLabel={TRANSLATIONS.analyticsVolatilityFormula || 'STD / Median (daily commission)'}
+                                            isDark={isDark}
+                                        />
+                                    </View>
+                                <View style={styles.analyticsFinancialMetricItem}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsTotalBalances || 'Total Balances'}
+                                        value={formatMoney(analyticsStats.totalBalances)}
+                                        subLabel={`${TRANSLATIONS.analyticsAvgBalance || 'Average Balance'} ${formatMoney(analyticsStats.avgBalance)}`}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                </View>
+                            </View>
                         </View>
                     </View>
                 )}
 
-                <View style={styles.analyticsVisualGrid}>
-                    <View style={{ width: listWidth }}>
-                        <View style={[styles.analyticsVisualCard, !isDark && styles.cardLight]}>
-                            <Text style={[styles.analyticsVisualTitle, !isDark && styles.textDark]}>
-                                {TRANSLATIONS.analyticsStatusMix || 'Status Mix'}
-                            </Text>
+                {analyticsSection === 'dispatchers' && (
+                    <>
+                        <View style={styles.analyticsListGrid}>
+                            <View style={styles.analyticsListColWide}>
+                                <AnalyticsListCard
+                                    title={TRANSLATIONS.analyticsTopByRevenue || 'Top by Revenue'}
+                                    items={analyticsDispatchers.topByRevenue}
+                                    emptyLabel={TRANSLATIONS.emptyList || 'No data'}
+                                    onPress={() => setAnalyticsDetail({ type: 'topDispatchersRevenue' })}
+                                    isDark={isDark}
+                                    actionLabel={TRANSLATIONS.view || 'View'}
+                                    infoText={TRANSLATIONS.analyticsTopDispatchersRevenueTip || 'Ranks dispatchers/admins by revenue from completed orders. Bar length shows relative revenue share.'}
+                                    infoHandlers={analyticsInfoHandlers}
+                                />
+                            </View>
+                            <View style={styles.analyticsListColWide}>
+                                <AnalyticsListCard
+                                    title={TRANSLATIONS.analyticsTopByOrders || 'Top by Orders'}
+                                    items={analyticsDispatchers.topByOrders}
+                                    emptyLabel={TRANSLATIONS.emptyList || 'No data'}
+                                    onPress={() => setAnalyticsDetail({ type: 'topDispatchersOrders' })}
+                                    isDark={isDark}
+                                    actionLabel={TRANSLATIONS.view || 'View'}
+                                    infoText={TRANSLATIONS.analyticsTopDispatchersOrdersTip || 'Ranks dispatchers/admins by total handled orders. Bar length shows relative order volume.'}
+                                    infoHandlers={analyticsInfoHandlers}
+                                />
+                            </View>
+                        </View>
+
+                        <View style={[styles.analyticsVisualCard, styles.analyticsDispatcherCard, !isDark && styles.cardLight]}>
+                            <View style={styles.analyticsDispatcherHeader}>
+                                <View style={styles.analyticsTitleWithTip}>
+                                    <Text style={[styles.analyticsVisualTitle, !isDark && styles.textDark]}>
+                                        {TRANSLATIONS.analyticsDispatcherPerformance || 'Dispatcher Performance'}
+                                    </Text>
+                                    <InfoTip
+                                        text={TRANSLATIONS.analyticsDispatcherPerformanceTip || 'Summary for the selected dispatcher/admin. Status mix shows open/active/completed/canceled counts and share. Metrics: created=orders created by them; handled=orders currently assigned; transferred=orders moved between dispatchers; total amount=completed order value; commission=commission on completed orders.'}
+                                        isDark={isDark}
+                                        handlers={analyticsInfoHandlers}
+                                    />
+                                </View>
+                            </View>
+
+                            <View style={styles.analyticsStatusHeader}>
+                                <Text style={[styles.analyticsStatusTitle, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS.analyticsStatusMix || 'Status Mix'}
+                                </Text>
+                                <InfoTip
+                                    text={TRANSLATIONS.analyticsStatusMixTip || 'Shows how this dispatcher’s orders split by status. Counts are absolute; percentages show share of total.'}
+                                    isDark={isDark}
+                                    handlers={analyticsInfoHandlers}
+                                />
+                            </View>
                             <StatusStrip
                                 segments={[
-                                    { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: analyticsStats.statusBreakdown.open, color: '#38bdf8' },
-                                    { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: analyticsStats.statusBreakdown.active, color: '#3b82f6' },
-                                    { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: analyticsStats.statusBreakdown.completed, color: '#22c55e' },
-                                    { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: analyticsStats.statusBreakdown.canceled, color: '#ef4444' },
+                                    { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: dispatcherStatusBreakdown.open, color: '#38bdf8' },
+                                    { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: dispatcherStatusBreakdown.active, color: '#3b82f6' },
+                                    { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: dispatcherStatusBreakdown.completed, color: '#22c55e' },
+                                    { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: dispatcherStatusBreakdown.canceled, color: '#ef4444' },
                                 ]}
                                 isDark={isDark}
                             />
+
+                            <View style={styles.analyticsMetricGrid}>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsDispatcherTotalOrders || 'Total Orders'}
+                                        value={formatNumber(analyticsDispatcherStats.totalOrders)}
+                                        infoText={TRANSLATIONS.analyticsDispatcherTotalOrdersTip || 'All orders linked to this dispatcher in the selected range (created or handled).'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsDispatcherCreated || 'Created Orders'}
+                                        value={formatNumber(analyticsDispatcherStats.createdOrders)}
+                                        infoText={TRANSLATIONS.analyticsDispatcherCreatedTip || 'Orders originally created by this dispatcher/admin.'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsDispatcherHandled || 'Handled Orders'}
+                                        value={formatNumber(analyticsDispatcherStats.handledOrders)}
+                                        infoText={TRANSLATIONS.analyticsDispatcherHandledTip || 'Orders currently assigned to this dispatcher/admin.'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsDispatcherTransferred || 'Transferred Orders'}
+                                        value={formatNumber(analyticsDispatcherStats.transferredOrders)}
+                                        infoText={TRANSLATIONS.analyticsDispatcherTransferredTip || 'Orders moved between dispatchers where this dispatcher was involved.'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsDispatcherTotalAmount || 'Total Order Amount'}
+                                        value={formatMoney(analyticsDispatcherStats.totalAmount)}
+                                        infoText={TRANSLATIONS.analyticsDispatcherTotalAmountTip || 'Sum of completed/confirmed order amounts handled by this dispatcher.'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsDispatcherCommission || 'Commission Collected'}
+                                        value={formatMoney(analyticsDispatcherStats.commissionCollected)}
+                                        infoText={TRANSLATIONS.analyticsDispatcherCommissionTip || 'Commission from completed/confirmed orders handled by this dispatcher.'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                            </View>
+
+                            <View style={styles.analyticsTrendSection}>
+                                <View style={styles.analyticsTrendHeader}>
+                                    <Text style={[styles.analyticsTrendTitle, !isDark && styles.textDark]}>
+                                        {TRANSLATIONS.analyticsTrends || 'Trends'}
+                                    </Text>
+                                </View>
+                                <View style={styles.analyticsTrendCards}>
+                                    <View style={[styles.analyticsTrendCard, !isDark && styles.cardLight]}>
+                                        <View style={styles.analyticsTrendCardHeader}>
+                                            <Text style={styles.analyticsTrendCardTitle}>
+                                                {TRANSLATIONS.dispatcherStatsTrendCreated || 'Created trend'}
+                                            </Text>
+                                            <Text style={styles.analyticsTrendCardMeta}>
+                                                {(TRANSLATIONS.dispatcherStatsAvgPerDay || 'Avg/day')}: {dispatcherCreatedMeta.avg.toFixed(1)} · {(TRANSLATIONS.analyticsMax || 'Max')}: {formatNumber(dispatcherCreatedMeta.max)}
+                                            </Text>
+                                        </View>
+                                        {dispatcherCreatedMeta.max === 0
+                                            ? <Text style={styles.analyticsTrendEmptyText}>{TRANSLATIONS.analyticsEmpty || 'No activity in this period'}</Text>
+                                            : renderTrendDots(
+                                                dispatcherCreatedSeries,
+                                                dispatcherCreatedMeta.max,
+                                                '#3b82f6',
+                                                TRANSLATIONS.dispatcherStatsTrendCreated || 'Created trend',
+                                                dispatcherTrendWindow.start,
+                                                dispatcherTrendWindow.end,
+                                                dispatcherCreatedMeta.avg,
+                                                TRANSLATIONS.dispatcherStatsTooltipValue || 'Orders',
+                                                (val) => formatNumber(val)
+                                            )}
+                                    </View>
+                                    <View style={[styles.analyticsTrendCard, !isDark && styles.cardLight]}>
+                                        <View style={styles.analyticsTrendCardHeader}>
+                                            <Text style={styles.analyticsTrendCardTitle}>
+                                                {TRANSLATIONS.dispatcherStatsTrendHandled || 'Handled trend'}
+                                            </Text>
+                                            <Text style={styles.analyticsTrendCardMeta}>
+                                                {(TRANSLATIONS.dispatcherStatsAvgPerDay || 'Avg/day')}: {dispatcherHandledMeta.avg.toFixed(1)} · {(TRANSLATIONS.analyticsMax || 'Max')}: {formatNumber(dispatcherHandledMeta.max)}
+                                            </Text>
+                                        </View>
+                                        {dispatcherHandledMeta.max === 0
+                                            ? <Text style={styles.analyticsTrendEmptyText}>{TRANSLATIONS.analyticsEmpty || 'No activity in this period'}</Text>
+                                            : renderTrendDots(
+                                                dispatcherHandledSeries,
+                                                dispatcherHandledMeta.max,
+                                                '#22c55e',
+                                                TRANSLATIONS.dispatcherStatsTrendHandled || 'Handled trend',
+                                                dispatcherTrendWindow.start,
+                                                dispatcherTrendWindow.end,
+                                                dispatcherHandledMeta.avg,
+                                                TRANSLATIONS.dispatcherStatsTooltipValue || 'Orders',
+                                                (val) => formatNumber(val)
+                                            )}
+                                    </View>
+                                </View>
+                            </View>
                         </View>
-                    </View>
-                    <View style={{ width: listWidth }}>
-                        <View style={[styles.analyticsVisualCard, !isDark && styles.cardLight]}>
-                            <Text style={[styles.analyticsVisualTitle, !isDark && styles.textDark]}>
-                                {TRANSLATIONS.analyticsOrderFunnel || 'Order Funnel'}
-                            </Text>
-                            <FunnelBars
-                                steps={(analyticsLists.funnel || []).map(step => ({ label: step.label, count: step.count || 0 }))}
+                    </>
+                )}
+
+                {analyticsSection === 'masters' && (
+                    <>
+                        <View style={styles.analyticsListGrid}>
+                            <View style={styles.analyticsListColWide}>
+                                <AnalyticsListCard
+                                    title={TRANSLATIONS.analyticsTopByCompleted || 'Top by Completed Jobs'}
+                                    items={analyticsPeople.topByCompleted}
+                                    emptyLabel={TRANSLATIONS.emptyList || 'No data'}
+                                    onPress={() => setAnalyticsDetail({ type: 'topPerformersCompleted' })}
+                                    isDark={isDark}
+                                    actionLabel={TRANSLATIONS.view || 'View'}
+                                />
+                            </View>
+                            <View style={styles.analyticsListColWide}>
+                                <AnalyticsListCard
+                                    title={TRANSLATIONS.analyticsTopByRevenue || 'Top by Revenue'}
+                                    items={analyticsPeople.topByRevenue}
+                                    emptyLabel={TRANSLATIONS.emptyList || 'No data'}
+                                    onPress={() => setAnalyticsDetail({ type: 'topPerformersRevenue' })}
+                                    isDark={isDark}
+                                    actionLabel={TRANSLATIONS.view || 'View'}
+                                />
+                            </View>
+                        </View>
+
+                        <View style={[styles.analyticsVisualCard, styles.analyticsMasterCard, !isDark && styles.cardLight]}>
+                            <View style={styles.analyticsDispatcherHeader}>
+                                <View style={styles.analyticsTitleWithTip}>
+                                    <Text style={[styles.analyticsVisualTitle, !isDark && styles.textDark]}>
+                                        {TRANSLATIONS.analyticsMasterPerformance || 'Master Performance'}
+                                    </Text>
+                                    <InfoTip
+                                        text={TRANSLATIONS.analyticsMasterPerformanceTip || 'Summary for the selected master. Status mix shows open/active/completed/canceled counts and share. Metrics: total/active/completed/canceled orders plus revenue and average order value.'}
+                                        isDark={isDark}
+                                        handlers={analyticsInfoHandlers}
+                                    />
+                                </View>
+                            </View>
+
+                            <View style={styles.analyticsStatusHeader}>
+                                <Text style={[styles.analyticsStatusTitle, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS.analyticsStatusMix || 'Status Mix'}
+                                </Text>
+                                <InfoTip
+                                    text={TRANSLATIONS.analyticsMasterStatusMixTip || 'Shows how this master’s orders split by status. Counts are absolute; percentages show share of total.'}
+                                    isDark={isDark}
+                                    handlers={analyticsInfoHandlers}
+                                />
+                            </View>
+                            <StatusStrip
+                                segments={[
+                                    { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: masterStatusBreakdown.open, color: '#38bdf8' },
+                                    { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: masterStatusBreakdown.active, color: '#3b82f6' },
+                                    { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: masterStatusBreakdown.completed, color: '#22c55e' },
+                                    { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: masterStatusBreakdown.canceled, color: '#ef4444' },
+                                ]}
                                 isDark={isDark}
                             />
+
+                            <View style={styles.analyticsMetricGrid}>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsMasterTotalOrders || 'Total Orders'}
+                                        value={formatNumber(analyticsMasterStats.totalOrders)}
+                                        infoText={TRANSLATIONS.analyticsMasterTotalOrdersTip || 'All orders assigned to this master in the selected range.'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsMasterActiveJobs || 'Active Jobs'}
+                                        value={formatNumber(analyticsMasterStats.activeJobs)}
+                                        infoText={TRANSLATIONS.analyticsMasterActiveJobsTip || 'Orders currently in claimed/started work status for this master.'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsMasterCompleted || 'Completed Jobs'}
+                                        value={formatNumber(analyticsMasterStats.completedOrders)}
+                                        infoText={TRANSLATIONS.analyticsMasterCompletedTip || 'Orders completed or confirmed by this master.'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsMasterCanceled || 'Canceled Jobs'}
+                                        value={formatNumber(analyticsMasterStats.canceledOrders)}
+                                        infoText={TRANSLATIONS.analyticsMasterCanceledTip || 'Orders canceled while assigned to this master.'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsMasterTotalAmount || 'Total Revenue'}
+                                        value={formatMoney(analyticsMasterStats.totalAmount)}
+                                        infoText={TRANSLATIONS.analyticsMasterTotalAmountTip || 'Sum of completed order amounts for this master.'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={{ width: cardWidth }}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsMasterAvgOrderValue || 'Avg Order Value'}
+                                        value={formatMoney(analyticsMasterStats.avgOrderValue)}
+                                        infoText={TRANSLATIONS.analyticsMasterAvgOrderValueTip || 'Average value of completed orders for this master.'}
+                                        infoHandlers={analyticsInfoHandlers}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                            </View>
+
+                            <View style={styles.analyticsTrendSection}>
+                                <View style={styles.analyticsTrendHeader}>
+                                    <Text style={[styles.analyticsTrendTitle, !isDark && styles.textDark]}>
+                                        {TRANSLATIONS.analyticsTrends || 'Trends'}
+                                    </Text>
+                                </View>
+                                <View style={styles.analyticsTrendCards}>
+                                    <View style={[styles.analyticsTrendCard, !isDark && styles.cardLight]}>
+                                        <View style={styles.analyticsTrendCardHeader}>
+                                            <Text style={styles.analyticsTrendCardTitle}>
+                                                {TRANSLATIONS.analyticsMasterTrendCompleted || 'Completed trend'}
+                                            </Text>
+                                            <Text style={styles.analyticsTrendCardMeta}>
+                                                {(TRANSLATIONS.dispatcherStatsAvgPerDay || 'Avg/day')}: {masterCompletedMeta.avg.toFixed(1)} · {(TRANSLATIONS.analyticsMax || 'Max')}: {formatNumber(masterCompletedMeta.max)}
+                                            </Text>
+                                        </View>
+                                        {masterCompletedMeta.max === 0
+                                            ? <Text style={styles.analyticsTrendEmptyText}>{TRANSLATIONS.analyticsEmpty || 'No activity in this period'}</Text>
+                                            : renderTrendDots(
+                                                masterCompletedSeries,
+                                                masterCompletedMeta.max,
+                                                '#22c55e',
+                                                TRANSLATIONS.analyticsMasterTrendCompleted || 'Completed trend',
+                                                masterTrendWindow.start,
+                                                masterTrendWindow.end,
+                                                masterCompletedMeta.avg,
+                                                TRANSLATIONS.dispatcherStatsTooltipValue || 'Orders',
+                                                (val) => formatNumber(val)
+                                            )}
+                                    </View>
+                                    <View style={[styles.analyticsTrendCard, !isDark && styles.cardLight]}>
+                                        <View style={styles.analyticsTrendCardHeader}>
+                                            <Text style={styles.analyticsTrendCardTitle}>
+                                                {TRANSLATIONS.analyticsMasterTrendRevenue || 'Revenue trend'}
+                                            </Text>
+                                            <Text style={styles.analyticsTrendCardMeta}>
+                                                {(TRANSLATIONS.dispatcherStatsAvgPerDay || 'Avg/day')}: {formatMoney(masterRevenueMeta.avg)} {TRANSLATIONS.currency || 'som'} · {(TRANSLATIONS.analyticsMax || 'Max')}: {formatMoney(masterRevenueMeta.max)} {TRANSLATIONS.currency || 'som'}
+                                            </Text>
+                                        </View>
+                                        {masterRevenueMeta.max === 0
+                                            ? <Text style={styles.analyticsTrendEmptyText}>{TRANSLATIONS.analyticsEmpty || 'No activity in this period'}</Text>
+                                            : renderTrendDots(
+                                                masterRevenueSeries,
+                                                masterRevenueMeta.max,
+                                                '#f59e0b',
+                                                TRANSLATIONS.analyticsMasterTrendRevenue || 'Revenue trend',
+                                                masterTrendWindow.start,
+                                                masterTrendWindow.end,
+                                                masterRevenueMeta.avg,
+                                                TRANSLATIONS.analyticsRevenue || 'Revenue',
+                                                (val) => `${formatMoney(val)} ${TRANSLATIONS.currency || 'som'}`
+                                            )}
+                                    </View>
+                                </View>
+                            </View>
+                        </View>
+                    </>
+                )}
+
+                {analyticsSection === 'overview' && (
+                    <View style={styles.analyticsVisualGrid}>
+                        <View style={{ width: listWidth }}>
+                            <View style={[styles.analyticsVisualCard, !isDark && styles.cardLight]}>
+                                <Text style={[styles.analyticsVisualTitle, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS.analyticsStatusMix || 'Status Mix'}
+                                </Text>
+                                <StatusStrip
+                                    segments={[
+                                        { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: analyticsStats.statusBreakdown.open, color: '#38bdf8' },
+                                        { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: analyticsStats.statusBreakdown.active, color: '#3b82f6' },
+                                        { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: analyticsStats.statusBreakdown.completed, color: '#22c55e' },
+                                        { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: analyticsStats.statusBreakdown.canceled, color: '#ef4444' },
+                                    ]}
+                                    isDark={isDark}
+                                />
+                            </View>
                         </View>
                     </View>
-                </View>
+                )}
 
-                <View style={styles.analyticsMetricGrid}>
+                {analyticsSection === 'operations' && (
+                    <View style={styles.analyticsOperationsRow}>
+                        <View style={styles.analyticsOperationsStatus}>
+                            <View style={[styles.analyticsVisualCard, styles.analyticsOperationsStatusCard, !isDark && styles.cardLight]}>
+                                <Text style={[styles.analyticsVisualTitle, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS.analyticsStatusMix || 'Status Mix'}
+                                </Text>
+                                <StatusPie
+                                    size={190}
+                                    segments={[
+                                        { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: analyticsStats.statusBreakdown.open, color: '#38bdf8' },
+                                        { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: analyticsStats.statusBreakdown.active, color: '#3b82f6' },
+                                        { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: analyticsStats.statusBreakdown.completed, color: '#22c55e' },
+                                        { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: analyticsStats.statusBreakdown.canceled, color: '#ef4444' },
+                                    ]}
+                                    isDark={isDark}
+                                />
+                            </View>
+                        </View>
+                        <View style={styles.analyticsOperationsMetrics}>
+                            <View style={styles.analyticsOperationsMetricsGrid}>
+                                <View style={styles.analyticsOperationsMetricItem}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsInProgress || 'In Progress'}
+                                        value={formatNumber(analyticsStats.inProgress)}
+                                        subLabel={`${formatNumber(analyticsStats.startedCount)} ${TRANSLATIONS.analyticsStarted || 'started'}`}
+                                        onPress={() => openAnalyticsOrdersModal(TRANSLATIONS.analyticsInProgress || 'In Progress', o => ['claimed', 'started'].includes(normalizeStatus(o.status)))}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={styles.analyticsOperationsMetricItem}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsUrgentOrders || 'Urgent Orders'}
+                                        value={formatNumber(analyticsStats.urgentCount)}
+                                        subLabel={`${formatNumber(analyticsStats.emergencyCount)} ${TRANSLATIONS.urgencyEmergency || 'Emergency'}`}
+                                        onPress={() => setAnalyticsDetail({ type: 'urgencyMix' })}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={styles.analyticsOperationsMetricItem}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsAvailablePool || 'Available Pool'}
+                                        value={formatNumber(analyticsStats.availablePool)}
+                                        subLabel={`${formatNumber(analyticsStats.claimedCount)} ${TRANSLATIONS.analyticsClaimed || 'claimed'}`}
+                                        onPress={() => openAnalyticsOrdersModal(TRANSLATIONS.analyticsAvailablePool || 'Available Pool', o => ['placed', 'reopened'].includes(normalizeStatus(o.status)))}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={styles.analyticsOperationsMetricItem}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsOldestOpen || 'Oldest Open'}
+                                        value={analyticsStats.oldestOpenAge ? `${analyticsStats.oldestOpenAge.toFixed(1)}h` : '—'}
+                                        subLabel={`${TRANSLATIONS.analyticsAvgAge || 'Average Age'} ${analyticsStats.avgOpenAge ? `${analyticsStats.avgOpenAge.toFixed(1)}h` : '—'}`}
+                                        onPress={() => setAnalyticsDetail({ type: 'backlog' })}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={styles.analyticsOperationsMetricItem}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsServiceLevelRisk || 'Service Level Risk'}
+                                        value={formatNumber(analyticsStats.openOlder48h)}
+                                        subLabel={TRANSLATIONS.analyticsOver48h || 'open > 48h'}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                                <View style={styles.analyticsOperationsMetricItem}>
+                                    <AnalyticsMetricCard
+                                        label={TRANSLATIONS.analyticsReopened || 'Reopened'}
+                                        value={formatNumber(analyticsStats.reopenedCount)}
+                                        subLabel={`${formatPercent(analyticsStats.reopenRate)} ${TRANSLATIONS.analyticsReopenRate || 'reopen rate'}`}
+                                        isDark={isDark}
+                                    />
+                                </View>
+                            </View>
+                        </View>
+                    </View>
+                )}
+
+                {analyticsSection === 'financial' && (
+                    <View style={styles.analyticsRow}>
+                        <View style={styles.analyticsRowItem}>
+                            <View style={[styles.analyticsVisualCard, styles.analyticsPriceDistCard, !isDark && styles.cardLight]}>
+                                <View style={styles.analyticsPriceDistHeader}>
+                                    <View style={{ flex: 1 }}>
+                                        <View style={styles.analyticsTitleWithTip}>
+                                            <Text style={[styles.analyticsVisualTitle, !isDark && styles.textDark]}>
+                                                {TRANSLATIONS.analyticsPriceDistribution || 'Order Price Distribution'}
+                                            </Text>
+                                            <InfoTip
+                                                text={
+                                                    TRANSLATIONS.analyticsPriceDistributionTip
+                                                    || 'Distribution of order prices by time bucket. Box = P25–P75, line = median. Whiskers show P5–P95. Hover a bucket to see mean and spread.'
+                                                }
+                                                isDark={isDark}
+                                                handlers={analyticsInfoHandlers}
+                                            />
+                                        </View>
+                                        <Text style={[styles.analyticsPriceDistMeta, !isDark && styles.textSecondary]}>
+                                            {(TRANSLATIONS.analyticsPriceDistributionMetric || 'Metric')}: {TRANSLATIONS.analyticsPriceDistributionMetricPrice || 'Order price'}
+                                        </Text>
+                                    </View>
+                                    <View />
+                                </View>
+
+                                <View style={styles.analyticsPriceDistControlRow}>
+                                    <View style={styles.analyticsPriceDistControlGroup}>
+                                        <Text style={[styles.analyticsPriceDistControlLabel, !isDark && styles.textSecondary]}>
+                                            {TRANSLATIONS.analyticsPriceDistributionRange || 'Range'}
+                                        </Text>
+                                        <View style={styles.analyticsPriceDistChipRow}>
+                                            {priceDistRangeOptions.map(opt => {
+                                                const active = priceDistRange === opt.key;
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={`price-range-${opt.key}`}
+                                                        style={[
+                                                            styles.analyticsPriceDistChip,
+                                                            !isDark && styles.analyticsPriceDistChipLight,
+                                                            active && styles.analyticsPriceDistChipActive,
+                                                        ]}
+                                                        onPress={() => setPriceDistRange(opt.key)}
+                                                    >
+                                                        <Text
+                                                            style={[
+                                                                styles.analyticsPriceDistChipText,
+                                                                !isDark && styles.analyticsPriceDistChipTextLight,
+                                                                active && styles.analyticsPriceDistChipTextActive,
+                                                            ]}
+                                                        >
+                                                            {opt.label}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </View>
+                                    </View>
+                                    <View style={styles.analyticsPriceDistControlGroup}>
+                                        <Text style={[styles.analyticsPriceDistControlLabel, !isDark && styles.textSecondary]}>
+                                            {TRANSLATIONS.analyticsPriceDistributionGrouping || 'Grouping'}
+                                        </Text>
+                                        <View style={styles.analyticsPriceDistChipRow}>
+                                            {priceDistGroupingOptions.map(opt => {
+                                                const active = priceDistGrouping === opt.key;
+                                                const disabled = !allowedGroupings.includes(opt.key);
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={`price-group-${opt.key}`}
+                                                        style={[
+                                                            styles.analyticsPriceDistChip,
+                                                            !isDark && styles.analyticsPriceDistChipLight,
+                                                            active && styles.analyticsPriceDistChipActive,
+                                                            disabled && styles.analyticsPriceDistChipDisabled,
+                                                        ]}
+                                                        onPress={() => {
+                                                            if (!disabled) {
+                                                                setPriceDistGrouping(opt.key);
+                                                            }
+                                                        }}
+                                                        disabled={disabled}
+                                                    >
+                                                        <Text
+                                                            style={[
+                                                                styles.analyticsPriceDistChipText,
+                                                                !isDark && styles.analyticsPriceDistChipTextLight,
+                                                                active && styles.analyticsPriceDistChipTextActive,
+                                                                disabled && styles.analyticsPriceDistChipTextDisabled,
+                                                            ]}
+                                                        >
+                                                            {opt.label}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </View>
+                                    </View>
+                                    <View style={styles.analyticsPriceDistControlGroup}>
+                                        <Text style={[styles.analyticsPriceDistControlLabel, !isDark && styles.textSecondary]}>
+                                            {TRANSLATIONS.analyticsPriceDistributionScope || 'Scope'}
+                                        </Text>
+                                        <View style={styles.analyticsPriceDistChipRow}>
+                                            {priceDistScopeOptions.map(opt => {
+                                                const active = priceDistScope === opt.key;
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={`price-scope-${opt.key}`}
+                                                        style={[
+                                                            styles.analyticsPriceDistChip,
+                                                            !isDark && styles.analyticsPriceDistChipLight,
+                                                            active && styles.analyticsPriceDistChipActive,
+                                                        ]}
+                                                        onPress={() => setPriceDistScope(opt.key)}
+                                                    >
+                                                        <Text
+                                                            style={[
+                                                                styles.analyticsPriceDistChipText,
+                                                                !isDark && styles.analyticsPriceDistChipTextLight,
+                                                                active && styles.analyticsPriceDistChipTextActive,
+                                                            ]}
+                                                        >
+                                                            {opt.label}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </View>
+                                    </View>
+                                </View>
+                                {priceDistGroupingNotice ? (
+                                    <Text style={[styles.analyticsPriceDistNotice, !isDark && styles.textSecondary]}>
+                                        {priceDistGroupingNotice}
+                                    </Text>
+                                ) : null}
+
+                                <View style={styles.analyticsPriceDistBody}>
+                                    <View
+                                        style={styles.analyticsPriceDistChartWrap}
+                                        onLayout={(event) => {
+                                            const nextWidth = Math.round(event?.nativeEvent?.layout?.width || 0);
+                                            setPriceDistChartWidth(prev => (prev === nextWidth ? prev : nextWidth));
+                                        }}
+                                    >
+                                        <BoxPlotChart
+                                            buckets={priceDistData?.buckets || []}
+                                            width={priceDistChartWidth}
+                                            height={220}
+                                            isDark={isDark}
+                                            p90={priceDistSummary?.p90 || 0}
+                                            yLabel={priceDistYAxisLabel}
+                                            yTicks={priceDistTicks}
+                                            yHighlights={{
+                                                max: priceDistSummary?.max,
+                                                mean: priceDistSummary?.mean,
+                                                p75: priceDistSummary?.p75,
+                                                p50: priceDistSummary?.p50,
+                                                p25: priceDistSummary?.p25,
+                                                min: priceDistSummary?.min,
+                                            }}
+                                            onBucketPress={handlePriceDistPress}
+                                            onBucketHover={handlePriceDistHover}
+                                            onBucketMove={handlePriceDistMove}
+                                            onBucketLeave={handlePriceDistLeave}
+                                        />
+                                        {priceDistSummary?.n ? (
+                                            <View>
+                                                <Text style={[styles.analyticsPriceDistNote, !isDark && styles.textSecondary]}>
+                                                    {TRANSLATIONS.analyticsPriceDistributionWhiskers || 'Whiskers show P5–P95'}
+                                                </Text>
+                                            </View>
+                                        ) : (
+                                            <Text style={[styles.analyticsTrendEmptyText, !isDark && styles.textSecondary]}>
+                                                {TRANSLATIONS.analyticsEmpty || 'No activity in this period'}
+                                            </Text>
+                                        )}
+                                    </View>
+
+                                    <View style={[styles.analyticsPriceDistSummary, !isDark && styles.analyticsPriceDistSummaryLight]}>
+                                        <Text style={[styles.analyticsPriceDistSummaryTitle, !isDark && styles.textDark]}>
+                                            {TRANSLATIONS.analyticsPriceDistributionSummary || 'Summary'}
+                                        </Text>
+                                        <View style={styles.analyticsPriceDistStatsGrid}>
+                                            {priceDistStatItems.map(item => (
+                                                <View
+                                                    key={item.key}
+                                                    style={[
+                                                        styles.analyticsPriceDistStat,
+                                                        item.primary && styles.analyticsPriceDistStatPrimary,
+                                                        !isDark && styles.analyticsPriceDistStatLight,
+                                                        item.primary && !isDark && styles.analyticsPriceDistStatPrimaryLight,
+                                                    ]}
+                                                >
+                                                    <Text style={[styles.analyticsPriceDistStatLabel, !isDark && styles.textSecondary]}>
+                                                        {item.label}
+                                                    </Text>
+                                                    <Text style={[
+                                                        styles.analyticsPriceDistStatValue,
+                                                        item.primary && styles.analyticsPriceDistStatValuePrimary,
+                                                        item.primary && !isDark && styles.analyticsPriceDistStatValuePrimaryLight,
+                                                        !item.primary && !isDark && styles.textDark,
+                                                    ]}>
+                                                        {item.value}
+                                                    </Text>
+                                                </View>
+                                            ))}
+                                        </View>
+                                    </View>
+                                </View>
+                            </View>
+                        </View>
+                    </View>
+                )}
+
+                {analyticsSection !== 'operations' && analyticsSection !== 'financial' && (
+                    <View style={styles.analyticsMetricGrid}>
                     {analyticsSection === 'overview' && (
                         <>
                             <View style={{ width: cardWidth }}>
@@ -2482,230 +4755,61 @@ export default function AdminDashboard({ navigation }) {
                         </>
                     )}
 
-                    {analyticsSection === 'operations' && (
-                        <>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsAvailablePool || 'Available Pool'}
-                                    value={formatNumber(analyticsStats.availablePool)}
-                                    subLabel={`${formatNumber(analyticsStats.claimedCount)} ${TRANSLATIONS.analyticsClaimed || 'claimed'}`}
-                                    onPress={() => openAnalyticsOrdersModal(TRANSLATIONS.analyticsAvailablePool || 'Available Pool', o => ['placed', 'reopened'].includes(normalizeStatus(o.status)))}
+
+
+                    </View>
+                )}
+
+                {analyticsSection !== 'dispatchers' && analyticsSection !== 'masters' && (
+                    <>
+                        <View style={styles.analyticsRow}>
+                            <View style={styles.analyticsRowItem}>
+                                <AnalyticsListCard
+                                    title={TRANSLATIONS.analyticsTopAreas || 'Top Areas'}
+                                    items={analyticsLists.topAreas}
+                                    emptyLabel={TRANSLATIONS.emptyList || 'No area data'}
+                                    onPress={() => setAnalyticsDetail({ type: 'topAreas' })}
                                     isDark={isDark}
+                                    actionLabel={TRANSLATIONS.view || 'View'}
                                 />
                             </View>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsInProgress || 'In Progress'}
-                                    value={formatNumber(analyticsStats.inProgress)}
-                                    subLabel={`${formatNumber(analyticsStats.startedCount)} ${TRANSLATIONS.analyticsStarted || 'started'}`}
-                                    onPress={() => openAnalyticsOrdersModal(TRANSLATIONS.analyticsInProgress || 'In Progress', o => ['claimed', 'started'].includes(normalizeStatus(o.status)))}
+                            <View style={styles.analyticsRowItem}>
+                                <AnalyticsListCard
+                                    title={TRANSLATIONS.analyticsTopServices || 'Top Services'}
+                                    items={analyticsLists.topServices}
+                                    emptyLabel={TRANSLATIONS.emptyList || 'No service data'}
+                                    onPress={() => setAnalyticsDetail({ type: 'topServices' })}
                                     isDark={isDark}
+                                    actionLabel={TRANSLATIONS.view || 'View'}
                                 />
                             </View>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsOldestOpen || 'Oldest Open'}
-                                    value={analyticsStats.oldestOpenAge ? `${analyticsStats.oldestOpenAge.toFixed(1)}h` : '—'}
-                                    subLabel={`${TRANSLATIONS.analyticsAvgAge || 'Average Age'} ${analyticsStats.avgOpenAge ? `${analyticsStats.avgOpenAge.toFixed(1)}h` : '—'}`}
-                                    onPress={() => setAnalyticsDetail({ type: 'backlog' })}
-                                    isDark={isDark}
-                                />
-                            </View>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsUrgentOrders || 'Urgent Orders'}
-                                    value={formatNumber(analyticsStats.urgentCount)}
-                                    subLabel={`${formatNumber(analyticsStats.emergencyCount)} ${TRANSLATIONS.urgencyEmergency || 'Emergency'}`}
+                        </View>
+                        <View style={styles.analyticsRow}>
+                            <View style={styles.analyticsRowItem}>
+                                <AnalyticsListCard
+                                    title={TRANSLATIONS.analyticsUrgencyMix || 'Urgency Mix'}
+                                    items={analyticsLists.urgencyMix}
+                                    emptyLabel={TRANSLATIONS.emptyList || 'No urgency data'}
                                     onPress={() => setAnalyticsDetail({ type: 'urgencyMix' })}
                                     isDark={isDark}
+                                    actionLabel={TRANSLATIONS.view || 'View'}
                                 />
                             </View>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsServiceLevelRisk || 'Service Level Risk'}
-                                    value={formatNumber(analyticsStats.openOlder48h)}
-                                    subLabel={TRANSLATIONS.analyticsOver48h || 'open > 48h'}
-                                    isDark={isDark}
-                                />
-                            </View>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsReopened || 'Reopened'}
-                                    value={formatNumber(analyticsStats.reopenedCount)}
-                                    subLabel={`${formatPercent(analyticsStats.reopenRate)} ${TRANSLATIONS.analyticsReopenRate || 'reopen rate'}`}
-                                    isDark={isDark}
-                                />
-                            </View>
-                        </>
-                    )}
-
-                    {analyticsSection === 'financial' && (
-                        <>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsGMVFull || 'Gross Merchandise Value (GMV)'}
-                                    value={formatMoney(analyticsStats.gmv)}
-                                    subLabel={`${TRANSLATIONS.analyticsAvgOrderValue || 'Average Order Value'} ${formatMoney(analyticsStats.avgTicket)}`}
-                                    isDark={isDark}
-                                />
-                            </View>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsCommissionCollectedFull || 'Commission Collected'}
-                                    value={formatMoney(analyticsStats.commissionCollected)}
-                                    subLabel={`${TRANSLATIONS.analyticsOutstandingCommission || 'Outstanding Commission'} ${formatMoney(analyticsStats.commissionOutstanding)}`}
-                                    isDark={isDark}
-                                />
-                            </View>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsTotalBalances || 'Total Balances'}
-                                    value={formatMoney(analyticsStats.totalBalances)}
-                                    subLabel={`${analyticsStats.lowBalanceCount} ${TRANSLATIONS.analyticsLowBalance || 'low balance'}`}
-                                    isDark={isDark}
-                                />
-                            </View>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsCommissionRate || 'Commission Rate'}
-                                    value={formatPercent(analyticsDailySeries.commissionRate || 0)}
-                                    subLabel={TRANSLATIONS.analyticsPlatformRate || 'Platform rate'}
-                                    isDark={isDark}
-                                />
-                            </View>
-                        </>
-                    )}
-
-                    {analyticsSection === 'quality' && (
-                        <>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsCancelRate || 'Cancel Rate'}
-                                    value={formatPercent(analyticsStats.cancelRate)}
-                                    subLabel={`${formatNumber(analyticsStats.canceledOrders)} ${TRANSLATIONS.analyticsCanceled || 'canceled'}`}
+                            <View style={styles.analyticsRowItem}>
+                                <AnalyticsListCard
+                                    title={TRANSLATIONS.analyticsCancelReasons || 'Cancellation Reasons'}
+                                    items={analyticsLists.cancelReasons}
+                                    emptyLabel={TRANSLATIONS.emptyList || 'No cancellations'}
                                     onPress={() => setAnalyticsDetail({ type: 'cancelReasons' })}
                                     isDark={isDark}
-                                />
-                            </View>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsCompletionRate || 'Completion Rate'}
-                                    value={formatPercent(analyticsStats.completionRate)}
-                                    subLabel={`${formatNumber(analyticsStats.completedOrders)} ${TRANSLATIONS.analyticsCompleted || 'completed'}`}
-                                    isDark={isDark}
-                                />
-                            </View>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsRepeatClients || 'Repeat Clients'}
-                                    value={formatPercent(analyticsStats.repeatRate)}
-                                    subLabel={`${formatNumber(analyticsStats.repeatClients)} ${TRANSLATIONS.analyticsClients || 'clients'}`}
-                                    isDark={isDark}
-                                />
-                            </View>
-                            <View style={{ width: cardWidth }}>
-                                <AnalyticsMetricCard
-                                    label={TRANSLATIONS.analyticsReopenRate || 'Reopen Rate'}
-                                    value={formatPercent(analyticsStats.reopenRate)}
-                                    subLabel={`${formatNumber(analyticsStats.reopenedCount)} ${TRANSLATIONS.analyticsReopened || 'reopened'}`}
-                                    isDark={isDark}
-                                />
-                            </View>
-                        </>
-                    )}
-
-                    {analyticsSection === 'people' && (
-                        <>
-                            <View style={{ width: listWidth }}>
-                                <AnalyticsListCard
-                                    title={TRANSLATIONS.analyticsTopByCompleted || 'Top by Completed Jobs'}
-                                    items={analyticsPeople.topByCompleted}
-                                    emptyLabel={TRANSLATIONS.emptyList || 'No data'}
-                                    onPress={() => setAnalyticsDetail({ type: 'topPerformersCompleted' })}
-                                    isDark={isDark}
                                     actionLabel={TRANSLATIONS.view || 'View'}
                                 />
                             </View>
-                            <View style={{ width: listWidth }}>
-                                <AnalyticsListCard
-                                    title={TRANSLATIONS.analyticsTopByRevenue || 'Top by Revenue'}
-                                    items={analyticsPeople.topByRevenue}
-                                    emptyLabel={TRANSLATIONS.emptyList || 'No data'}
-                                    onPress={() => setAnalyticsDetail({ type: 'topPerformersRevenue' })}
-                                    isDark={isDark}
-                                    actionLabel={TRANSLATIONS.view || 'View'}
-                                />
-                            </View>
-                        </>
-                    )}
-                </View>
-
-                {analyticsSection === 'financial' && (
-                    <View style={styles.analyticsVisualGrid}>
-                        <View style={{ width: listWidth }}>
-                            <View style={[styles.analyticsVisualCard, !isDark && styles.cardLight]}>
-                                <Text style={[styles.analyticsVisualTitle, !isDark && styles.textDark]}>
-                                    {TRANSLATIONS.analyticsGMVvsCommission || 'Gross Merchandise Value vs Commission'}
-                                </Text>
-                                <DualMiniBars
-                                    seriesA={analyticsDailySeries.revenueSeries}
-                                    seriesB={analyticsDailySeries.commissionSeries}
-                                    isDark={isDark}
-                                />
-                                <Text style={[styles.analyticsTrendHint, !isDark && styles.textSecondary]}>
-                                    {TRANSLATIONS.analyticsLast7d || 'Last 7 days'}
-                                </Text>
-                            </View>
                         </View>
-                    </View>
+                    </>
                 )}
 
-                {analyticsSection !== 'people' && (
-                    <View style={styles.analyticsListGrid}>
-                        <View style={{ width: listWidth }}>
-                            <AnalyticsListCard
-                                title={TRANSLATIONS.analyticsTopAreas || 'Top Areas'}
-                                items={analyticsLists.topAreas}
-                                emptyLabel={TRANSLATIONS.emptyList || 'No area data'}
-                                onPress={() => setAnalyticsDetail({ type: 'topAreas' })}
-                                isDark={isDark}
-                                actionLabel={TRANSLATIONS.view || 'View'}
-                            />
-                        </View>
-                        <View style={{ width: listWidth }}>
-                            <AnalyticsListCard
-                                title={TRANSLATIONS.analyticsTopServices || 'Top Services'}
-                                items={analyticsLists.topServices}
-                                emptyLabel={TRANSLATIONS.emptyList || 'No service data'}
-                                onPress={() => setAnalyticsDetail({ type: 'topServices' })}
-                                isDark={isDark}
-                                actionLabel={TRANSLATIONS.view || 'View'}
-                            />
-                        </View>
-                        <View style={{ width: listWidth }}>
-                            <AnalyticsListCard
-                                title={TRANSLATIONS.analyticsUrgencyMix || 'Urgency Mix'}
-                                items={analyticsLists.urgencyMix}
-                                emptyLabel={TRANSLATIONS.emptyList || 'No urgency data'}
-                                onPress={() => setAnalyticsDetail({ type: 'urgencyMix' })}
-                                isDark={isDark}
-                                actionLabel={TRANSLATIONS.view || 'View'}
-                            />
-                        </View>
-                        <View style={{ width: listWidth }}>
-                            <AnalyticsListCard
-                                title={TRANSLATIONS.analyticsCancelReasons || 'Cancellation Reasons'}
-                                items={analyticsLists.cancelReasons}
-                                emptyLabel={TRANSLATIONS.emptyList || 'No cancellations'}
-                                onPress={() => setAnalyticsDetail({ type: 'cancelReasons' })}
-                                isDark={isDark}
-                                actionLabel={TRANSLATIONS.view || 'View'}
-                            />
-                        </View>
-                    </View>
-                )}
-
-                <View style={{ height: 100 }} />
+                <View style={{ height: 0 }} />
 
                 {analyticsDetail.type && (
                     <Modal visible transparent animationType="fade" onRequestClose={() => setAnalyticsDetail({ type: null })}>
@@ -2753,6 +4857,148 @@ export default function AdminDashboard({ navigation }) {
                         </View>
                     </Modal>
                 )}
+
+                {analyticsTooltip && (
+                    <View
+                        style={[
+                            styles.analyticsTooltip,
+                            !isDark && styles.analyticsTooltipLight,
+                            analyticsTooltip?.x != null && analyticsTooltip?.y != null
+                                ? (() => {
+                                    if (Platform.OS !== 'web') {
+                                        return { left: 16, right: 16, bottom: 16 };
+                                    }
+                                    const tooltipW = 240;
+                                    const tooltipH = 120;
+                                    const padding = 12;
+                                    const viewportW = typeof window !== 'undefined' ? window.innerWidth : SCREEN_WIDTH;
+                                    const viewportH = typeof window !== 'undefined' ? window.innerHeight : 600;
+                                    let left = analyticsTooltip.x + 12;
+                                    let top = analyticsTooltip.y + 12;
+                                    if (left + tooltipW + padding > viewportW) {
+                                        left = analyticsTooltip.x - tooltipW - 12;
+                                    }
+                                    if (top + tooltipH + padding > viewportH) {
+                                        top = analyticsTooltip.y - tooltipH - 12;
+                                    }
+                                    left = Math.max(padding, Math.min(left, viewportW - tooltipW - padding));
+                                    top = Math.max(padding, Math.min(top, viewportH - tooltipH - padding));
+                                    return { position: 'fixed', left, top, width: tooltipW };
+                                })()
+                                : { right: 16, bottom: 16 }
+                        ]}
+                        pointerEvents="none"
+                    >
+                        <Text style={[styles.analyticsTooltipText, !isDark && styles.textDark]}>
+                            {analyticsTooltip.text}
+                        </Text>
+                    </View>
+                )}
+
+                {analyticsTrendTooltip && (
+                    <View
+                        style={[
+                            styles.analyticsTrendTooltip,
+                            !isDark && styles.analyticsTrendTooltipLight,
+                            analyticsTrendTooltip?.x != null && analyticsTrendTooltip?.y != null
+                                ? (() => {
+                                    if (Platform.OS !== 'web') {
+                                        return { left: 16, right: 16, bottom: 16 };
+                                    }
+                                    const tooltipW = 220;
+                                    const tooltipH = 120;
+                                    const padding = 12;
+                                    const viewportW = typeof window !== 'undefined' ? window.innerWidth : SCREEN_WIDTH;
+                                    const viewportH = typeof window !== 'undefined' ? window.innerHeight : 600;
+                                    let left = analyticsTrendTooltip.x + 12;
+                                    let top = analyticsTrendTooltip.y + 12;
+                                    if (left + tooltipW + padding > viewportW) {
+                                        left = analyticsTrendTooltip.x - tooltipW - 12;
+                                    }
+                                    if (top + tooltipH + padding > viewportH) {
+                                        top = analyticsTrendTooltip.y - tooltipH - 12;
+                                    }
+                                    left = Math.max(padding, Math.min(left, viewportW - tooltipW - padding));
+                                    top = Math.max(padding, Math.min(top, viewportH - tooltipH - padding));
+                                    return { position: 'fixed', left, top, width: tooltipW };
+                                })()
+                                : { right: 16, bottom: 16 }
+                        ]}
+                        pointerEvents="none"
+                    >
+                        <Text style={[styles.analyticsTrendTooltipTitle, !isDark && styles.textDark]}>
+                            {analyticsTrendTooltip.title}
+                        </Text>
+                        <Text style={[styles.analyticsTrendTooltipText, !isDark && styles.textSecondary]}>
+                            {(TRANSLATIONS.dispatcherStatsTooltipDate || 'Date')}: {formatShortDate(analyticsTrendTooltip.date, analyticsLocale)}
+                        </Text>
+                        <Text style={[styles.analyticsTrendTooltipText, !isDark && styles.textSecondary]}>
+                            {(analyticsTrendTooltip.valueLabel || TRANSLATIONS.dispatcherStatsTooltipValue || 'Value')}: {analyticsTrendTooltip.value}
+                        </Text>
+                    </View>
+                )}
+
+                {priceDistTooltip && (
+                    <View
+                        style={[
+                            styles.analyticsPriceDistTooltip,
+                            !isDark && styles.analyticsPriceDistTooltipLight,
+                            priceDistTooltip?.x != null && priceDistTooltip?.y != null
+                                ? (() => {
+                                    if (Platform.OS !== 'web') {
+                                        return { left: 16, right: 16, bottom: 16 };
+                                    }
+                                    const tooltipW = 240;
+                                    const tooltipH = 180;
+                                    const padding = 12;
+                                    const viewportW = typeof window !== 'undefined' ? window.innerWidth : SCREEN_WIDTH;
+                                    const viewportH = typeof window !== 'undefined' ? window.innerHeight : 600;
+                                    let left = priceDistTooltip.x + 12;
+                                    let top = priceDistTooltip.y + 12;
+                                    if (left + tooltipW + padding > viewportW) {
+                                        left = priceDistTooltip.x - tooltipW - 12;
+                                    }
+                                    if (top + tooltipH + padding > viewportH) {
+                                        top = priceDistTooltip.y - tooltipH - 12;
+                                    }
+                                    left = Math.max(padding, Math.min(left, viewportW - tooltipW - padding));
+                                    top = Math.max(padding, Math.min(top, viewportH - tooltipH - padding));
+                                    return { position: 'fixed', left, top, width: tooltipW };
+                                })()
+                                : { right: 16, bottom: 16 }
+                        ]}
+                        pointerEvents="none"
+                    >
+                        <Text style={[styles.analyticsPriceDistTooltipTitle, !isDark && styles.textDark]}>
+                            {priceDistTooltip.title}
+                        </Text>
+                        {[
+                            { label: TRANSLATIONS.analyticsPriceDistributionN || 'N', value: formatNumber(priceDistTooltip.n) },
+                            { label: TRANSLATIONS.analyticsPriceDistributionMin || 'Min', value: formatMoneyCurrency(priceDistTooltip.min) },
+                            { label: TRANSLATIONS.analyticsPriceDistributionP25 || 'P25', value: formatMoneyCurrency(priceDistTooltip.p25) },
+                            { label: TRANSLATIONS.analyticsPriceDistributionMedian || 'Median', value: formatMoneyCurrency(priceDistTooltip.p50) },
+                            { label: TRANSLATIONS.analyticsPriceDistributionP75 || 'P75', value: formatMoneyCurrency(priceDistTooltip.p75) },
+                            { label: TRANSLATIONS.analyticsPriceDistributionMax || 'Max', value: formatMoneyCurrency(priceDistTooltip.max) },
+                            { label: TRANSLATIONS.analyticsPriceDistributionMean || 'Mean', value: formatMoneyCurrency(priceDistTooltip.mean) },
+                            { label: TRANSLATIONS.analyticsPriceDistributionStd || 'STD', value: formatMoneyCurrency(priceDistTooltip.std) },
+                            { label: TRANSLATIONS.analyticsPriceDistributionP90 || 'P90', value: formatMoneyCurrency(priceDistTooltip.p90) },
+                        ].map(row => (
+                            <View key={row.label} style={styles.analyticsPriceDistTooltipRow}>
+                                <Text style={[styles.analyticsPriceDistTooltipLabel, !isDark && styles.textSecondary]}>
+                                    {row.label}
+                                </Text>
+                                <Text style={[styles.analyticsPriceDistTooltipValue, !isDark && styles.textDark]}>
+                                    {row.value}
+                                </Text>
+                            </View>
+                        ))}
+                        {priceDistTooltip.smallSample ? (
+                            <Text style={[styles.analyticsPriceDistTooltipNote, !isDark && styles.textSecondary]}>
+                                {TRANSLATIONS.analyticsPriceDistributionSmallSample || 'Low sample (N<5)'}
+                            </Text>
+                        ) : null}
+                    </View>
+                )}
             </ScrollView>
         );
     };
@@ -2787,8 +5033,9 @@ export default function AdminDashboard({ navigation }) {
         setStatModalVisible(true);
     };
 
-    const openAnalyticsOrdersModal = (title, predicate) => {
-        const list = predicate ? analyticsOrders.filter(predicate) : analyticsOrders;
+    const openAnalyticsOrdersModal = (title, predicate, listOverride) => {
+        const baseList = listOverride || analyticsOrders;
+        const list = predicate ? baseList.filter(predicate) : baseList;
         setStatModalTitle(title);
         setStatFilteredOrders(list);
         setStatModalVisible(true);
@@ -2853,8 +5100,8 @@ export default function AdminDashboard({ navigation }) {
                         </TouchableOpacity>
                     </View>
                     <ScrollView style={styles.pickerScroll}>
-                        {pickerModal.options.map(opt => (
-                            <TouchableOpacity key={opt.id} style={[styles.pickerOption, pickerModal.value === opt.id && styles.pickerOptionActive]}
+                        {pickerModal.options.map((opt, idx) => (
+                            <TouchableOpacity key={`${opt.id}-${idx}`} style={[styles.pickerOption, pickerModal.value === opt.id && styles.pickerOptionActive]}
                                 onPress={() => {
                                     if (pickerModal.onChange) pickerModal.onChange(opt.id);
                                     setPickerModal(prev => ({ ...prev, visible: false }));
@@ -3184,6 +5431,15 @@ export default function AdminDashboard({ navigation }) {
                 {/* Filters */}
                 {renderFilters()}
 
+                <View style={styles.paginationTopRow}>
+                    <Pagination
+                        currentPage={queuePage}
+                        totalPages={totalPages}
+                        onPageChange={setQueuePage}
+                        className={styles.paginationTopCompact}
+                    />
+                </View>
+
                 <FlatList
                     data={paginatedOrders}
                     keyExtractor={item => String(item.id)}
@@ -3193,13 +5449,6 @@ export default function AdminDashboard({ navigation }) {
                     contentContainerStyle={styles.listContent}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={isDark ? "#3b82f6" : "#0f172a"} />}
                     ListEmptyComponent={<View style={styles.empty}><Text style={[styles.emptyText, !isDark && styles.textSecondary]}>{TRANSLATIONS.emptyList || 'No orders found'}</Text></View>}
-                    ListFooterComponent={
-                        <Pagination
-                            currentPage={queuePage}
-                            totalPages={totalPages}
-                            onPageChange={setQueuePage}
-                        />
-                    }
                 />
             </View>
         );
@@ -3214,6 +5463,14 @@ export default function AdminDashboard({ navigation }) {
         return (
             <View style={{ flex: 1 }}>
                 {renderSearchBar()}
+                <View style={styles.paginationTopRow}>
+                    <Pagination
+                        currentPage={currentPage}
+                        totalPages={Math.ceil(filtered.length / itemsPerPage)}
+                        onPageChange={setCurrentPage}
+                        className={styles.paginationTopCompact}
+                    />
+                </View>
                 <FlatList
                     data={paginated}
                     keyExtractor={item => String(item.id)}
@@ -3221,27 +5478,36 @@ export default function AdminDashboard({ navigation }) {
                     ListEmptyComponent={<Text style={{ color: '#64748b', textAlign: 'center', marginTop: 20 }}>{TRANSLATIONS.noMastersFound || 'No masters found'}</Text>}
                     renderItem={({ item }) => (
                         <View style={[styles.listItemCard, !isDark && styles.listItemCardLight]}>
-                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <View style={styles.peopleRow}>
                                 <TouchableOpacity
-                                    style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}
+                                    style={styles.peopleLeft}
                                     onPress={() => setDetailsPerson({ ...item, type: 'master' })}
                                 >
                                     <View style={[styles.avatarCircle, { backgroundColor: item.is_verified ? '#22c55e' : '#64748b' }]}>
                                         <Text style={{ color: '#fff' }}>{item.full_name?.charAt(0)}</Text>
                                     </View>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{item.full_name}</Text>
-                                        <Text style={styles.itemSubtitle}>{item.phone}</Text>
+                                    <View style={styles.peopleInfo}>
+                                        <Text style={[styles.itemTitle, !isDark && styles.textDark]} numberOfLines={1}>{item.full_name}</Text>
+                                        <Text style={styles.itemSubtitle} numberOfLines={1}>{item.phone}</Text>
                                     </View>
                                 </TouchableOpacity>
-                                <View style={{ alignItems: 'flex-end' }}>
-                                    <View style={{ marginBottom: 6, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderRadius: 4, borderWidth: 1, borderColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)' }}>
-                                        <Text style={{ fontSize: 11, color: (item.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '600' }}>
-                                            {TRANSLATIONS.prepaidBalance || 'Balance'}: {item.prepaid_balance || 0} ???
+                                <View style={styles.peopleRight}>
+                                    <View style={[
+                                        styles.peopleBadge,
+                                        {
+                                            backgroundColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                                            borderColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'
+                                        }
+                                    ]}>
+                                        <Text style={[
+                                            styles.peopleBadgeText,
+                                            { color: (item.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444' }
+                                        ]}>
+                                            {TRANSLATIONS.prepaidBalance || 'Balance'}: {item.prepaid_balance || 0} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
                                         </Text>
                                     </View>
 
-                                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                                    <View style={styles.peopleActions}>
                                         <TouchableOpacity
                                             onPress={() => { setSelectedMaster(item); setShowBalanceModal(true); }}
                                             style={[styles.miniActionBtn, { backgroundColor: 'rgba(59,130,246,0.1)', borderWidth: 1, borderColor: 'rgba(59,130,246,0.2)' }]}
@@ -3269,13 +5535,6 @@ export default function AdminDashboard({ navigation }) {
                             </View>
                         </View>
                     )}
-                    ListFooterComponent={
-                        <Pagination
-                            currentPage={currentPage}
-                            totalPages={Math.ceil(filtered.length / itemsPerPage)}
-                            onPageChange={setCurrentPage}
-                        />
-                    }
                 />
             </View>
         );
@@ -3292,6 +5551,14 @@ export default function AdminDashboard({ navigation }) {
         return (
             <View style={{ flex: 1 }}>
                 {renderSearchBar()}
+                <View style={styles.paginationTopRow}>
+                    <Pagination
+                        currentPage={currentPage}
+                        totalPages={Math.ceil(filtered.length / itemsPerPage)}
+                        onPageChange={setCurrentPage}
+                        className={styles.paginationTopCompact}
+                    />
+                </View>
                 <FlatList
                     data={paginated}
                     keyExtractor={item => String(item.id)}
@@ -3299,26 +5566,35 @@ export default function AdminDashboard({ navigation }) {
                     ListEmptyComponent={<Text style={{ color: '#64748b', textAlign: 'center', marginTop: 20 }}>{TRANSLATIONS.noDispatchersFound || 'No dispatchers found'}</Text>}
                     renderItem={({ item }) => (
                         <View style={[styles.listItemCard, !isDark && styles.listItemCardLight]}>
-                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <View style={styles.peopleRow}>
                                 <TouchableOpacity
-                                    style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}
+                                    style={styles.peopleLeft}
                                     onPress={() => setDetailsPerson({ ...item, type: 'dispatcher' })}
                                 >
                                     <View style={[styles.avatarCircle, { backgroundColor: item.is_active ? '#3b82f6' : '#64748b' }]}>
                                         <Text style={{ color: '#fff' }}>{item.full_name?.charAt(0)}</Text>
                                     </View>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{item.full_name}</Text>
-                                        <Text style={styles.itemSubtitle}>{item.phone || item.email}</Text>
+                                    <View style={styles.peopleInfo}>
+                                        <Text style={[styles.itemTitle, !isDark && styles.textDark]} numberOfLines={1}>{item.full_name}</Text>
+                                        <Text style={styles.itemSubtitle} numberOfLines={1}>{item.phone || item.email}</Text>
                                     </View>
                                 </TouchableOpacity>
-                                <View style={{ alignItems: 'flex-end' }}>
-                                    <View style={{ marginBottom: 6, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: item.is_active ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderRadius: 4, borderWidth: 1, borderColor: item.is_active ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)' }}>
-                                        <Text style={{ fontSize: 11, color: item.is_active ? '#22c55e' : '#ef4444', fontWeight: '600' }}>
+                                <View style={styles.peopleRight}>
+                                    <View style={[
+                                        styles.peopleBadge,
+                                        {
+                                            backgroundColor: item.is_active ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                                            borderColor: item.is_active ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'
+                                        }
+                                    ]}>
+                                        <Text style={[
+                                            styles.peopleBadgeText,
+                                            { color: item.is_active ? '#22c55e' : '#ef4444' }
+                                        ]}>
                                             {item.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
                                         </Text>
                                     </View>
-                                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                                    <View style={styles.peopleActions}>
                                         <TouchableOpacity
                                             onPress={() => setDetailsPerson({ ...item, type: 'dispatcher' })}
                                             style={[styles.miniActionBtn, { backgroundColor: 'rgba(139,92,246,0.1)', borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' }]}
@@ -3338,13 +5614,6 @@ export default function AdminDashboard({ navigation }) {
                             </View>
                         </View>
                     )}
-                    ListFooterComponent={
-                        <Pagination
-                            currentPage={currentPage}
-                            totalPages={Math.ceil(filtered.length / itemsPerPage)}
-                            onPageChange={setCurrentPage}
-                        />
-                    }
                 />
             </View>
         );
@@ -3355,9 +5624,17 @@ export default function AdminDashboard({ navigation }) {
         const filteredDistricts = !q
             ? managedDistricts
             : managedDistricts.filter(d =>
-                [d.code, d.name_en, d.name_ru, d.name_kg, d.region]
+                [d.code, d.name_en, d.name_ru, d.name_kg, d.region, getLocalizedName(d)]
                     .filter(Boolean)
                     .some(val => String(val).toLowerCase().includes(q))
+            );
+        const cq = cancellationSearch.trim().toLowerCase();
+        const filteredCancellationReasons = !cq
+            ? cancellationReasons
+            : cancellationReasons.filter(r =>
+                [r.code, r.name_en, r.name_ru, r.name_kg, r.applicable_to, getLocalizedName(r)]
+                    .filter(Boolean)
+                    .some(val => String(val).toLowerCase().includes(cq))
             );
 
         return (
@@ -3468,11 +5745,11 @@ export default function AdminDashboard({ navigation }) {
                                                 placeholder="0"
                                                 placeholderTextColor="#64748b"
                                             />
-                                            <Text style={styles.settingsInputSuffix}>???</Text>
+                                            <Text style={styles.settingsInputSuffix}>{TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}</Text>
                                         </View>
                                     ) : (
                                         <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
-                                            {settings.default_guaranteed_payout || 0} <Text style={styles.settingsFieldUnit}>???</Text>
+                                            {settings.default_guaranteed_payout || 0} <Text style={styles.settingsFieldUnit}>{TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}</Text>
                                         </Text>
                                     )}
                                 </View>
@@ -3636,10 +5913,10 @@ export default function AdminDashboard({ navigation }) {
                                         <View key={district.id} style={[styles.serviceTypeRow, !isDark && styles.serviceTypeRowLight]}>
                                             <View style={styles.serviceTypeRowInfo}>
                                                 <Text style={[styles.serviceTypeRowName, !isDark && styles.textDark]} numberOfLines={1}>
-                                                    {district[`name_${language}`] || district.name_en || district.code}
+                                                    {getLocalizedName(district, district.code)}
                                                 </Text>
                                                 <Text style={styles.serviceTypeRowMeta} numberOfLines={1}>
-                                                    {TRANSLATIONS.code || 'Code:'} {district.code} ? {district.region || (TRANSLATIONS.region || 'Region')}: {district.region || '-'} ? {district.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
+                                                    {TRANSLATIONS.code || 'Code:'} {district.code} | {TRANSLATIONS.region || 'Region'}: {district.region || '-'} | {district.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
                                                 </Text>
                                             </View>
                                             <View style={styles.serviceTypeRowActions}>
@@ -3664,6 +5941,110 @@ export default function AdminDashboard({ navigation }) {
                                             <Ionicons name="map-outline" size={48} color="#64748b" />
                                             <Text style={styles.settingsEmptyText}>{TRANSLATIONS.noDistricts || 'No districts configured'}</Text>
                                             <Text style={styles.settingsEmptyHint}>{TRANSLATIONS.addFirstDistrict || 'Add your first district to get started'}</Text>
+                                        </View>
+                                    )}
+                                </ScrollView>
+                            </>
+                        )}
+                    </View>
+
+                    {/* Section Divider */}
+                    <View style={[styles.settingsDivider, !isDark && styles.settingsDividerLight]} />
+
+                    {/* ============================================ */}
+                    {/* CANCELLATION REASONS SECTION */}
+                    {/* ============================================ */}
+                    <View style={[styles.settingsSection, !isDark && styles.settingsSectionLight]}>
+                        <View style={styles.settingsSectionHeader}>
+                            <View style={styles.settingsSectionTitleRow}>
+                                <View style={[styles.settingsSectionIcon, { backgroundColor: 'rgba(244, 114, 182, 0.15)' }]}>
+                                    <Ionicons name="alert-circle" size={20} color="#f472b6" />
+                                </View>
+                                <View>
+                                    <Text style={[styles.settingsSectionTitle, !isDark && styles.textDark]}>
+                                        {TRANSLATIONS.cancellationReasonsTitle || 'Cancellation Reasons'}
+                                    </Text>
+                                    <Text style={styles.settingsSectionSubtitle}>
+                                        {TRANSLATIONS.cancellationReasonsSubtitle || 'Manage cancellation reasons'}
+                                    </Text>
+                                </View>
+                            </View>
+
+                            <View style={styles.settingsActionRow}>
+                                <TouchableOpacity
+                                    onPress={() => setCancellationReasonModal({ visible: true, reason: null })}
+                                    style={[styles.settingsBtn, styles.settingsBtnPrimary]}
+                                >
+                                    <Ionicons name="add" size={18} color="#fff" />
+                                    <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.addCancellationReason || 'Add Reason'}</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    onPress={() => setCancellationReasonsCollapsed(prev => !prev)}
+                                    style={[styles.collapseBtn, !isDark && styles.collapseBtnLight]}
+                                >
+                                    <Ionicons name={cancellationReasonsCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+
+                        {!cancellationReasonsCollapsed && (
+                            <>
+                                <View style={styles.settingsSearchRow}>
+                                    <View style={[styles.searchInputWrapper, !isDark && styles.searchInputWrapperLight]}>
+                                        <Ionicons name="search" size={16} color="#64748b" style={{ marginRight: 8 }} />
+                                        <TextInput
+                                            style={[styles.searchInput, !isDark && styles.searchInputTextLight]}
+                                            placeholder={TRANSLATIONS.searchCancellationReasons || 'Search reasons...'}
+                                            placeholderTextColor="#64748b"
+                                            value={cancellationSearch}
+                                            onChangeText={setCancellationSearch}
+                                        />
+                                        {cancellationSearch ? (
+                                            <TouchableOpacity onPress={() => setCancellationSearch('')} style={styles.searchClear}>
+                                                <Ionicons name="close-circle" size={16} color="#64748b" />
+                                            </TouchableOpacity>
+                                        ) : null}
+                                    </View>
+                                </View>
+
+                                <ScrollView style={styles.compactList} showsVerticalScrollIndicator={false}>
+                                    {filteredCancellationReasons.map((reason) => (
+                                        <View key={reason.id || reason.code} style={[styles.serviceTypeRow, !isDark && styles.serviceTypeRowLight]}>
+                                            <View style={styles.serviceTypeRowInfo}>
+                                                <Text style={[styles.serviceTypeRowName, !isDark && styles.textDark]} numberOfLines={1}>
+                                                    {getLocalizedName(reason, reason.code)}
+                                                </Text>
+                                                <Text style={styles.serviceTypeRowMeta} numberOfLines={1}>
+                                                    {TRANSLATIONS.code || 'Code:'} {reason.code} | {TRANSLATIONS.applicableTo || 'Applies to'}: {reason.applicable_to === 'master'
+                                                        ? (TRANSLATIONS.appliesToMaster || 'Master')
+                                                        : reason.applicable_to === 'client'
+                                                            ? (TRANSLATIONS.appliesToClient || 'Client')
+                                                            : (TRANSLATIONS.appliesToBoth || 'Both')
+                                                    } | {reason.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
+                                                </Text>
+                                            </View>
+                                            <View style={styles.serviceTypeRowActions}>
+                                                <TouchableOpacity
+                                                    onPress={() => setCancellationReasonModal({ visible: true, reason })}
+                                                    style={[styles.serviceTypeRowBtn, styles.serviceTypeEditBtn, !isDark && styles.serviceTypeActionBtnLight]}
+                                                >
+                                                    <Ionicons name="pencil" size={16} color="#3b82f6" />
+                                                </TouchableOpacity>
+                                                <TouchableOpacity
+                                                    onPress={() => handleDeleteCancellationReason(reason.id)}
+                                                    style={[styles.serviceTypeRowBtn, styles.serviceTypeDeleteBtn]}
+                                                >
+                                                    <Ionicons name="trash" size={16} color="#ef4444" />
+                                                </TouchableOpacity>
+                                            </View>
+                                        </View>
+                                    ))}
+
+                                    {filteredCancellationReasons.length === 0 && (
+                                        <View style={[styles.settingsEmptyState, !isDark && styles.settingsEmptyStateLight]}>
+                                            <Ionicons name="alert-circle-outline" size={48} color="#64748b" />
+                                            <Text style={styles.settingsEmptyText}>{TRANSLATIONS.noCancellationReasons || 'No cancellation reasons configured'}</Text>
+                                            <Text style={styles.settingsEmptyHint}>{TRANSLATIONS.addFirstCancellationReason || 'Add your first cancellation reason to get started'}</Text>
                                         </View>
                                     )}
                                 </ScrollView>
@@ -3718,10 +6099,10 @@ export default function AdminDashboard({ navigation }) {
                                     <View key={type.id} style={[styles.serviceTypeRow, !isDark && styles.serviceTypeRowLight]}>
                                         <View style={styles.serviceTypeRowInfo}>
                                             <Text style={[styles.serviceTypeRowName, !isDark && styles.textDark]} numberOfLines={1}>
-                                                {type[`name_${language}`] || type.name_en || type.id}
+                                                {getLocalizedName(type, type.code || type.id)}
                                             </Text>
                                             <Text style={styles.serviceTypeRowMeta} numberOfLines={1}>
-                                                {language !== 'ru' && type.name_ru ? type.name_ru : (language !== 'en' && type.name_en ? type.name_en : type.name_kg)} - {TRANSLATIONS.code || 'Code:'} {type.code || type.id}
+                                                {TRANSLATIONS.code || 'Code:'} {type.code || type.id} | {type.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
                                             </Text>
                                         </View>
                                         <View style={styles.serviceTypeRowActions}>
@@ -3758,6 +6139,7 @@ export default function AdminDashboard({ navigation }) {
                 {/* Service Type Sidebar Drawer */}
                 {renderServiceTypeSidebar()}
                 {renderDistrictSidebar()}
+                {renderCancellationReasonSidebar()}
             </View>
         );
     };
@@ -3856,7 +6238,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempServiceType.name_ru}
                                         onChangeText={v => setTempServiceType({ ...tempServiceType, name_ru: v })}
-                                        placeholder="???????? ??????"
+                                        placeholder={TRANSLATIONS.placeholderServiceNameRu || 'Service name (RU)'}
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -3869,7 +6251,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempServiceType.name_kg}
                                         onChangeText={v => setTempServiceType({ ...tempServiceType, name_kg: v })}
-                                        placeholder="????????? ???"
+                                        placeholder={TRANSLATIONS.placeholderServiceNameKg || 'Service name (KG)'}
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -3993,7 +6375,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempDistrict.name_ru || ''}
                                         onChangeText={v => setTempDistrict({ ...tempDistrict, name_ru: v })}
-                                        placeholder="???????? ??????"
+                                        placeholder={TRANSLATIONS.placeholderDistrictNameRu || 'District name (RU)'}
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -4006,7 +6388,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempDistrict.name_kg || ''}
                                         onChangeText={v => setTempDistrict({ ...tempDistrict, name_kg: v })}
-                                        placeholder="???????? ???"
+                                        placeholder={TRANSLATIONS.placeholderDistrictNameKg || 'District name (KG)'}
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -4066,6 +6448,184 @@ export default function AdminDashboard({ navigation }) {
                             ) : (
                                 <Text style={[styles.sidebarDrawerBtnText, { color: '#fff' }]}>
                                     {districtModal.district ? (TRANSLATIONS.updateDistrict || 'Update District') : (TRANSLATIONS.createDistrict || 'Create District')}
+                                </Text>
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                </Animated.View>
+            </View>
+        </Modal>
+    );
+
+    const renderCancellationReasonSidebar = () => (
+        <Modal
+            visible={cancellationReasonModal.visible}
+            transparent
+            animationType="none"
+            onRequestClose={() => setCancellationReasonModal({ visible: false, reason: null })}
+        >
+            <View style={styles.sidebarDrawerOverlay}>
+                <TouchableOpacity
+                    style={styles.sidebarDrawerBackdrop}
+                    activeOpacity={1}
+                    onPress={() => setCancellationReasonModal({ visible: false, reason: null })}
+                />
+
+                <Animated.View style={[styles.sidebarDrawerContent, !isDark && styles.sidebarDrawerContentLight]}>
+                    <View style={[styles.sidebarDrawerHeader, !isDark && styles.sidebarDrawerHeaderLight]}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                            <View style={[styles.sidebarDrawerIconWrapper, { backgroundColor: cancellationReasonModal.reason ? 'rgba(59, 130, 246, 0.15)' : 'rgba(244, 114, 182, 0.15)' }]}>
+                                <Ionicons
+                                    name={cancellationReasonModal.reason ? "pencil" : "add"}
+                                    size={20}
+                                    color={cancellationReasonModal.reason ? "#3b82f6" : "#f472b6"}
+                                />
+                            </View>
+                            <View>
+                                <Text style={[styles.sidebarDrawerTitle, !isDark && styles.textDark]}>
+                                    {cancellationReasonModal.reason ? (TRANSLATIONS.editCancellationReason || 'Edit Reason') : (TRANSLATIONS.addCancellationReason || 'Add Reason')}
+                                </Text>
+                                <Text style={styles.sidebarDrawerSubtitle}>
+                                    {cancellationReasonModal.reason ? (TRANSLATIONS.modifyExistingCancellationReason || 'Modify existing reason') : (TRANSLATIONS.createNewCancellationReason || 'Create a new cancellation reason')}
+                                </Text>
+                            </View>
+                        </View>
+                        <TouchableOpacity
+                            onPress={() => setCancellationReasonModal({ visible: false, reason: null })}
+                            style={[styles.sidebarDrawerCloseBtn, !isDark && styles.sidebarDrawerCloseBtnLight]}
+                        >
+                            <Ionicons name="close" size={24} color={isDark ? '#94a3b8' : '#64748b'} />
+                        </TouchableOpacity>
+                    </View>
+
+                    <ScrollView style={styles.sidebarDrawerBody} showsVerticalScrollIndicator={false}>
+                        <View style={{ gap: 20 }}>
+                            <View style={styles.sidebarFormGroup}>
+                                <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
+                                    {TRANSLATIONS.codeUnique || 'Code (Unique ID)'} {cancellationReasonModal.reason && <Text style={{ color: '#64748b' }}>- {TRANSLATIONS.codeReadOnly || 'Read-only'}</Text>}
+                                </Text>
+                                <TextInput
+                                    style={[
+                                        styles.sidebarFormInput,
+                                        !isDark && styles.sidebarFormInputLight,
+                                        cancellationReasonModal.reason && styles.sidebarFormInputDisabled
+                                    ]}
+                                    value={tempCancellationReason.code || ''}
+                                    onChangeText={v => setTempCancellationReason({ ...tempCancellationReason, code: v })}
+                                    placeholder="e.g. client_request"
+                                    placeholderTextColor="#64748b"
+                                    editable={!cancellationReasonModal.reason}
+                                />
+                            </View>
+
+                            <View style={[styles.sidebarFormSection, !isDark && styles.sidebarFormSectionLight]}>
+                                <Text style={styles.sidebarFormSectionTitle}>
+                                    <Ionicons name="globe-outline" size={14} color="#64748b" /> {TRANSLATIONS.localizedNames || 'Localized Names'}
+                                </Text>
+
+                                <View style={styles.sidebarFormGroup}>
+                                    <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
+                                        {TRANSLATIONS.englishName || 'English Name'}
+                                    </Text>
+                                    <TextInput
+                                        style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
+                                        value={tempCancellationReason.name_en || ''}
+                                        onChangeText={v => setTempCancellationReason({ ...tempCancellationReason, name_en: v })}
+                                        placeholder="Reason name"
+                                        placeholderTextColor="#64748b"
+                                    />
+                                </View>
+
+                                <View style={styles.sidebarFormGroup}>
+                                    <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>
+                                        {TRANSLATIONS.russianName || 'Russian Name'}
+                                    </Text>
+                                    <TextInput
+                                        style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
+                                        value={tempCancellationReason.name_ru || ''}
+                                        onChangeText={v => setTempCancellationReason({ ...tempCancellationReason, name_ru: v })}
+                                        placeholder={TRANSLATIONS.placeholderServiceNameRu || 'Reason name (RU)'}
+                                        placeholderTextColor="#64748b"
+                                    />
+                                </View>
+                            </View>
+
+                            <View style={styles.sidebarFormGroup}>
+                                <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>{TRANSLATIONS.applicableTo || 'Applies to'}</Text>
+                                <View style={styles.pillRow}>
+                                    {['both', 'master', 'client'].map(scope => {
+                                        const isActive = (tempCancellationReason.applicable_to || 'both') === scope;
+                                        const label = scope === 'master'
+                                            ? (TRANSLATIONS.appliesToMaster || 'Master')
+                                            : scope === 'client'
+                                                ? (TRANSLATIONS.appliesToClient || 'Client')
+                                                : (TRANSLATIONS.appliesToBoth || 'Both');
+                                        return (
+                                            <TouchableOpacity
+                                                key={scope}
+                                                onPress={() => setTempCancellationReason(prev => ({ ...prev, applicable_to: scope }))}
+                                                style={[
+                                                    styles.pillBtn,
+                                                    !isDark && styles.pillBtnLight,
+                                                    isActive && styles.pillBtnActive,
+                                                    !isDark && isActive && styles.pillBtnActiveLight
+                                                ]}
+                                            >
+                                                <Text style={[
+                                                    styles.pillText,
+                                                    !isDark && styles.pillTextLight,
+                                                    isActive && styles.pillTextActive,
+                                                    !isDark && isActive && styles.pillTextActiveLight
+                                                ]}>{label}</Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </View>
+                            </View>
+
+                            <View style={styles.sidebarFormGroup}>
+                                <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>{TRANSLATIONS.sortOrder || 'Sort Order'}</Text>
+                                <TextInput
+                                    style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
+                                    value={String(tempCancellationReason.sort_order || '')}
+                                    onChangeText={v => setTempCancellationReason({ ...tempCancellationReason, sort_order: v })}
+                                    placeholder="0"
+                                    placeholderTextColor="#64748b"
+                                    keyboardType="numeric"
+                                />
+                            </View>
+
+                            <View style={styles.sidebarFormGroup}>
+                                <Text style={[styles.sidebarFormLabel, !isDark && { color: '#0f172a' }]}>{TRANSLATIONS.status || 'Status'}</Text>
+                                <TouchableOpacity
+                                    style={[styles.togglePill, tempCancellationReason.is_active ? styles.toggleActive : styles.toggleInactive]}
+                                    onPress={() => setTempCancellationReason(prev => ({ ...prev, is_active: !prev.is_active }))}
+                                >
+                                    <Text style={styles.toggleText}>
+                                        {tempCancellationReason.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    </ScrollView>
+
+                    <View style={[styles.sidebarDrawerFooter, !isDark && styles.sidebarDrawerFooterLight]}>
+                        <TouchableOpacity
+                            style={[styles.sidebarDrawerBtn, styles.sidebarDrawerBtnSecondary, !isDark && styles.sidebarDrawerBtnSecondaryLight]}
+                            onPress={() => setCancellationReasonModal({ visible: false, reason: null })}
+                        >
+                            <Text style={[styles.sidebarDrawerBtnText, { color: isDark ? '#94a3b8' : '#64748b' }]}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.sidebarDrawerBtn, styles.sidebarDrawerBtnPrimary]}
+                            onPress={() => handleSaveCancellationReason(tempCancellationReason)}
+                            disabled={actionLoading}
+                        >
+                            {actionLoading ? (
+                                <ActivityIndicator color="#fff" size="small" />
+                            ) : (
+                                <Text style={[styles.sidebarDrawerBtnText, { color: '#fff' }]}>
+                                    {cancellationReasonModal.reason ? (TRANSLATIONS.updateCancellationReason || 'Update Reason') : (TRANSLATIONS.createCancellationReason || 'Create Reason')}
                                 </Text>
                             )}
                         </TouchableOpacity>
@@ -4686,11 +7246,11 @@ export default function AdminDashboard({ navigation }) {
                                                 <Text style={styles.drawerIconBtnText}>{TRANSLATIONS.btnCopy || 'Copy'}</Text>
                                             </TouchableOpacity>
                                         </View>
-                                        {detailsOrder.orientir && (
-                                            <View style={styles.drawerRow}>
-                                                <Text style={[styles.drawerRowText, !isDark && styles.textSecondary, { fontStyle: 'italic' }]}> {TRANSLATIONS.labelOrientir || 'Landmark:'} {detailsOrder.orientir}</Text>
-                                            </View>
-                                        )}
+                                {!!detailsOrder.orientir && (
+                                    <View style={styles.drawerRow}>
+                                        <Text style={[styles.drawerRowText, !isDark && styles.textSecondary, { fontStyle: 'italic' }]}> {TRANSLATIONS.labelOrientir || 'Landmark:'} {detailsOrder.orientir}</Text>
+                                    </View>
+                                )}
                                     </View>
                                 </View>
 
@@ -4738,14 +7298,14 @@ export default function AdminDashboard({ navigation }) {
                                     </View>
                                 </View>
 
-                                {detailsOrder.dispatcher_note && (
+                                {!!detailsOrder.dispatcher_note && (
                                     <View style={styles.drawerSection}>
                                         <Text style={[styles.drawerSectionTitle, { color: '#f59e0b' }]}>{TRANSLATIONS.sectionNote || 'Internal Note'}</Text>
                                         <Text style={styles.drawerNote}>{detailsOrder.dispatcher_note}</Text>
                                     </View>
                                 )}
 
-                                {['canceled_by_master', 'canceled_by_client', 'expired'].includes(detailsOrder.status) && (
+                                {isReopenableStatus(detailsOrder.status) && (
                                     <TouchableOpacity style={styles.reopenBtn} onPress={() => handleReopenOrder(detailsOrder.id)}>
                                         <Text style={styles.reopenText}>{TRANSLATIONS.reopenOrder || 'Reopen Order'}</Text>
                                     </TouchableOpacity>
@@ -4757,7 +7317,11 @@ export default function AdminDashboard({ navigation }) {
                                     </TouchableOpacity>
                                 )}
 
-                                {detailsOrder.status === 'completed' && detailsOrder.payment_method === 'transfer' && detailsOrder.payment_proof_url && (
+                                <TouchableOpacity style={styles.transferBtn} onPress={() => openTransferPicker(detailsOrder)}>
+                                    <Text style={styles.transferText}>{TRANSLATIONS.transferOrder || 'Transfer Order'}</Text>
+                                </TouchableOpacity>
+
+                                {detailsOrder.status === 'completed' && detailsOrder.payment_method === 'transfer' && !!detailsOrder.payment_proof_url && (
                                     <View style={{ marginTop: 12 }}>
                                         <Text style={styles.drawerSectionTitle}>{TRANSLATIONS.paymentProofVerification || 'Payment Proof Verification'}</Text>
                                         <View style={styles.editActionRow}>
@@ -5005,7 +7569,7 @@ export default function AdminDashboard({ navigation }) {
 
                         <TextInput
                             style={[styles.input, !isDark && styles.inputLight]}
-                            placeholder="Amount (???)"
+                            placeholder={TRANSLATIONS.amountSom || 'Amount (som)'}
                             placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                             keyboardType="numeric"
                             value={balanceData.amount}
@@ -5165,11 +7729,11 @@ export default function AdminDashboard({ navigation }) {
                                         <View style={{ gap: 8 }}>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                                                 <Text style={{ color: '#64748b' }}>{TRANSLATIONS.balance || 'Balance:'}</Text>
-                                                <Text style={{ color: (detailsPerson?.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '700' }}>{detailsPerson?.prepaid_balance || 0} ???</Text>
+                                                <Text style={{ color: (detailsPerson?.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '700' }}>{detailsPerson?.prepaid_balance || 0} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}</Text>
                                             </View>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                                                 <Text style={{ color: '#64748b' }}>{TRANSLATIONS.initialDeposit || 'Initial Deposit:'}</Text>
-                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.initial_deposit || 0} ???</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.initial_deposit || 0} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}</Text>
                                             </View>
                                         </View>
                                     </View>
@@ -5315,7 +7879,7 @@ export default function AdminDashboard({ navigation }) {
                                                 </View>
                                                 <View style={{ alignItems: 'flex-end' }}>
                                                     <Text style={{ color: '#22c55e', fontWeight: '700', fontSize: 14 }}>
-                                                        {order.final_price ?? order.initial_price ?? order.callout_fee ?? '-'} ???
+                                                        {order.final_price ?? order.initial_price ?? order.callout_fee ?? '-'} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
                                                     </Text>
                                                     <View style={[styles.statusBadge, { backgroundColor: statusColor, marginTop: 6 }]}>
                                                         <Text style={styles.statusText}>{getOrderStatusLabel(order.status, t)}</Text>
@@ -5673,6 +8237,21 @@ const styles = StyleSheet.create({
         borderColor: '#334155',
         marginBottom: 8,
     },
+    peopleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+    peopleLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 },
+    peopleInfo: { flex: 1, minWidth: 0 },
+    peopleRight: { minWidth: SCREEN_WIDTH > 700 ? 260 : 210, alignItems: 'flex-end', justifyContent: 'center', flexShrink: 0 },
+    peopleBadge: {
+        alignSelf: 'stretch',
+        marginBottom: 8,
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 6,
+        borderWidth: 1,
+        alignItems: 'center',
+    },
+    peopleBadgeText: { fontSize: 11, fontWeight: '600', textAlign: 'center' },
+    peopleActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, rowGap: 8, flexWrap: 'wrap', alignSelf: 'stretch', marginTop: 6 },
     statusDot: {
         width: 8,
         height: 8,
@@ -5877,6 +8456,8 @@ const styles = StyleSheet.create({
     reopenText: { fontSize: 13, fontWeight: '600', color: '#fff' },
     orderCancelBtn: { backgroundColor: '#ef4444', paddingVertical: 12, borderRadius: 10, alignItems: 'center', marginTop: 8 },
     orderCancelText: { fontSize: 13, fontWeight: '600', color: '#fff' },
+    transferBtn: { backgroundColor: '#0ea5e9', paddingVertical: 12, borderRadius: 10, alignItems: 'center', marginTop: 8 },
+    transferText: { fontSize: 13, fontWeight: '600', color: '#fff' },
     forceAssignBtn: { backgroundColor: '#8b5cf6', paddingVertical: 12, borderRadius: 10, alignItems: 'center', marginTop: 8 },
     forceAssignText: { fontSize: 13, fontWeight: '600', color: '#fff' },
     editActionRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
@@ -6005,6 +8586,8 @@ const styles = StyleSheet.create({
     listContent: { paddingBottom: 20 },
     empty: { alignItems: 'center', paddingVertical: 60 },
     emptyText: { fontSize: 14, color: '#64748b' },
+    paginationTopRow: { alignItems: 'center', marginBottom: 8 },
+    paginationTopCompact: { paddingVertical: 0 },
 
     // Mini Filter Button (for Needs Attention)
     miniFilterBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(71,85,105,0.3)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
@@ -6167,7 +8750,7 @@ const styles = StyleSheet.create({
     tabBtnActive: { backgroundColor: '#3b82f6' },
     tabBtnText: { color: '#94a3b8', fontWeight: '600', fontSize: 13 },
     tabBtnTextActive: { color: '#fff' },
-    miniActionBtn: { paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+    miniActionBtn: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6, alignItems: 'center', justifyContent: 'center', minWidth: 90 },
 
     // Light Mode Styles
     headerLight: { borderBottomColor: '#cbd5e1', backgroundColor: '#fff' },
@@ -6455,6 +9038,45 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: '600',
         color: '#94a3b8',
+    },
+    pillRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+    },
+    pillBtn: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: '#334155',
+        backgroundColor: 'rgba(71,85,105,0.2)',
+    },
+    pillBtnLight: {
+        borderColor: '#cbd5e1',
+        backgroundColor: '#f1f5f9',
+    },
+    pillBtnActive: {
+        borderColor: 'rgba(59,130,246,0.5)',
+        backgroundColor: 'rgba(59,130,246,0.2)',
+    },
+    pillBtnActiveLight: {
+        borderColor: 'rgba(37,99,235,0.45)',
+        backgroundColor: '#dbeafe',
+    },
+    pillText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#cbd5e1',
+    },
+    pillTextLight: {
+        color: '#475569',
+    },
+    pillTextActive: {
+        color: '#93c5fd',
+    },
+    pillTextActiveLight: {
+        color: '#1d4ed8',
     },
 
     // Service Types Grid (New Design)
@@ -6815,8 +9437,16 @@ const styles = StyleSheet.create({
     analyticsFilterHeader: {
         marginBottom: 12,
     },
+    analyticsFilterTopRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 10,
+        marginBottom: 10,
+    },
     analyticsSectionLabel: {
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: '600',
         color: '#64748b',
         textTransform: 'uppercase',
@@ -6826,6 +9456,10 @@ const styles = StyleSheet.create({
     analyticsRangeRow: {
         flexDirection: 'row',
         gap: 6,
+    },
+    analyticsRangeScroll: {
+        flexGrow: 1,
+        minWidth: 200,
     },
     analyticsRangeChip: {
         paddingHorizontal: 12,
@@ -6837,7 +9471,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#3b82f6',
     },
     analyticsRangeText: {
-        fontSize: 12,
+        fontSize: 13,
         fontWeight: '600',
         color: '#94a3b8',
     },
@@ -6848,6 +9482,14 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         flexWrap: 'wrap',
         gap: 8,
+    },
+    analyticsPeopleFilterRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 10,
+        marginTop: 12,
     },
     analyticsFilterPill: {
         flexDirection: 'row',
@@ -6873,7 +9515,7 @@ const styles = StyleSheet.create({
         gap: 6,
     },
     analyticsFilterPillText: {
-        fontSize: 12,
+        fontSize: 13,
         fontWeight: '500',
         color: '#cbd5e1',
     },
@@ -6903,7 +9545,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#f1f5f9',
     },
     analyticsCustomLabel: {
-        fontSize: 10,
+        fontSize: 11,
         color: '#64748b',
         marginBottom: 4,
     },
@@ -6931,7 +9573,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#3b82f6',
     },
     analyticsSectionTabText: {
-        fontSize: 13,
+        fontSize: 14,
         fontWeight: '600',
         color: '#94a3b8',
     },
@@ -6945,7 +9587,7 @@ const styles = StyleSheet.create({
         gap: 12,
     },
     analyticsGranularityLabel: {
-        fontSize: 12,
+        fontSize: 13,
         color: '#64748b',
     },
     analyticsGranularityChips: {
@@ -6962,7 +9604,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#22c55e',
     },
     analyticsGranularityText: {
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: '600',
         color: '#94a3b8',
     },
@@ -6975,38 +9617,337 @@ const styles = StyleSheet.create({
         gap: 16,
         marginBottom: 16,
     },
+    analyticsRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 16,
+        marginBottom: 16,
+        alignItems: 'stretch',
+    },
+    analyticsRowItem: {
+        flex: 1,
+        minWidth: 320,
+    },
     analyticsVisualGrid: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         gap: 16,
         marginBottom: 16,
     },
+    analyticsOperationsRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 16,
+        marginBottom: 16,
+        alignItems: 'stretch',
+    },
+    analyticsOperationsStatus: {
+        flex: 1,
+        minWidth: 320,
+    },
+    analyticsOperationsStatusCard: {
+        height: '100%',
+    },
+    analyticsOperationsMetrics: {
+        flex: 1.4,
+        minWidth: 360,
+    },
+    analyticsOperationsMetricsGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 12,
+    },
+    analyticsOperationsMetricItem: {
+        flexBasis: '48%',
+        minWidth: 220,
+        flexGrow: 1,
+    },
+    analyticsStackedChartBlock: {
+        padding: 8,
+    },
+    analyticsStackedCharts: {
+        gap: 12,
+    },
+    analyticsStackedChartDivider: {
+        height: 1,
+        backgroundColor: 'rgba(148,163,184,0.2)',
+    },
+    analyticsFinancialMetricsGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 12,
+    },
+    analyticsFinancialMetricItem: {
+        flexBasis: '48%',
+        minWidth: 220,
+        flexGrow: 1,
+    },
+    analyticsFinancialMetricsBlock: {
+        flex: 1,
+        justifyContent: 'space-between',
+        alignSelf: 'stretch',
+    },
     analyticsVisualCard: {
-        backgroundColor: '#1e293b',
+        backgroundColor: '#1c283d',
         borderRadius: 12,
         padding: 16,
         borderWidth: 1,
-        borderColor: '#334155',
+        borderColor: 'rgba(148,163,184,0.25)',
+        ...Platform.select({
+            web: {
+                boxShadow: '0 12px 24px rgba(15,23,42,0.25)',
+            },
+            ios: {
+                shadowColor: '#0f172a',
+                shadowOpacity: 0.25,
+                shadowRadius: 12,
+                shadowOffset: { width: 0, height: 6 },
+            },
+            android: {
+                elevation: 4,
+            },
+        }),
+    },
+    analyticsDispatcherCard: {
+        borderColor: 'rgba(59,130,246,0.45)',
+        backgroundColor: '#1b2740',
+    },
+    analyticsMasterCard: {
+        borderColor: 'rgba(59,130,246,0.35)',
+        backgroundColor: '#1b2740',
+    },
+    analyticsPriceDistCard: {
+        borderColor: 'rgba(14,165,233,0.35)',
+        backgroundColor: '#1b263b',
     },
     analyticsVisualTitle: {
-        fontSize: 14,
+        fontSize: 15,
         fontWeight: '600',
         color: '#fff',
         marginBottom: 12,
     },
-    analyticsMetricGrid: {
+    analyticsPriceDistHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        gap: 12,
+        flexWrap: 'wrap',
+        marginBottom: 6,
+    },
+    analyticsPriceDistMeta: {
+        fontSize: 12,
+        color: '#94a3b8',
+        marginBottom: 6,
+    },
+    analyticsPriceDistControlRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         gap: 12,
+        marginBottom: 14,
+    },
+    analyticsPriceDistControlGroup: {
+        minWidth: 160,
+        flex: 1,
+    },
+    analyticsPriceDistControlLabel: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: '#94a3b8',
+        textTransform: 'uppercase',
+        letterSpacing: 0.4,
+        marginBottom: 6,
+    },
+    analyticsPriceDistChipRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 6,
+    },
+    analyticsPriceDistChip: {
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 6,
+        backgroundColor: 'rgba(71, 85, 105, 0.35)',
+    },
+    analyticsPriceDistChipLight: {
+        backgroundColor: '#e2e8f0',
+    },
+    analyticsPriceDistChipActive: {
+        backgroundColor: '#0ea5e9',
+    },
+    analyticsPriceDistChipDisabled: {
+        opacity: 0.45,
+    },
+    analyticsPriceDistChipText: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: '#cbd5e1',
+    },
+    analyticsPriceDistChipTextLight: {
+        color: '#334155',
+    },
+    analyticsPriceDistChipTextActive: {
+        color: '#fff',
+    },
+    analyticsPriceDistChipTextDisabled: {
+        color: '#94a3b8',
+    },
+    analyticsPriceDistBody: {
+        flexDirection: 'column',
+        gap: 12,
+    },
+    analyticsPriceDistChartWrap: {
+        width: '100%',
+        overflow: 'hidden',
+    },
+    analyticsPriceDistNotice: {
+        fontSize: 11,
+        color: '#94a3b8',
+        marginTop: -6,
+        marginBottom: 8,
+    },
+    analyticsPriceDistSummary: {
+        backgroundColor: 'rgba(15,23,42,0.4)',
+        borderRadius: 12,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(148,163,184,0.2)',
+        alignSelf: 'stretch',
+    },
+    analyticsPriceDistSummaryLight: {
+        backgroundColor: '#ffffff',
+        borderColor: '#e2e8f0',
+    },
+    analyticsPriceDistSummaryTitle: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#fff',
+        marginBottom: 10,
+    },
+    analyticsPriceDistStatsGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+        justifyContent: 'space-between',
+        width: '100%',
+    },
+    analyticsPriceDistStat: {
+        flexGrow: 0,
+        flexBasis: '23%',
+        minWidth: 200,
+        maxWidth: '23%',
+        backgroundColor: 'rgba(30,41,59,0.6)',
+        borderRadius: 10,
+        padding: 8,
+        borderWidth: 1,
+        borderColor: 'rgba(148,163,184,0.12)',
+    },
+    analyticsPriceDistStatLight: {
+        backgroundColor: '#f8fafc',
+        borderColor: '#e2e8f0',
+    },
+    analyticsPriceDistStatLabel: {
+        fontSize: 10,
+        color: '#94a3b8',
+        marginBottom: 2,
+    },
+    analyticsPriceDistStatValue: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    analyticsPriceDistStatPrimary: {
+        borderColor: 'rgba(56,189,248,0.45)',
+        backgroundColor: 'rgba(14,165,233,0.18)',
+    },
+    analyticsPriceDistStatPrimaryLight: {
+        borderColor: '#93c5fd',
+        backgroundColor: '#dbeafe',
+    },
+    analyticsPriceDistStatValuePrimary: {
+        color: '#38bdf8',
+    },
+    analyticsPriceDistStatValuePrimaryLight: {
+        color: '#2563eb',
+    },
+    analyticsPriceDistNote: {
+        fontSize: 11,
+        color: '#94a3b8',
+        marginTop: 6,
+    },
+    analyticsTitleWithTip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        flexShrink: 1,
+    },
+    analyticsStatusHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 8,
+        marginBottom: 8,
+    },
+    analyticsStatusTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    analyticsDispatcherHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap',
+        marginBottom: 12,
+    },
+    analyticsDispatcherPill: {
+        minWidth: 180,
+        maxWidth: 260,
+    },
+    analyticsMetricGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'stretch',
+        gap: 12,
         marginBottom: 16,
     },
+    analyticsMetricGroup: {
+        flexDirection: 'column',
+        gap: 12,
+        width: '100%',
+        marginBottom: 16,
+    },
+    analyticsMetricRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 12,
+    },
+    analyticsMetricRowItem: {
+        flex: 1,
+        minWidth: 220,
+    },
     analyticsMetricCard: {
-        backgroundColor: '#1e293b',
+        backgroundColor: '#182235',
         borderRadius: 12,
         padding: 16,
         borderWidth: 1,
-        borderColor: '#334155',
-        minHeight: 90,
+        borderColor: 'rgba(148,163,184,0.22)',
+        minHeight: 118,
+        justifyContent: 'space-between',
+        ...Platform.select({
+            web: {
+                boxShadow: '0 10px 20px rgba(15,23,42,0.22)',
+            },
+            ios: {
+                shadowColor: '#0f172a',
+                shadowOpacity: 0.2,
+                shadowRadius: 10,
+                shadowOffset: { width: 0, height: 5 },
+            },
+            android: {
+                elevation: 3,
+            },
+        }),
     },
     analyticsMetricTopRow: {
         flexDirection: 'row',
@@ -7014,10 +9955,16 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
     },
     analyticsMetricLabel: {
-        fontSize: 12,
+        fontSize: 13,
         fontWeight: '500',
         color: '#94a3b8',
         marginBottom: 4,
+    },
+    analyticsMetricLabelRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap',
     },
     analyticsMetricValue: {
         fontSize: 22,
@@ -7028,19 +9975,48 @@ const styles = StyleSheet.create({
         fontSize: 11,
         color: '#94a3b8',
         marginTop: 6,
+        minHeight: 14,
     },
     analyticsListGrid: {
         flexDirection: 'row',
         flexWrap: 'wrap',
+        alignItems: 'stretch',
         gap: 16,
         marginBottom: 16,
     },
+    analyticsListCol: {
+        alignSelf: 'stretch',
+        display: 'flex',
+    },
+    analyticsListColWide: {
+        flexGrow: 1,
+        flexBasis: 0,
+        minWidth: 280,
+        alignSelf: 'stretch',
+        display: 'flex',
+    },
     analyticsListCard: {
-        backgroundColor: '#1e293b',
+        backgroundColor: '#182235',
         borderRadius: 12,
         padding: 16,
         borderWidth: 1,
-        borderColor: '#334155',
+        borderColor: 'rgba(148,163,184,0.22)',
+        flex: 1,
+        minHeight: 168,
+        ...Platform.select({
+            web: {
+                boxShadow: '0 10px 20px rgba(15,23,42,0.22)',
+            },
+            ios: {
+                shadowColor: '#0f172a',
+                shadowOpacity: 0.2,
+                shadowRadius: 10,
+                shadowOffset: { width: 0, height: 5 },
+            },
+            android: {
+                elevation: 3,
+            },
+        }),
     },
     analyticsListHeader: {
         flexDirection: 'row',
@@ -7048,26 +10024,39 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginBottom: 12,
     },
+    analyticsListTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        flexShrink: 1,
+        flexWrap: 'wrap',
+    },
     analyticsListTitle: {
-        fontSize: 14,
+        fontSize: 15,
         fontWeight: '600',
         color: '#fff',
     },
     analyticsListAction: {
-        fontSize: 12,
+        fontSize: 13,
         fontWeight: '600',
         color: '#3b82f6',
     },
     analyticsListItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
+        flexDirection: 'column',
+        alignItems: 'stretch',
         paddingVertical: 8,
         borderTopWidth: 1,
         borderTopColor: '#334155',
     },
+    analyticsListRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        marginBottom: 6,
+    },
     analyticsListLabel: {
-        fontSize: 13,
+        fontSize: 14,
         fontWeight: '500',
         color: '#cbd5e1',
     },
@@ -7075,7 +10064,6 @@ const styles = StyleSheet.create({
         height: 4,
         backgroundColor: '#334155',
         borderRadius: 2,
-        marginTop: 4,
         overflow: 'hidden',
     },
     analyticsListBarFill: {
@@ -7087,7 +10075,9 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: '700',
         color: '#fff',
-        marginLeft: 12,
+        textAlign: 'right',
+        fontVariant: ['tabular-nums'],
+        minWidth: 110,
     },
     analyticsListEmpty: {
         fontSize: 12,
@@ -7107,45 +10097,50 @@ const styles = StyleSheet.create({
     analyticsMiniBar: {
         borderRadius: 2,
     },
-    analyticsDualBars: {
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        gap: 4,
-    },
-    analyticsDualBarTrack: {
-        width: 16,
-        height: 40,
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        gap: 2,
-    },
-    analyticsDualBarPrimary: {
-        width: 6,
-        borderRadius: 2,
-    },
-    analyticsDualBarSecondary: {
-        width: 6,
-        borderRadius: 2,
-    },
     analyticsStatusStrip: {
         flexDirection: 'row',
         height: 8,
         borderRadius: 4,
         overflow: 'hidden',
-        marginBottom: 12,
+        marginBottom: 10,
+        backgroundColor: 'rgba(148,163,184,0.2)',
+    },
+    analyticsStatusStripEmpty: {
+        backgroundColor: 'rgba(148,163,184,0.15)',
+    },
+    analyticsStatusStripEmptyFill: {
+        flex: 1,
+        backgroundColor: 'rgba(148,163,184,0.18)',
     },
     analyticsStatusSegment: {
-        minWidth: 4,
+        minWidth: 2,
     },
     analyticsStatusLegend: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 12,
+        alignItems: 'center',
+        flexWrap: 'nowrap',
+        gap: 16,
+        paddingBottom: 2,
+        paddingRight: 6,
+        marginTop: 4,
+        marginBottom: 16,
     },
     analyticsStatusLegendItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: 8,
+        paddingRight: 6,
+        flexShrink: 0,
+    },
+    analyticsStatusLegendMeta: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    analyticsPieWrap: {
+        alignItems: 'center',
+        gap: 12,
+        paddingTop: 4,
     },
     analyticsStatusDot: {
         width: 8,
@@ -7153,12 +10148,17 @@ const styles = StyleSheet.create({
         borderRadius: 4,
     },
     analyticsStatusLegendText: {
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: '500',
         color: '#cbd5e1',
     },
+    analyticsStatusLegendCount: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#e2e8f0',
+    },
     analyticsStatusLegendValue: {
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: '600',
         color: '#94a3b8',
     },
@@ -7178,13 +10178,13 @@ const styles = StyleSheet.create({
         marginBottom: 6,
     },
     analyticsFunnelLabel: {
-        fontSize: 9,
+        fontSize: 10,
         fontWeight: '500',
         color: '#cbd5e1',
         textAlign: 'center',
     },
     analyticsFunnelValue: {
-        fontSize: 10,
+        fontSize: 11,
         fontWeight: '600',
         color: '#94a3b8',
     },
@@ -7195,16 +10195,19 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#334155',
     },
+    analyticsChartBare: {
+        paddingBottom: 6,
+    },
     analyticsChartHeader: {
         marginBottom: 12,
     },
     analyticsChartTitle: {
-        fontSize: 14,
+        fontSize: 15,
         fontWeight: '600',
         color: '#fff',
     },
     analyticsChartSubtitle: {
-        fontSize: 11,
+        fontSize: 12,
         color: '#64748b',
         marginTop: 2,
     },
@@ -7234,6 +10237,9 @@ const styles = StyleSheet.create({
         overflow: 'hidden',
         height: 78,
     },
+    analyticsChartTrackLight: {
+        backgroundColor: '#e2e8f0',
+    },
     analyticsChartFill: {
         width: '100%',
         borderRadius: 4,
@@ -7250,6 +10256,271 @@ const styles = StyleSheet.create({
         marginTop: 8,
         textAlign: 'center',
     },
+    analyticsTrendSection: {
+        marginTop: 16,
+        gap: 12,
+    },
+    analyticsTrendHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap',
+    },
+    analyticsTrendTitle: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    analyticsTrendRangeRow: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    analyticsTrendRangeBtn: {
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 12,
+        backgroundColor: 'rgba(71,85,105,0.3)',
+    },
+    analyticsTrendRangeBtnActive: {
+        backgroundColor: '#3b82f6',
+    },
+    analyticsTrendRangeBtnLight: {
+        backgroundColor: '#e2e8f0',
+    },
+    analyticsTrendRangeBtnActiveLight: {
+        backgroundColor: '#2563eb',
+    },
+    analyticsTrendRangeText: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: '#cbd5f5',
+    },
+    analyticsTrendRangeTextActive: {
+        color: '#fff',
+    },
+    analyticsTrendRangeTextLight: {
+        color: '#475569',
+    },
+    analyticsTrendRangeTextActiveLight: {
+        color: '#fff',
+    },
+    analyticsTrendCards: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 12,
+    },
+    analyticsTrendCard: {
+        flex: 1,
+        minWidth: 260,
+        backgroundColor: 'rgba(71,85,105,0.25)',
+        borderRadius: 12,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(71,85,105,0.4)',
+    },
+    analyticsTrendCardHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 8,
+        gap: 8,
+    },
+    analyticsTrendCardTitle: {
+        fontSize: 11,
+        color: '#94a3b8',
+        textTransform: 'uppercase',
+    },
+    analyticsTrendCardMeta: {
+        fontSize: 10,
+        color: '#94a3b8',
+    },
+    analyticsTrendEmptyText: {
+        fontSize: 11,
+        color: '#94a3b8',
+        textAlign: 'center',
+        paddingVertical: 12,
+    },
+    analyticsTrendArea: {
+        height: 90,
+    },
+    analyticsTrendGrid: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: 10,
+        bottom: 18,
+        justifyContent: 'space-between',
+    },
+    analyticsTrendGridLine: {
+        height: 1,
+        backgroundColor: 'rgba(148,163,184,0.15)',
+    },
+    analyticsTrendYAxis: {
+        position: 'absolute',
+        left: 0,
+        top: 6,
+        bottom: 18,
+        justifyContent: 'space-between',
+    },
+    analyticsTrendDots: {
+        flexDirection: 'row',
+        height: 72,
+        marginTop: 6,
+        gap: 4,
+        alignItems: 'flex-end',
+    },
+    analyticsTrendSlot: {
+        flex: 1,
+        height: 72,
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+    },
+    analyticsTrendDot: {
+        borderRadius: 999,
+    },
+    analyticsTrendAvgLine: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        height: 1,
+        backgroundColor: 'rgba(148,163,184,0.25)',
+        borderStyle: 'dashed',
+    },
+    analyticsTrendAxis: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginTop: 6,
+    },
+    analyticsTrendAxisText: {
+        fontSize: 10,
+        color: '#94a3b8',
+    },
+    analyticsTrendAxisTextLight: {
+        color: '#64748b',
+    },
+    analyticsBoxplotChart: {
+        position: 'relative',
+        width: '100%',
+        overflow: 'hidden',
+    },
+    analyticsBoxplotRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+    },
+    analyticsBoxplotYAxis: {
+        width: 60,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingTop: 10,
+    },
+    analyticsBoxplotYAxisText: {
+        fontSize: 11,
+        color: '#94a3b8',
+        textAlign: 'center',
+        lineHeight: 14,
+    },
+    analyticsBoxplotYAxisTextLight: {
+        color: '#64748b',
+    },
+    analyticsBoxplotHitRow: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+        flexDirection: 'row',
+    },
+    analyticsBoxplotHit: {
+        height: '100%',
+        backgroundColor: 'transparent',
+    },
+    analyticsBoxplotLabels: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 6,
+        gap: 4,
+        minHeight: 56,
+    },
+    analyticsBoxplotLabel: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'row',
+        gap: 4,
+    },
+    analyticsBoxplotLabelText: {
+        fontSize: 10,
+        color: '#94a3b8',
+    },
+    analyticsBoxplotLabelTextRotated: {
+        transform: [{ rotate: '-90deg' }],
+        width: 70,
+        textAlign: 'center',
+        fontSize: 9,
+        lineHeight: 10,
+    },
+    analyticsTrendTooltip: {
+        position: 'absolute',
+        backgroundColor: 'rgba(15,23,42,0.95)',
+        borderRadius: 12,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(148,163,184,0.3)',
+        zIndex: 2000,
+    },
+    analyticsTrendTooltipLight: {
+        backgroundColor: '#ffffff',
+        borderColor: '#e2e8f0',
+    },
+    analyticsTrendTooltipTitle: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#fff',
+        marginBottom: 6,
+    },
+    analyticsTrendTooltipText: {
+        fontSize: 11,
+        color: '#cbd5f5',
+    },
+    analyticsPriceDistTooltip: {
+        position: 'absolute',
+        backgroundColor: 'rgba(15,23,42,0.96)',
+        borderRadius: 12,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(148,163,184,0.3)',
+        zIndex: 2000,
+    },
+    analyticsPriceDistTooltipLight: {
+        backgroundColor: '#ffffff',
+        borderColor: '#e2e8f0',
+    },
+    analyticsPriceDistTooltipTitle: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#fff',
+        marginBottom: 6,
+    },
+    analyticsPriceDistTooltipRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        gap: 8,
+        marginBottom: 2,
+    },
+    analyticsPriceDistTooltipLabel: {
+        fontSize: 10,
+        color: '#cbd5e1',
+    },
+    analyticsPriceDistTooltipValue: {
+        fontSize: 10,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    analyticsPriceDistTooltipNote: {
+        fontSize: 10,
+        color: '#f59e0b',
+        marginTop: 4,
+    },
     analyticsModalCard: {
         backgroundColor: '#1e293b',
         borderRadius: 16,
@@ -7259,6 +10530,13 @@ const styles = StyleSheet.create({
         maxHeight: '80%',
         borderWidth: 1,
         borderColor: '#334155',
+        alignSelf: 'center',
+        ...Platform.select({
+            web: {
+                margin: 'auto',
+                boxShadow: '0 24px 40px rgba(15,23,42,0.35)',
+            },
+        }),
     },
     analyticsModalTitle: {
         fontSize: 18,
@@ -7273,6 +10551,62 @@ const styles = StyleSheet.create({
         paddingVertical: 10,
         borderTopWidth: 1,
         borderTopColor: '#334155',
+    },
+    analyticsTooltip: {
+        position: 'absolute',
+        backgroundColor: 'rgba(15,23,42,0.96)',
+        borderRadius: 12,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(148,163,184,0.3)',
+        zIndex: 2000,
+        maxWidth: 260,
+    },
+    analyticsTooltipLight: {
+        backgroundColor: '#ffffff',
+        borderColor: '#e2e8f0',
+    },
+    analyticsTooltipText: {
+        fontSize: 12,
+        color: '#e2e8f0',
+        lineHeight: 16,
+    },
+    infoTipWrap: {
+        position: 'relative',
+        zIndex: 2,
+    },
+    infoTipIcon: {
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        backgroundColor: 'rgba(71,85,105,0.4)',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    infoTipIconLight: {
+        backgroundColor: '#e2e8f0',
+    },
+    infoTipText: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: '#cbd5e1',
+    },
+    infoTipBubble: {
+        position: 'absolute',
+        top: 22,
+        left: 0,
+        zIndex: 10,
+        maxWidth: 240,
+        padding: 10,
+        borderRadius: 10,
+        backgroundColor: '#0f172a',
+        borderWidth: 1,
+        borderColor: 'rgba(148,163,184,0.4)',
+    },
+    infoTipBubbleText: {
+        fontSize: 11,
+        color: '#e2e8f0',
+        lineHeight: 16,
     },
     analyticsModalActions: {
         flexDirection: 'row',

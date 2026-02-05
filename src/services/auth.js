@@ -327,6 +327,35 @@ class AuthService {
   }
 
   /**
+   * Get all admins (admin only)
+   */
+  async getAllAdmins(options = {}) {
+    debug(`${LOG_PREFIX} Fetching all admins...`);
+
+    try {
+      let query = supabase
+        .from('profiles')
+        .select(DISPATCHER_LIST_FIELDS)
+        .eq('role', 'admin')
+        .order('created_at', { ascending: false });
+
+      if (Number.isInteger(options.page) && Number.isInteger(options.pageSize)) {
+        const start = options.page * options.pageSize;
+        const end = start + options.pageSize - 1;
+        query = query.range(start, end);
+      }
+
+      const { data, error } = await query;
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getAllAdmins error:`, error);
+      return [];
+    }
+  }
+
+  /**
    * Verify master (admin only)
    */
   async verifyMaster(masterId) {

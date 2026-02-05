@@ -197,8 +197,8 @@ stateDiagram-v2
     
     completed --> confirmed: Payment verified
     
-    canceled_by_master --> reopened: Dispatcher reopens
-    canceled_by_client --> reopened: Dispatcher reopens
+    canceled_by_master --> reopened: Dispatcher/Admin reopens
+    canceled_by_client --> reopened: Dispatcher/Admin reopens
     reopened --> placed: Returns to pool
     
     confirmed --> [*]
@@ -214,8 +214,8 @@ stateDiagram-v2
 | `started` | Work in progress | `completed`, `canceled_by_master` |
 | `completed` | Work done, awaiting payment | `confirmed` |
 | `confirmed` | Fully closed, payment verified | Terminal |
-| `canceled_by_master` | Master couldn't complete | `reopened` |
-| `canceled_by_client` | Client canceled | `reopened` |
+| `canceled_by_master` | Master couldn't complete | `reopened` (Dispatcher/Admin) |
+| `canceled_by_client` | Client canceled | `reopened` (Dispatcher/Admin) |
 | `reopened` | Returned to pool | `placed` |
 | `expired` | Timed out (48h) | Terminal |
 
@@ -330,7 +330,7 @@ sequenceDiagram
 ### Functions
 - Full platform oversight and configuration
 - User management (verify/deactivate accounts)
-- Order management (view all, cancel, reopen)
+- Order management (view all, cancel/reopen/transfer; admin cancel/reopen use SECURITY DEFINER RPCs)
 - Commission collection and tracking
 - Platform settings management
 - Dispute resolution
@@ -566,6 +566,16 @@ npx expo start --clear
 ---
 
 # 5. Version History & Changelog
+
+## v5.3.3 - Login Screen UX + Reliability (February 5, 2026)
+
+### Login Screen Improvements
+- **Responsive bottom sheet**: Added a max width on large screens and adjusted layout so the sheet sits cleanly at the bottom without a visible gap.
+- **Expandable sheet behavior**: Bottom sheet now starts collapsed, expands on scroll/focus to cover ~90% of the screen, and centers the login card in the expanded view.
+- **Input UX**: Added email/password autofill hints, keyboard flow improvements, and disabled submit until inputs are valid.
+- **Safety & robustness**: Removed PII logging, hardened link opening with `canOpenURL`, and added a fallback when `redirectScreen` is missing.
+- **Localization polish**: English now uses the UK flag and the flag rendering is resilient to encoding issues.
+- **Action bar layout**: Support + preferences controls are grouped with labeled chips for clearer contact options.
 
 ## v5.3.2 - Telegram WebApp Fail-Safe (February 2, 2026)
 

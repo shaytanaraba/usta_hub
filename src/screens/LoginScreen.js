@@ -6,7 +6,7 @@
  * - Improved scroll layout
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,13 +17,13 @@ import {
   Platform,
   ActivityIndicator,
   Animated,
+  Easing,
   Linking,
   Image,
-  Dimensions,
+  useWindowDimensions,
   StatusBar,
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { Moon, Sun } from 'lucide-react-native';
 import authService from '../services/auth';
 import { useToast } from '../contexts/ToastContext';
 import { ThemeProvider, useTheme } from '../contexts/ThemeContext';
@@ -34,38 +34,14 @@ const BRAND = {
   red: '#dc2626',
   yellow: '#FDE047', // Matching the logo background approx
 };
-const SUPPORT_PHONE = '+996555000000';
+const SUPPORT_PHONE = '+996500105415';
+const SUPPORT_WHATSAPP = 'https://wa.me/996500105415';
+const SUPPORT_TELEGRAM = 'https://t.me/konevor';
 const logoImage = require('../../logo/logo_complex-1.png');
 
-const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
-
-// Flag components
-const FlagUS = () => (
-  <View style={styles.flagContainer}>
-    <Text style={styles.flagEmoji}>🇺🇸</Text>
-  </View>
-);
-
-const FlagRU = () => (
-  <View style={styles.flagContainer}>
-    <Text style={styles.flagEmoji}>🇷🇺</Text>
-  </View>
-);
-
-const FlagKG = () => (
-  <View style={styles.flagContainer}>
-    <Text style={styles.flagEmoji}>🇰🇬</Text>
-  </View>
-);
-
-const getFlag = (lang) => {
-  switch (lang) {
-    case 'en': return <FlagUS />;
-    case 'ru': return <FlagRU />;
-    case 'kg': return <FlagKG />;
-    default: return <FlagRU />;
-  }
-};
+const FLAG_EN = '\u{1F1EC}\u{1F1E7}';
+const FLAG_RU = '\u{1F1F7}\u{1F1FA}';
+const FLAG_KG = '\u{1F1F0}\u{1F1EC}';
 
 function LoginContent({ navigation }) {
   const { theme, isDark, toggleTheme } = useTheme();
@@ -75,25 +51,68 @@ function LoginContent({ navigation }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const { height: screenHeight, width: screenWidth } = useWindowDimensions();
+  const isLargeScreen = screenWidth >= 1024;
+  const logoHeight = screenHeight * 0.45;
+  const sheetMaxWidth = isLargeScreen ? 920 : undefined;
+  const collapsedHeight = Math.min(360, Math.max(240, screenHeight * 0.35));
+  const expandedHeight = Math.min(
+    screenHeight,
+    Math.max(collapsedHeight + 160, screenHeight * 0.88)
+  );
+
   const { showToast } = useToast();
 
-  // Animated value for scroll position
-  const scrollY = useRef(new Animated.Value(0)).current;
+  const [isExpanded, setIsExpanded] = useState(false);
+  const sheetAnim = useRef(new Animated.Value(0)).current;
+  const passwordInputRef = useRef(null);
 
-  // Dynamic matte opacity based on scroll
-  const matteOpacity = scrollY.interpolate({
-    inputRange: [0, 200],
-    outputRange: [0, 0.8], // Starts clear, becomes dark/opaque overlay
+  const sheetHeight = sheetAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [collapsedHeight, expandedHeight],
     extrapolate: 'clamp',
   });
 
+  // Dynamic matte opacity based on sheet expansion
+  const matteOpacity = sheetAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 0.75],
+    extrapolate: 'clamp',
+  });
+
+  useEffect(() => {
+    Animated.timing(sheetAnim, {
+      toValue: isExpanded ? 1 : 0,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [isExpanded, sheetAnim]);
+
+  const expandSheet = () => {
+    if (!isExpanded) {
+      setIsExpanded(true);
+    }
+  };
+
+  const toggleSheet = () => {
+    setIsExpanded((prev) => !prev);
+  };
+
   const handleLogin = async () => {
     // Standard login logic
-    console.log(`${LOG_PREFIX} Login attempt: ${email}`);
+    if (__DEV__) {
+      console.log(`${LOG_PREFIX} Login attempt`);
+    }
     setError('');
 
     if (!email.trim() || !password) {
       setError(t('loginErrorMissing'));
+      return;
+    }
+
+    if (!isValidEmail(email)) {
+      setError(t('loginErrorInvalidEmail') || t('loginErrorInvalidCredentials') || 'Invalid email');
       return;
     }
 
@@ -103,45 +122,76 @@ function LoginContent({ navigation }) {
       const result = await authService.loginUser(email, password);
 
       if (result.success) {
-        console.log(`${LOG_PREFIX} Login successful`);
+        if (__DEV__) {
+          console.log(`${LOG_PREFIX} Login successful`);
+        }
         showToast?.(t('loginSuccess'), 'success');
-        navigation.reset({
-          index: 0,
-          routes: [{
-            name: result.redirectScreen,
-            params: { user: result.user }
-          }],
-        });
+        if (result.redirectScreen) {
+          navigation.reset({
+            index: 0,
+            routes: [{
+              name: result.redirectScreen,
+              params: { user: result.user }
+            }],
+          });
+        } else {
+          setError(t('loginErrorGeneric'));
+          showToast?.(t('loginErrorGeneric'), 'error');
+        }
       } else {
-        console.warn(`${LOG_PREFIX} Login failed`);
+        if (__DEV__) {
+          console.warn(`${LOG_PREFIX} Login failed`);
+        }
         setError(result.message);
         showToast?.(result.message, 'error');
       }
     } catch (err) {
-      console.error(`${LOG_PREFIX} Login error:`, err);
+      if (__DEV__) {
+        console.error(`${LOG_PREFIX} Login error:`, err);
+      }
       setError(t('loginErrorGeneric'));
     } finally {
       setLoading(false);
     }
   };
 
+  const openExternal = async (url) => {
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        showToast?.(t('linkUnavailable') || 'Unable to open link', 'error');
+        return;
+      }
+      await Linking.openURL(url);
+    } catch (err) {
+      if (__DEV__) {
+        console.warn(`${LOG_PREFIX} Failed to open link`, err);
+      }
+      showToast?.(t('linkUnavailable') || 'Unable to open link', 'error');
+    }
+  };
+
   const handleSupport = () => {
-    Linking.openURL('tel:+996500105415');
+    openExternal(`tel:${SUPPORT_PHONE}`);
   };
 
   const handleWhatsApp = () => {
-    Linking.openURL('https://wa.me/996500105415');
+    openExternal(SUPPORT_WHATSAPP);
   };
 
   const handleTelegram = () => {
-    Linking.openURL('https://t.me/konevor');
+    openExternal(SUPPORT_TELEGRAM);
   };
 
   // Helper to get localized error message
   const getErrorMessage = (msg) => {
     if (!msg) return null;
-    if (msg.toLowerCase().includes('invalid email') || msg.toLowerCase().includes('invalid login')) {
-      return t('loginErrorInvalidCredentials') || "Неверный email или пароль";
+    if (typeof msg !== 'string') {
+      return t('loginErrorGeneric');
+    }
+    const normalized = msg.toLowerCase();
+    if (normalized.includes('invalid email') || normalized.includes('invalid login')) {
+      return t('loginErrorInvalidCredentials') || 'Invalid email or password';
     }
     return msg;
   };
@@ -154,13 +204,26 @@ function LoginContent({ navigation }) {
   };
 
   const isEmailValid = isValidEmail(email);
+  const canSubmit = !loading && email.trim().length > 0 && password.length > 0 && isEmailValid;
+  const languageFlag = language === 'en' ? FLAG_EN : language === 'ru' ? FLAG_RU : FLAG_KG;
+  const resolveLabel = (key, fallback) => {
+    const value = t(key);
+    return !value || value === key ? fallback : value;
+  };
+  const supportLabel = resolveLabel('supportLabel', 'Support');
+  const supportCallLabel = resolveLabel('supportCall', 'Call');
+  const supportWhatsAppLabel = resolveLabel('supportWhatsApp', 'WhatsApp');
+  const supportTelegramLabel = resolveLabel('supportTelegram', 'Telegram');
+  const preferencesLabel = resolveLabel('preferencesLabel', 'Preferences');
+  const themeLightLabel = resolveLabel('themeLight', 'Light');
+  const themeDarkLabel = resolveLabel('themeDark', 'Dark');
 
   return (
     <View style={[styles.container, { backgroundColor: BRAND.yellow }]}>
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
 
       {/* Hero Section with Logo */}
-      <View style={styles.logoContainer}>
+      <View style={[styles.logoContainer, { height: logoHeight }]}>
         <Image
           source={logoImage}
           style={styles.logoImage}
@@ -168,7 +231,7 @@ function LoginContent({ navigation }) {
         />
       </View>
 
-      {/* Matte Overlay (covers the logo/bg when scrolling) */}
+      {/* Matte Overlay (covers the logo/bg as sheet expands) */}
       <Animated.View
         pointerEvents="none"
         style={[
@@ -180,164 +243,226 @@ function LoginContent({ navigation }) {
         ]}
       />
 
-      {/* Main Scrollable Content */}
+      {/* Main Content */}
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
-        <Animated.ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          onScroll={Animated.event(
-            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-            { useNativeDriver: false }
-          )}
-          scrollEventThrottle={16}
-        >
+        <View style={styles.sheetHost}>
           {/* Bottom Sheet Card */}
-          <View
+          <Animated.View
             style={[
               styles.sheet,
               {
                 backgroundColor: theme.bgSecondary,
-                borderColor: theme.borderPrimary
+                borderColor: theme.borderPrimary,
+                maxWidth: sheetMaxWidth,
+                height: sheetHeight
               }
             ]}
           >
-            {/* Sheet Handle */}
-            <View style={[styles.sheetHandle, { backgroundColor: theme.borderSecondary }]} />
-
-            {/* Login Card */}
-            <View
-              style={[
-                styles.card,
-                {
-                  backgroundColor: theme.bgCard,
-                  borderColor: theme.borderPrimary
-                }
-              ]}
+            <TouchableOpacity
+              activeOpacity={0.8}
+              style={styles.sheetHandleArea}
+              onPress={toggleSheet}
             >
-              <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>
-                {t('loginTitle')}
-              </Text>
+              <View style={[styles.sheetHandle, { backgroundColor: theme.borderSecondary }]} />
+            </TouchableOpacity>
 
-              {displayError ? (
+            <Animated.ScrollView
+              contentContainerStyle={styles.sheetScroll}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              onScrollBeginDrag={expandSheet}
+              onTouchStart={expandSheet}
+              scrollEventThrottle={16}
+            >
+              <View style={styles.sheetBody}>
+                {/* Login Card */}
                 <View
                   style={[
-                    styles.errorContainer,
+                    styles.card,
                     {
-                      borderColor: theme.accentDanger,
-                      backgroundColor: `${theme.accentDanger}15`
+                      backgroundColor: theme.bgCard,
+                      borderColor: theme.borderPrimary
                     }
                   ]}
                 >
-                  <Text style={[styles.errorText, { color: theme.accentDanger }]}>
-                    {displayError}
+                  <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>
+                    {t('loginTitle')}
                   </Text>
-                </View>
-              ) : null}
 
-              {/* Form Inputs */}
-              <View style={styles.inputContainer}>
-                <Text style={[styles.label, { color: theme.textSecondary }]}>{t('loginEmail')}</Text>
-                <View style={[styles.inputRow, { backgroundColor: theme.bgInput, borderColor: theme.borderSecondary }]}>
-                  <Feather name="mail" size={18} color={theme.textMuted} />
-                  <TextInput
-                    style={[styles.input, { color: theme.textPrimary }, Platform.OS === 'web' && { outlineStyle: 'none' }]}
-                    placeholder={t('loginEmailPlaceholder')}
-                    placeholderTextColor={theme.textMuted}
-                    value={email}
-                    onChangeText={setEmail}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    editable={!loading}
-                  />
-                  {isEmailValid && (
-                    <View style={styles.successIcon}>
-                      <Feather name="check-circle" size={18} color="#22c55e" />
+                  {displayError ? (
+                    <View
+                      style={[
+                        styles.errorContainer,
+                        {
+                          borderColor: theme.accentDanger,
+                          backgroundColor: `${theme.accentDanger}15`
+                        }
+                      ]}
+                    >
+                      <Text style={[styles.errorText, { color: theme.accentDanger }]}>
+                        {displayError}
+                      </Text>
                     </View>
-                  )}
+                  ) : null}
+
+                  {/* Form Inputs */}
+                  <View style={styles.inputContainer}>
+                    <Text style={[styles.label, { color: theme.textSecondary }]}>{t('loginEmail')}</Text>
+                    <View style={[styles.inputRow, { backgroundColor: theme.bgInput, borderColor: theme.borderSecondary }]}>
+                      <Feather name="mail" size={18} color={theme.textMuted} />
+                      <TextInput
+                        style={[styles.input, { color: theme.textPrimary }, Platform.OS === 'web' && { outlineStyle: 'none' }]}
+                        placeholder={t('loginEmailPlaceholder')}
+                        placeholderTextColor={theme.textMuted}
+                        value={email}
+                        onChangeText={setEmail}
+                        onFocus={expandSheet}
+                        keyboardType="email-address"
+                        inputMode="email"
+                        autoComplete="email"
+                        textContentType="username"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        returnKeyType="next"
+                        blurOnSubmit={false}
+                        onSubmitEditing={() => passwordInputRef.current?.focus()}
+                        editable={!loading}
+                      />
+                      {isEmailValid && email.trim().length > 0 && (
+                        <View style={styles.successIcon}>
+                          <Feather name="check-circle" size={18} color="#22c55e" />
+                        </View>
+                      )}
+                    </View>
+                  </View>
+
+                  <View style={styles.inputContainer}>
+                    <Text style={[styles.label, { color: theme.textSecondary }]}>{t('loginPassword')}</Text>
+                    <View style={[styles.inputRow, { backgroundColor: theme.bgInput, borderColor: theme.borderSecondary }]}>
+                      <Feather name="lock" size={18} color={theme.textMuted} />
+                      <TextInput
+                        ref={passwordInputRef}
+                        style={[styles.input, { color: theme.textPrimary }, Platform.OS === 'web' && { outlineStyle: 'none' }]}
+                        placeholder={t('loginPasswordPlaceholder')}
+                        placeholderTextColor={theme.textMuted}
+                        value={password}
+                        onChangeText={setPassword}
+                        onFocus={expandSheet}
+                        secureTextEntry
+                        textContentType="password"
+                        autoComplete="password"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        returnKeyType="go"
+                        onSubmitEditing={() => {
+                          if (canSubmit) {
+                            handleLogin();
+                          }
+                        }}
+                        editable={!loading}
+                      />
+                    </View>
+                  </View>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.loginButton,
+                      { backgroundColor: BRAND.yellow, opacity: canSubmit ? 1 : 0.6 }
+                    ]}
+                    onPress={handleLogin}
+                    disabled={!canSubmit}
+                  >
+                    {loading ? (
+                      <ActivityIndicator color="#0f172a" />
+                    ) : (
+                      <Text style={styles.loginButtonText}>{t('loginButton')}</Text>
+                    )}
+                  </TouchableOpacity>
                 </View>
               </View>
 
-              <View style={styles.inputContainer}>
-                <Text style={[styles.label, { color: theme.textSecondary }]}>{t('loginPassword')}</Text>
-                <View style={[styles.inputRow, { backgroundColor: theme.bgInput, borderColor: theme.borderSecondary }]}>
-                  <Feather name="lock" size={18} color={theme.textMuted} />
-                  <TextInput
-                    style={[styles.input, { color: theme.textPrimary }, Platform.OS === 'web' && { outlineStyle: 'none' }]}
-                    placeholder={t('loginPasswordPlaceholder')}
-                    placeholderTextColor={theme.textMuted}
-                    value={password}
-                    onChangeText={setPassword}
-                    secureTextEntry
-                    autoCapitalize="none"
-                    editable={!loading}
-                  />
+              <View style={styles.sheetFooter}>
+                <View style={styles.utilityRow}>
+                  <Text style={[styles.utilityLabel, { color: theme.textMuted }]}>{supportLabel}</Text>
+                  <View style={styles.utilityGroup}>
+                    <TouchableOpacity
+                      onPress={handleSupport}
+                      style={[
+                        styles.chipButton,
+                        { backgroundColor: theme.bgInput, borderColor: theme.borderSecondary }
+                      ]}
+                    >
+                      <Feather name="phone" size={18} color={theme.textSecondary} />
+                      <Text style={[styles.chipText, { color: theme.textSecondary }]}>{supportCallLabel}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={handleWhatsApp}
+                      style={[
+                        styles.chipButton,
+                        { backgroundColor: theme.bgInput, borderColor: theme.borderSecondary }
+                      ]}
+                    >
+                      <Ionicons name="logo-whatsapp" size={18} color={theme.textSecondary} />
+                      <Text style={[styles.chipText, { color: theme.textSecondary }]}>{supportWhatsAppLabel}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={handleTelegram}
+                      style={[
+                        styles.chipButton,
+                        { backgroundColor: theme.bgInput, borderColor: theme.borderSecondary }
+                      ]}
+                    >
+                      <Ionicons name="paper-plane" size={18} color={theme.textSecondary} />
+                      <Text style={[styles.chipText, { color: theme.textSecondary }]}>{supportTelegramLabel}</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
-              </View>
 
-              <TouchableOpacity
-                style={[
-                  styles.loginButton,
-                  { backgroundColor: BRAND.yellow, opacity: loading ? 0.7 : 1 }
-                ]}
-                onPress={handleLogin}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#0f172a" />
-                ) : (
-                  <Text style={styles.loginButtonText}>{t('loginButton')}</Text>
-                )}
-              </TouchableOpacity>
-            </View>
+                <View style={styles.utilityRow}>
+                  <Text style={[styles.utilityLabel, { color: theme.textMuted }]}>{preferencesLabel}</Text>
+                  <View style={styles.utilityGroup}>
+                    <TouchableOpacity
+                      style={[
+                        styles.chipButton,
+                        { backgroundColor: theme.bgInput, borderColor: theme.borderSecondary }
+                      ]}
+                      onPress={toggleTheme}
+                    >
+                      {isDark ? (
+                        <Feather name="moon" size={18} color={theme.textSecondary} />
+                      ) : (
+                        <Feather name="sun" size={18} color={theme.textSecondary} />
+                      )}
+                      <Text style={[styles.chipText, { color: theme.textSecondary }]}>
+                        {isDark ? themeDarkLabel : themeLightLabel}
+                      </Text>
+                    </TouchableOpacity>
 
-            {/* Support & Footer */}
-            <View style={styles.footerContainer}>
-              <View style={styles.supportLinks}>
-                <TouchableOpacity onPress={handleSupport} style={styles.iconLink}>
-                  <Feather name="phone" size={20} color={theme.textSecondary} />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={handleWhatsApp} style={styles.iconLink}>
-                  <Ionicons name="logo-whatsapp" size={20} color={theme.textSecondary} />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={handleTelegram} style={styles.iconLink}>
-                  <Ionicons name="paper-plane" size={20} color={theme.textSecondary} />
-                </TouchableOpacity>
-              </View>
+                    <TouchableOpacity
+                      style={[
+                        styles.chipButton,
+                        { backgroundColor: theme.bgInput, borderColor: theme.borderSecondary }
+                      ]}
+                      onPress={cycleLanguage}
+                    >
+                      <Text style={styles.chipIconText}>{languageFlag}</Text>
+                      <Text style={[styles.chipText, { color: theme.textSecondary }]}>
+                        {language.toUpperCase()}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
 
-              <Text style={[styles.footerText, { color: theme.textMuted, marginTop: 10 }]}>
-                (c) 2026 Master.kg
-              </Text>
-            </View>
-
-            {/* Switchers moved here */}
-            <View style={[styles.inlineSwitchers, { marginTop: 20 }]}>
-              <TouchableOpacity
-                style={[styles.switchPill, { backgroundColor: theme.bgInput, borderColor: theme.borderSecondary }]}
-                onPress={toggleTheme}
-              >
-                {isDark ? (
-                  <Feather name="moon" size={18} color={theme.textPrimary} />
-                ) : (
-                  <Feather name="sun" size={18} color={theme.textPrimary} />
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.switchPill, { backgroundColor: theme.bgInput, borderColor: theme.borderSecondary }]}
-                onPress={cycleLanguage}
-              >
-                <Text style={{ fontSize: 20 }}>
-                  {language === 'en' ? '🇺🇸' : language === 'ru' ? '🇷🇺' : '🇰🇬'}
+                <Text style={[styles.footerText, { color: theme.textMuted }]}>
+                  (c) 2026 Master.kg
                 </Text>
-              </TouchableOpacity>
-            </View>
-            <View style={{ height: 40 }} />
-          </View>
-        </Animated.ScrollView>
+              </View>
+            </Animated.ScrollView>
+          </Animated.View>
+        </View>
       </KeyboardAvoidingView>
     </View>
   );
@@ -360,7 +485,6 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: SCREEN_HEIGHT * 0.45, // Logo takes top 45%
     justifyContent: 'center',
     alignItems: 'center',
     paddingTop: 40,
@@ -380,31 +504,88 @@ const styles = StyleSheet.create({
     flex: 1,
     zIndex: 2, // Content on top of everything
   },
-  scrollContent: {
-    paddingTop: SCREEN_HEIGHT * 0.40, // Start sheet lower to reveal logo
-    minHeight: SCREEN_HEIGHT,
-    paddingBottom: 20,
+  sheetHost: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    alignItems: 'center',
   },
   sheet: {
     borderWidth: 1,
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    paddingTop: 16,
+    width: '100%',
+    alignSelf: 'center',
+    overflow: 'hidden',
     shadowColor: '#000000',
     shadowOpacity: 0.1,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: -5 },
     elevation: 5,
   },
+  sheetHandleArea: {
+    alignItems: 'center',
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
   sheetHandle: {
     alignSelf: 'center',
     width: 48,
     height: 5,
     borderRadius: 999,
-    marginBottom: 20,
     opacity: 0.5,
+  },
+  sheetScroll: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+  },
+  sheetBody: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingTop: 8,
+  },
+  sheetFooter: {
+    alignItems: 'center',
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  utilityRow: {
+    width: '100%',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    rowGap: 8,
+    columnGap: 12,
+    marginBottom: 12,
+  },
+  utilityLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  utilityGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  chipButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  chipText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  chipIconText: {
+    fontSize: 16,
   },
   card: {
     borderWidth: 1,
@@ -448,93 +629,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     flex: 1,
   },
-  button: {
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: 'center',
-    marginTop: 12,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  supportCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginTop: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  supportLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  supportIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-  },
-  supportLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  supportPhone: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  supportActions: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  supportAction: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-  },
-  footer: {
-    textAlign: 'center',
-    fontSize: 12,
-    marginTop: 24,
-    marginBottom: 16,
-  },
-  // New styles for inline switchers
-  inlineSwitchers: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 20,
-    marginTop: 10,
-  },
-  switchPill: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-  },
-  flagContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  flagEmoji: {
-    fontSize: 24,
-  },
   loginButton: {
     borderRadius: 14,
     paddingVertical: 16,
@@ -554,25 +648,9 @@ const styles = StyleSheet.create({
   successIcon: {
     paddingLeft: 4,
   },
-  footerContainer: {
-    alignItems: 'center',
-    marginTop: 32,
-  },
-  supportLinks: {
-    flexDirection: 'row',
-    gap: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iconLink: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   footerText: {
     fontSize: 12,
   },
 });
+
+

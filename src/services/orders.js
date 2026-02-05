@@ -471,6 +471,7 @@ class OrdersService {
         .insert({
           client_id: clientId,
           dispatcher_id: dispatcherId,
+          assigned_dispatcher_id: dispatcherId,
           pricing_type: pricingType || 'unknown',
           initial_price: normalizedInitial,
           service_type: serviceType,
@@ -512,9 +513,11 @@ class OrdersService {
         .select(`
           *,
           client:client_id(full_name, phone, email),
-          master:master_id(id, full_name, phone)
+          master:master_id(id, full_name, phone),
+          dispatcher:dispatcher_id(id, full_name, phone),
+          assigned_dispatcher:assigned_dispatcher_id(id, full_name, phone)
         `)
-        .eq('dispatcher_id', dispatcherId)
+        .or(`assigned_dispatcher_id.eq.${dispatcherId},dispatcher_id.eq.${dispatcherId}`)
         .order('created_at', { ascending: false });
 
       if (statusFilter) {
@@ -680,10 +683,36 @@ class OrdersService {
   }
 
   /**
+   * Transfer order to another dispatcher (current handler only)
+   */
+  transferOrderToDispatcher = async (orderId, currentDispatcherId, targetDispatcherId, callerRole = null) => {
+    console.log(`${LOG_PREFIX} Transfer order ${orderId} to dispatcher ${targetDispatcherId}`);
+    try {
+      if (!orderId || !currentDispatcherId || !targetDispatcherId) {
+        throw new Error('Missing transfer parameters');
+      }
+      const { data, error } = await supabase.rpc('transfer_order_to_dispatcher', {
+        order_id: orderId,
+        target_dispatcher_id: targetDispatcherId,
+      });
+
+      if (error) throw error;
+      if (!data?.success) {
+        return { success: false, message: data?.error || 'Transfer failed' };
+      }
+
+      return { success: true, order: data?.order || null };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} transferOrderToDispatcher failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
    * Cancel order by client (dispatcher on behalf)
    * Allowed from: placed, claimed, started, reopened
    */
-  cancelByClient = async (orderId, dispatcherId, reason) => {
+  cancelByClient = async (orderId, dispatcherId, reason, callerRole = null) => {
     console.log(`${LOG_PREFIX} cancelByClient called - orderId: ${orderId}, dispatcherId: ${dispatcherId}, reason: ${reason}`);
 
     try {
@@ -704,7 +733,7 @@ class OrdersService {
 
       console.log(`${LOG_PREFIX} Order status: ${orderCheck.status}, Order dispatcher: ${orderCheck.dispatcher_id}, Current dispatcher: ${dispatcherId}`);
 
-      if (orderCheck.dispatcher_id !== dispatcherId) {
+      if (callerRole !== 'admin' && orderCheck.dispatcher_id !== dispatcherId) {
         console.log(`${LOG_PREFIX} Dispatcher mismatch - not authorized`);
         return { success: false, message: 'Not authorized to cancel this order' };
       }
@@ -753,10 +782,23 @@ class OrdersService {
   /**
    * Reopen order (dispatcher) - Return canceled order to pool
    */
-  reopenOrder = async (orderId, dispatcherId) => {
+  reopenOrder = async (orderId, dispatcherId, callerRole = null) => {
     console.log(`${LOG_PREFIX} Reopening order: ${orderId}`);
 
     try {
+      if (callerRole === 'admin') {
+        const { data, error } = await supabase.rpc('reopen_order', {
+          order_uuid: orderId,
+          reason: 'Reopened by admin'
+        });
+
+        if (error) throw error;
+        if (!data?.success) {
+          return { success: false, message: data?.message || data?.error || 'Failed to reopen order' };
+        }
+        return { success: true, message: 'Order reopened', order: data };
+      }
+
       const { data, error } = await supabase
         .from('orders')
         .update({
@@ -785,10 +827,14 @@ class OrdersService {
   /**
    * Unassign master (dispatcher) - Cancel then reopen to return to pool
    */
-  unassignMaster = async (orderId, dispatcherId, reason = 'dispatcher_unassign') => {
+  unassignMaster = async (orderId, dispatcherId, reason = 'dispatcher_unassign', callerRole = null) => {
     console.log(`${LOG_PREFIX} Unassigning master from order: ${orderId}`);
 
     try {
+      if (callerRole === 'admin') {
+        return await this.unassignMasterAdmin(orderId, reason);
+      }
+
       const { data: canceled, error: cancelError } = await supabase
         .from('orders')
         .update({
@@ -845,7 +891,8 @@ class OrdersService {
           *,
           client:client_id(full_name, phone),
           master:master_id(full_name, phone),
-          dispatcher:dispatcher_id(full_name)
+          dispatcher:dispatcher_id(full_name),
+          assigned_dispatcher:assigned_dispatcher_id(full_name)
         `)
         .order('created_at', { ascending: false });
 
@@ -1244,6 +1291,7 @@ class OrdersService {
         client_name: clientName,
         client_phone: normalizedPhone,
         dispatcher_id: dispatcherId,
+        assigned_dispatcher_id: dispatcherId,
         service_type: orderData.serviceType || 'other',
         urgency: orderData.urgency || 'planned',
         status: ORDER_STATUS.PLACED,
@@ -1430,9 +1478,11 @@ class OrdersService {
         .select(`
           *,
           client:client_id(id, full_name, phone, email),
-          master:master_id(id, full_name, phone, rating, total_commission_owed)
+          master:master_id(id, full_name, phone, rating, total_commission_owed),
+          dispatcher:dispatcher_id(id, full_name, phone),
+          assigned_dispatcher:assigned_dispatcher_id(id, full_name, phone)
         `)
-        .eq('dispatcher_id', dispatcherId);
+        .or(`assigned_dispatcher_id.eq.${dispatcherId},dispatcher_id.eq.${dispatcherId}`);
 
       // Status filter (multiple allowed)
       if (statusFilter && statusFilter.length > 0) {
@@ -1803,7 +1853,7 @@ class OrdersService {
     try {
       const { data, error } = await supabase
         .from('cancellation_reasons')
-        .select('code, name_en, name_ru')
+        .select('*')
         .or(`applicable_to.eq.${applicableTo},applicable_to.eq.both`)
         .eq('is_active', true)
         .order('sort_order');
@@ -1813,6 +1863,79 @@ class OrdersService {
     } catch (error) {
       console.error(`${LOG_PREFIX} getCancellationReasons failed:`, error);
       return [];
+    }
+  }
+
+  /**
+   * Get all cancellation reasons (admin management)
+   */
+  getAllCancellationReasons = async () => {
+    console.log(`${LOG_PREFIX} Fetching all cancellation reasons...`);
+    try {
+      const { data, error } = await supabase
+        .from('cancellation_reasons')
+        .select('*')
+        .order('sort_order', { ascending: true });
+
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getAllCancellationReasons failed:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Add cancellation reason
+   */
+  addCancellationReason = async (reasonData) => {
+    try {
+      const { data, error } = await supabase
+        .from('cancellation_reasons')
+        .insert(reasonData)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Update cancellation reason
+   */
+  updateCancellationReason = async (id, updates) => {
+    try {
+      const { data, error } = await supabase
+        .from('cancellation_reasons')
+        .update(updates)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Delete cancellation reason
+   */
+  deleteCancellationReason = async (id) => {
+    try {
+      const { error } = await supabase
+        .from('cancellation_reasons')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      return { success: true };
+    } catch (error) {
+      return { success: false, message: error.message };
     }
   }
 
@@ -1925,7 +2048,7 @@ class OrdersService {
     console.log(`${LOG_PREFIX} Admin reopening order: ${orderId}`);
 
     try {
-      const { data, error } = await supabase.rpc('reopen_order', {
+      const { data, error } = await supabase.rpc('reopen_order_admin', {
         order_uuid: orderId,
         reason: reason
       });
@@ -2052,20 +2175,16 @@ class OrdersService {
     console.log(`${LOG_PREFIX} Admin canceling order: ${orderId}`);
 
     try {
-      const { data, error } = await supabase
-        .from('orders')
-        .update({
-          status: ORDER_STATUS.CANCELED_BY_CLIENT,
-          canceled_at: new Date().toISOString(),
-          cancellation_reason: reason,
-          cancellation_notes: 'Canceled by admin'
-        })
-        .eq('id', orderId)
-        .select()
-        .single();
+      const { data, error } = await supabase.rpc('cancel_order_admin', {
+        order_uuid: orderId,
+        reason
+      });
 
       if (error) throw error;
-      return { success: true, message: 'Order canceled', order: data };
+      if (!data?.success) {
+        return { success: false, message: data?.message || data?.error || 'Order cancel failed' };
+      }
+      return { success: true, message: 'Order canceled', orderId: data?.order_id, previousStatus: data?.previous_status };
     } catch (error) {
       console.error(`${LOG_PREFIX} cancelOrderAdmin failed:`, error);
       return { success: false, message: error.message };

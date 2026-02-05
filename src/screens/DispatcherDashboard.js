@@ -8,8 +8,9 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
     View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl,
     Modal, TextInput, ScrollView, ActivityIndicator, Alert, Platform,
-    Dimensions, Clipboard, Linking, Animated,
+    Dimensions, Linking, Animated,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -55,12 +56,6 @@ const ATTENTION_FILTER_OPTIONS = [
     { id: 'Disputed', label: 'issueDisputed' },
     { id: 'Payment', label: 'issueUnpaid' },
     { id: 'Canceled', label: 'issueCanceled' },
-];
-
-// Dispatcher filter options
-const DISPATCHER_OPTIONS = [
-    { id: 'all', label: 'filterAllOrders' },
-    { id: 'me', label: 'filterMyOrders' },
 ];
 
 // Sort options
@@ -120,7 +115,7 @@ const Pagination = ({ current, total, onPageChange }) => {
 
 export default function DispatcherDashboard({ navigation, route }) {
     const { showToast } = useToast();
-    const { translations, language, cycleLanguage, t } = useLocalization();
+    const { translations, language, cycleLanguage, setLanguage, t } = useLocalization();
     const TRANSLATIONS = translations;
     const { logout } = useAuth();
     const { canGoBack, canGoForward, goBack, goForward } = useNavHistory();
@@ -129,18 +124,23 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [user, setUser] = useState(route.params?.user || null);
     const [orders, setOrders] = useState([]);
     const [masters, setMasters] = useState([]);
+    const [dispatchers, setDispatchers] = useState([]);
     const [recentAddresses, setRecentAddresses] = useState([]);
     const [serviceTypes, setServiceTypes] = useState(SERVICE_TYPES);
     const [districts, setDistricts] = useState([]);
 
     // UI States
-    const [activeTab, setActiveTab] = useState('create');
+    const [activeTab, setActiveTab] = useState('stats');
     const [refreshing, setRefreshing] = useState(false);
     const [loading, setLoading] = useState(true);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [isDark, setIsDark] = useState(true); // Theme state
     const [actionLoading, setActionLoading] = useState(false);
     const [page, setPage] = useState(1); // Pagination state
+    const [statsTooltip, setStatsTooltip] = useState(null);
+    const [statsInfo, setStatsInfo] = useState(null);
+    const [statsGridWidth, setStatsGridWidth] = useState(0);
+    const statsTooltipTimer = useRef(null);
 
     // Picker modal state
     const [pickerModal, setPickerModal] = useState({ visible: false, options: [], value: '', onChange: null, title: '' });
@@ -154,8 +154,8 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [filterUrgency, setFilterUrgency] = useState('all');
     const [filterService, setFilterService] = useState('all');
     const [filterSort, setFilterSort] = useState('newest');
-    const [filterDispatcher, setFilterDispatcher] = useState('all');
     const [showFilters, setShowFilters] = useState(false);
+    const [statsRange, setStatsRange] = useState('week');
     const [showNeedsAttention, setShowNeedsAttention] = useState(false);
     const [sortOrder, setSortOrder] = useState('newest');
     const [filterAttentionType, setFilterAttentionType] = useState('All');
@@ -183,6 +183,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [showRecentAddr, setShowRecentAddr] = useState(false);
     const [idempotencyKey, setIdempotencyKey] = useState(generateIdempotencyKey());
     const [platformSettings, setPlatformSettings] = useState(null); // Dynamic platform settings
+    const skeletonPulse = useRef(new Animated.Value(0.6)).current;
 
     // ============================================
     // DATA LOADING
@@ -194,6 +195,7 @@ export default function DispatcherDashboard({ navigation, route }) {
         loadRecentAddresses();
         loadServiceTypes();
         loadDistricts();
+        loadDispatchers();
         loadPlatformSettings(); // Fetch platform settings for callout fee default
     }, []);
 
@@ -210,6 +212,25 @@ export default function DispatcherDashboard({ navigation, route }) {
         }
     }, [platformSettings]);
 
+    useEffect(() => {
+        const loop = Animated.loop(
+            Animated.sequence([
+                Animated.timing(skeletonPulse, { toValue: 1, duration: 900, useNativeDriver: true }),
+                Animated.timing(skeletonPulse, { toValue: 0.6, duration: 900, useNativeDriver: true }),
+            ])
+        );
+        loop.start();
+        return () => loop.stop();
+    }, [skeletonPulse]);
+
+    useEffect(() => {
+        return () => {
+            if (statsTooltipTimer.current) {
+                clearTimeout(statsTooltipTimer.current);
+            }
+        };
+    }, []);
+
     const loadData = async () => {
         if (!refreshing) setLoading(true);
         try {
@@ -218,6 +239,8 @@ export default function DispatcherDashboard({ navigation, route }) {
             if (currentUser) {
                 const allOrders = await ordersService.getDispatcherOrders(currentUser.id);
                 setOrders(allOrders);
+            } else {
+                setOrders([]);
             }
         } catch (error) {
             console.error(`${LOG_PREFIX} loadData error:`, error);
@@ -265,6 +288,17 @@ export default function DispatcherDashboard({ navigation, route }) {
         setMasters(data);
     };
 
+    const loadDispatchers = async () => {
+        try {
+            if (authService.getAllDispatchers) {
+                const data = await authService.getAllDispatchers();
+                setDispatchers(data || []);
+            }
+        } catch (error) {
+            console.error(`${LOG_PREFIX} loadDispatchers error:`, error);
+        }
+    };
+
     const loadServiceTypes = async () => {
         try {
             const types = await ordersService.getServiceTypes();
@@ -309,11 +343,11 @@ export default function DispatcherDashboard({ navigation, route }) {
         }
     };
 
-    const onRefresh = useCallback(async () => {
+    const onRefresh = async () => {
         setRefreshing(true);
         await loadData();
         setRefreshing(false);
-    }, []);
+    };
 
     const getAssignErrorMessage = (errorCode) => {
         if (!errorCode) return null;
@@ -352,9 +386,13 @@ export default function DispatcherDashboard({ navigation, route }) {
     // FILTERING
     // ============================================
 
+    const handlerOrders = useMemo(() => {
+        return orders.filter(o => String(o.assigned_dispatcher_id || o.dispatcher_id) === String(user?.id));
+    }, [orders, user]);
+
     const needsActionOrders = useMemo(() => {
         const now = Date.now();
-        return orders.filter(o => {
+        return handlerOrders.filter(o => {
             if (o.is_disputed) return true;
             if (o.status === ORDER_STATUS.COMPLETED) return true;
             if (o.status === ORDER_STATUS.CANCELED_BY_CLIENT) return false;
@@ -363,11 +401,11 @@ export default function DispatcherDashboard({ navigation, route }) {
             if (o.status === ORDER_STATUS.CLAIMED && (now - new Date(o.updated_at).getTime()) > 30 * 60000) return true;
             return false;
         });
-    }, [orders]);
+    }, [handlerOrders]);
 
     const statusCounts = useMemo(() => {
         const counts = { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 };
-        orders.forEach(o => {
+        handlerOrders.forEach(o => {
             if ([ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED, ORDER_STATUS.CLAIMED, ORDER_STATUS.STARTED].includes(o.status)) {
                 counts.Active += 1;
             } else if (o.status === ORDER_STATUS.COMPLETED) {
@@ -379,10 +417,10 @@ export default function DispatcherDashboard({ navigation, route }) {
             }
         });
         return counts;
-    }, [orders]);
+    }, [handlerOrders]);
 
     const filteredOrders = useMemo(() => {
-        let res = [...orders];
+        let res = [...handlerOrders];
 
         // Search
         if (searchQuery) {
@@ -428,12 +466,6 @@ export default function DispatcherDashboard({ navigation, route }) {
         }
 
         // Dispatcher filter
-        if (filterDispatcher === 'me') {
-            res = res.filter(o => o.assigned_dispatcher_id === user?.id);
-        } else if (filterDispatcher === 'unassigned') {
-            res = res.filter(o => !o.assigned_dispatcher_id);
-        }
-
         // Urgency
         if (filterUrgency !== 'all') res = res.filter(o => o.urgency === filterUrgency);
 
@@ -448,12 +480,138 @@ export default function DispatcherDashboard({ navigation, route }) {
         });
 
         return res;
-    }, [orders, searchQuery, statusFilter, filterUrgency, filterService, filterSort, filterDispatcher, user]);
+    }, [handlerOrders, searchQuery, statusFilter, filterUrgency, filterService, filterSort, user]);
+
+    const statsWindowDays = statsRange === 'month' ? 30 : 7;
+    const statsWindowStart = useMemo(() => {
+        const start = new Date();
+        start.setHours(0, 0, 0, 0);
+        start.setDate(start.getDate() - (statsWindowDays - 1));
+        return start;
+    }, [statsWindowDays]);
+    const statsWindowEnd = useMemo(() => {
+        const end = new Date();
+        end.setHours(0, 0, 0, 0);
+        return end;
+    }, [statsWindowDays]);
+    const prevWindowStart = useMemo(() => {
+        const start = new Date(statsWindowStart);
+        start.setDate(start.getDate() - statsWindowDays);
+        return start;
+    }, [statsWindowStart, statsWindowDays]);
+
+    const statsOrders = useMemo(() => {
+        return orders.filter(o => {
+            const createdAt = o?.created_at ? new Date(o.created_at) : null;
+            return createdAt && createdAt >= statsWindowStart;
+        });
+    }, [orders, statsWindowStart]);
+
+    const prevStatsOrders = useMemo(() => {
+        return orders.filter(o => {
+            const createdAt = o?.created_at ? new Date(o.created_at) : null;
+            return createdAt && createdAt >= prevWindowStart && createdAt < statsWindowStart;
+        });
+    }, [orders, prevWindowStart, statsWindowStart]);
+
+    const statsCreated = useMemo(() => statsOrders.filter(o => String(o.dispatcher_id) === String(user?.id)).length, [statsOrders, user]);
+    const statsHandled = useMemo(() => statsOrders.filter(o => String(o.assigned_dispatcher_id || o.dispatcher_id) === String(user?.id)).length, [statsOrders, user]);
+    const statsCompleted = useMemo(() => statsOrders.filter(o => [ORDER_STATUS.COMPLETED, ORDER_STATUS.CONFIRMED].includes(o.status)).length, [statsOrders]);
+    const statsCanceled = useMemo(() => statsOrders.filter(o => String(o.status || '').includes('canceled')).length, [statsOrders]);
+
+    const prevCreated = useMemo(() => prevStatsOrders.filter(o => String(o.dispatcher_id) === String(user?.id)).length, [prevStatsOrders, user]);
+    const prevHandled = useMemo(() => prevStatsOrders.filter(o => String(o.assigned_dispatcher_id || o.dispatcher_id) === String(user?.id)).length, [prevStatsOrders, user]);
+    const prevCompleted = useMemo(() => prevStatsOrders.filter(o => [ORDER_STATUS.COMPLETED, ORDER_STATUS.CONFIRMED].includes(o.status)).length, [prevStatsOrders]);
+    const prevCanceled = useMemo(() => prevStatsOrders.filter(o => String(o.status || '').includes('canceled')).length, [prevStatsOrders]);
+
+    const completionRate = statsCreated ? Math.round((statsCompleted / statsCreated) * 100) : 0;
+    const cancelRate = statsCreated ? Math.round((statsCanceled / statsCreated) * 100) : 0;
+
+    const buildSeries = useCallback((items, getDate) => {
+        const series = new Array(statsWindowDays).fill(0);
+        items.forEach(o => {
+            const dateValue = getDate(o);
+            if (!dateValue) return;
+            const day = new Date(dateValue);
+            day.setHours(0, 0, 0, 0);
+            const index = Math.floor((day - statsWindowStart) / (24 * 60 * 60 * 1000));
+            if (index >= 0 && index < statsWindowDays) series[index] += 1;
+        });
+        return series;
+    }, [statsWindowDays, statsWindowStart]);
+
+    const createdSeries = useMemo(
+        () => buildSeries(statsOrders.filter(o => String(o.dispatcher_id) === String(user?.id)), o => o.created_at),
+        [statsOrders, user, buildSeries]
+    );
+    const handledSeries = useMemo(
+        () => buildSeries(statsOrders.filter(o => String(o.assigned_dispatcher_id || o.dispatcher_id) === String(user?.id)), o => o.updated_at || o.created_at),
+        [statsOrders, user, buildSeries]
+    );
+
+    const getDeltaPct = (current, prev) => {
+        if (!prev && !current) return 0;
+        if (!prev) return 100;
+        return Math.round(((current - prev) / prev) * 100);
+    };
+
+    const statsDelta = {
+        created: getDeltaPct(statsCreated, prevCreated),
+        handled: getDeltaPct(statsHandled, prevHandled),
+        completed: getDeltaPct(statsCompleted, prevCompleted),
+        canceled: getDeltaPct(statsCanceled, prevCanceled),
+    };
+
+    const statsColumns = useMemo(() => {
+        if (statsGridWidth >= 1100) return 3;
+        if (statsGridWidth >= 760) return 2;
+        return 1;
+    }, [statsGridWidth]);
+
+    const clearStatsTooltipTimer = useCallback(() => {
+        if (statsTooltipTimer.current) {
+            clearTimeout(statsTooltipTimer.current);
+            statsTooltipTimer.current = null;
+        }
+    }, []);
+
+    const showStatsTooltip = useCallback((payload, resetTimer = true) => {
+        setStatsTooltip(payload);
+        if (resetTimer) {
+            clearStatsTooltipTimer();
+            statsTooltipTimer.current = setTimeout(() => {
+                setStatsTooltip(null);
+            }, 2200);
+        }
+    }, [clearStatsTooltipTimer]);
+
+    const updateStatsTooltipPos = useCallback((x, y) => {
+        setStatsTooltip(prev => (prev ? { ...prev, x, y } : prev));
+    }, []);
+
+    const hideStatsTooltip = useCallback(() => {
+        clearStatsTooltipTimer();
+        setStatsTooltip(null);
+    }, [clearStatsTooltipTimer]);
+
+    const getSeriesMeta = useCallback((series) => {
+        const total = series.reduce((sum, v) => sum + v, 0);
+        const max = Math.max(0, ...series);
+        const avg = series.length ? total / series.length : 0;
+        const last = series[series.length - 1] || 0;
+        return { total, max, avg, last };
+    }, []);
+
+    const formatShortDate = (date) => {
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${month}/${day}`;
+    };
 
     // Reset pagination when filters change
     useEffect(() => {
         setPage(1);
-    }, [searchQuery, statusFilter, filterUrgency, filterService, filterSort, filterDispatcher]);
+    }, [searchQuery, statusFilter, filterUrgency, filterService, filterSort]);
 
     // ============================================
     // ACTIONS
@@ -531,10 +689,10 @@ export default function DispatcherDashboard({ navigation, route }) {
         try {
             let text = '';
             // Use browser API for web, react-native API for mobile
-            if (Platform.OS === 'web' && navigator?.clipboard) {
+            if (Platform.OS === 'web' && navigator?.clipboard?.readText) {
                 text = await navigator.clipboard.readText();
             } else {
-                text = await Clipboard.getString();
+                text = await Clipboard.getStringAsync();
             }
             if (text) {
                 const normalized = normalizeKyrgyzPhone(text);
@@ -591,6 +749,46 @@ export default function DispatcherDashboard({ navigation, route }) {
         setShowAssignModal(true);
     };
 
+    const openTransferPicker = (order) => {
+        if (!order) return;
+        const options = (dispatchers || [])
+            .filter(d => d?.id && d.id !== user?.id)
+            .map(d => ({
+                id: d.id,
+                label: d.full_name || d.email || d.phone || `Dispatcher ${String(d.id).slice(0, 6)}`
+            }));
+        if (options.length === 0) {
+            showToast?.(TRANSLATIONS[language].noDispatchersFound || 'No other dispatchers found', 'info');
+            return;
+        }
+        setPickerModal({
+            visible: true,
+            title: TRANSLATIONS[language].pickerDispatcher || 'Select dispatcher',
+            options,
+            value: '',
+            onChange: async (targetId) => handleTransferDispatcher(order, targetId),
+        });
+    };
+
+    const handleTransferDispatcher = async (order, targetDispatcherId) => {
+        if (!order?.id || !user?.id || !targetDispatcherId) return;
+        setActionLoading(true);
+        try {
+            const result = await ordersService.transferOrderToDispatcher(order.id, user.id, targetDispatcherId, user?.role);
+            if (result.success) {
+                showToast?.(TRANSLATIONS[language].toastTransferSuccess || 'Order transferred', 'success');
+                setDetailsOrder(null);
+                await loadData();
+            } else {
+                showToast?.(TRANSLATIONS[language].toastTransferFailed || 'Transfer failed', 'error');
+            }
+        } catch (e) {
+            showToast?.(TRANSLATIONS[language].toastTransferFailed || 'Transfer failed', 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
     const handleAssignMaster = async (master) => {
         const targetOrder = assignTarget || detailsOrder;
         const targetId = targetOrder?.id;
@@ -611,7 +809,7 @@ export default function DispatcherDashboard({ navigation, route }) {
             try {
                 const needsReassign = !!(targetOrder?.master_id || targetOrder?.master);
                 if (needsReassign) {
-                    const unassignRes = await ordersService.unassignMaster(targetId, user.id, 'dispatcher_reassign');
+                    const unassignRes = await ordersService.unassignMaster(targetId, user.id, 'dispatcher_reassign', user?.role);
                     if (!unassignRes.success) {
                         showToast?.(TRANSLATIONS[language].toastAssignFail, 'error');
                         setActionLoading(false);
@@ -671,7 +869,7 @@ export default function DispatcherDashboard({ navigation, route }) {
         const confirmRemove = async () => {
             setActionLoading(true);
             try {
-                const result = await ordersService.unassignMaster(detailsOrder.id, user.id, 'dispatcher_unassign');
+                const result = await ordersService.unassignMaster(detailsOrder.id, user.id, 'dispatcher_unassign', user?.role);
                 if (result.success) {
                     showToast?.(TRANSLATIONS[language].toastMasterUnassigned || 'Master removed', 'success');
                     setIsEditing(false);
@@ -763,7 +961,7 @@ export default function DispatcherDashboard({ navigation, route }) {
 
     const handleCancel = (orderId) => {
         const confirmCancel = async () => {
-            const result = await ordersService.cancelByClient(orderId, user.id, 'client_request');
+            const result = await ordersService.cancelByClient(orderId, user.id, 'client_request', user?.role);
             if (result.success) {
                 showToast?.(TRANSLATIONS[language].statusCanceled, 'success');
                 await loadData();
@@ -789,15 +987,23 @@ export default function DispatcherDashboard({ navigation, route }) {
     };
 
     const handleReopen = async (orderId) => {
-        const result = await ordersService.reopenOrder(orderId, user.id);
+        const result = await ordersService.reopenOrder(orderId, user.id, user?.role);
         if (result.success) { showToast?.(TRANSLATIONS[language].filterStatusReopened, 'success'); await loadData(); }
         else showToast?.(TRANSLATIONS[language].toastFailedPrefix + (TRANSLATIONS[language].errorGeneric || 'Error'), 'error');
     };
 
-    const copyToClipboard = (text) => {
+    const copyToClipboard = async (text) => {
         if (!text) return;
-        Clipboard.setString(text);
-        showToast?.(TRANSLATIONS[language].toastCopied, 'success');
+        try {
+            if (Platform.OS === 'web' && navigator?.clipboard?.writeText) {
+                await navigator.clipboard.writeText(String(text));
+            } else {
+                await Clipboard.setStringAsync(String(text));
+            }
+            showToast?.(TRANSLATIONS[language].toastCopied, 'success');
+        } catch (e) {
+            showToast?.(TRANSLATIONS[language].toastCopyFailed || 'Copy failed', 'error');
+        }
     };
 
     const handleLogout = async () => {
@@ -947,9 +1153,11 @@ export default function DispatcherDashboard({ navigation, route }) {
                     {/* Sidebar Navigation */}
                     <View style={styles.sidebarNav}>
                         <TouchableOpacity
-                            style={[styles.sidebarNavItem, activeTab === 'create' && styles.sidebarNavItemActive]}
-                            onPress={() => { setActiveTab('create'); setIsSidebarOpen(false); }}>
-                            <Text style={[styles.sidebarNavText, activeTab === 'create' && styles.sidebarNavTextActive]}>+ {TRANSLATIONS[language].createOrder}</Text>
+                            style={[styles.sidebarNavItem, activeTab === 'stats' && styles.sidebarNavItemActive]}
+                            onPress={() => { setActiveTab('stats'); setIsSidebarOpen(false); }}>
+                            <Text style={[styles.sidebarNavText, activeTab === 'stats' && styles.sidebarNavTextActive]}>
+                                {TRANSLATIONS[language].stats || 'Statistics'}
+                            </Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={[styles.sidebarNavItem, activeTab === 'queue' && styles.sidebarNavItemActive]}
@@ -962,6 +1170,18 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     </View>
                                 )}
                             </View>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.sidebarNavItem, activeTab === 'create' && styles.sidebarNavItemActive]}
+                            onPress={() => { setActiveTab('create'); setIsSidebarOpen(false); }}>
+                            <Text style={[styles.sidebarNavText, activeTab === 'create' && styles.sidebarNavTextActive]}>+ {TRANSLATIONS[language].createOrder}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.sidebarNavItem, activeTab === 'settings' && styles.sidebarNavItemActive]}
+                            onPress={() => { setActiveTab('settings'); setIsSidebarOpen(false); }}>
+                            <Text style={[styles.sidebarNavText, activeTab === 'settings' && styles.sidebarNavTextActive]}>
+                                {TRANSLATIONS[language].sectionSettings || 'Settings'}
+                            </Text>
                         </TouchableOpacity>
                     </View>
 
@@ -1010,7 +1230,15 @@ export default function DispatcherDashboard({ navigation, route }) {
                 <TouchableOpacity onPress={() => setIsSidebarOpen(true)} style={[styles.menuBtn, !isDark && styles.btnLight]}>
                     <Text style={[styles.menuBtnText, !isDark && styles.textDark]}>☰</Text>
                 </TouchableOpacity>
-                <Text style={[styles.headerTitle, !isDark && styles.textDark]}>{activeTab === 'queue' ? TRANSLATIONS[language].ordersQueue : TRANSLATIONS[language].createOrder}</Text>
+                <Text style={[styles.headerTitle, !isDark && styles.textDark]}>
+                    {activeTab === 'queue'
+                        ? TRANSLATIONS[language].ordersQueue
+                        : activeTab === 'stats'
+                            ? (TRANSLATIONS[language].stats || 'Statistics')
+                            : activeTab === 'settings'
+                                ? (TRANSLATIONS[language].sectionSettings || 'Settings')
+                                : TRANSLATIONS[language].createOrder}
+                </Text>
             </View>
             <View style={styles.headerRight}>
                 <TouchableOpacity
@@ -1086,15 +1314,6 @@ export default function DispatcherDashboard({ navigation, route }) {
                     })}>
                         <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                             {currentStatusLabel} ({statusCounts[statusFilter] ?? 0})
-                        </Text>
-                        <Text style={styles.filterDropdownArrow}>▼</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity style={[styles.filterDropdown, !isDark && styles.btnLight]} onPress={() => setPickerModal({
-                        visible: true, title: TRANSLATIONS[language].pickerDispatcher, options: DISPATCHER_OPTIONS, value: filterDispatcher, onChange: setFilterDispatcher
-                    })}>
-                        <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
-                            {TRANSLATIONS[language][DISPATCHER_OPTIONS.find(o => o.id === filterDispatcher)?.label] || DISPATCHER_OPTIONS.find(o => o.id === filterDispatcher)?.label || filterDispatcher}
                         </Text>
                         <Text style={styles.filterDropdownArrow}>▼</Text>
                     </TouchableOpacity>
@@ -1297,6 +1516,36 @@ export default function DispatcherDashboard({ navigation, route }) {
         const totalPages = Math.ceil(filteredOrders.length / pageSize);
         const paginatedOrders = filteredOrders.slice((page - 1) * pageSize, page * pageSize);
 
+        if (loading && !refreshing) {
+            const skeletonCount = viewMode === 'cards' ? 6 : 8;
+            return (
+                <View style={styles.queueContainer}>
+                    {renderNeedsAttention()}
+                    {renderFilters()}
+                    <View style={styles.listContent}>
+                        {Array.from({ length: skeletonCount }).map((_, index) => (
+                            <Animated.View
+                                key={`skeleton-${index}`}
+                                style={[
+                                    styles.skeletonCard,
+                                    !isDark && styles.skeletonCardLight,
+                                    { opacity: skeletonPulse }
+                                ]}
+                            >
+                                <View style={styles.skeletonHeaderRow}>
+                                    <View style={styles.skeletonLineWide} />
+                                    <View style={styles.skeletonLineShort} />
+                                </View>
+                                <View style={styles.skeletonLineMid} />
+                                <View style={styles.skeletonLineFull} />
+                                <View style={styles.skeletonAction} />
+                            </Animated.View>
+                        ))}
+                    </View>
+                </View>
+            );
+        }
+
         return (
             <View style={styles.queueContainer}>
                 {renderNeedsAttention()}
@@ -1312,6 +1561,328 @@ export default function DispatcherDashboard({ navigation, route }) {
                     ListEmptyComponent={<View style={styles.empty}><Text style={[styles.emptyText, !isDark && { color: '#64748b' }]}>{TRANSLATIONS[language].emptyList}</Text></View>}
                     ListFooterComponent={<Pagination current={page} total={totalPages} onPageChange={setPage} />}
                 />
+            </View>
+        );
+    };
+
+    const renderStats = () => {
+        const createdMeta = getSeriesMeta(createdSeries);
+        const handledMeta = getSeriesMeta(handledSeries);
+        const createdMax = Math.max(1, createdMeta.max);
+        const handledMax = Math.max(1, handledMeta.max);
+        const emptyCreated = createdMeta.total === 0;
+        const emptyHandled = handledMeta.total === 0;
+        const activeDays = createdSeries.filter(v => v > 0).length;
+        const dateRangeLabel = `${formatShortDate(statsWindowStart)} - ${formatShortDate(statsWindowEnd)}`;
+
+        const statsInfoContent = {
+            created: {
+                title: TRANSLATIONS[language].statsInfoCreatedTitle || 'Created',
+                summary: TRANSLATIONS[language].statsInfoCreatedText || 'Orders created by you in this period.',
+                factors: TRANSLATIONS[language].statsInfoCreatedFactors || 'Factors: demand volume, response time, intake availability.',
+                improve: TRANSLATIONS[language].statsInfoCreatedImprove || 'Improve intake speed and clarity to create more valid requests.',
+                details: TRANSLATIONS[language].statsInfoCreatedDetails || 'See Orders → Created filter.',
+            },
+            handled: {
+                title: TRANSLATIONS[language].statsInfoHandledTitle || 'Handled',
+                summary: TRANSLATIONS[language].statsInfoHandledText || 'Orders currently assigned to you (created or transferred).',
+                factors: TRANSLATIONS[language].statsInfoHandledFactors || 'Factors: transfers, workload, working hours.',
+                improve: TRANSLATIONS[language].statsInfoHandledImprove || 'Keep updates timely and avoid unnecessary reassignments.',
+                details: TRANSLATIONS[language].statsInfoHandledDetails || 'See Orders → My orders.',
+            },
+            completed: {
+                title: TRANSLATIONS[language].statsInfoCompletedTitle || 'Completed',
+                summary: TRANSLATIONS[language].statsInfoCompletedText || 'Orders completed by masters after your handling.',
+                factors: TRANSLATIONS[language].statsInfoCompletedFactors || 'Factors: master availability, correct scope, client response.',
+                improve: TRANSLATIONS[language].statsInfoCompletedImprove || 'Confirm details and follow up to reduce drop-offs.',
+                details: TRANSLATIONS[language].statsInfoCompletedDetails || 'See Orders → Completed filter.',
+            },
+            canceled: {
+                title: TRANSLATIONS[language].statsInfoCanceledTitle || 'Canceled',
+                summary: TRANSLATIONS[language].statsInfoCanceledText || 'Orders canceled by client/master/system.',
+                factors: TRANSLATIONS[language].statsInfoCanceledFactors || 'Factors: wrong address, pricing mismatch, no-show.',
+                improve: TRANSLATIONS[language].statsInfoCanceledImprove || 'Reduce errors by confirming address, scope, and urgency.',
+                details: TRANSLATIONS[language].statsInfoCanceledDetails || 'See Orders → Canceled filter.',
+            },
+            completionRate: {
+                title: TRANSLATIONS[language].statsInfoCompletionTitle || 'Completion rate',
+                summary: TRANSLATIONS[language].statsInfoCompletionText || 'Completed ÷ Created for this period.',
+                factors: TRANSLATIONS[language].statsInfoCompletionFactors || 'Factors: cancellations, reopens, and client response time.',
+                improve: TRANSLATIONS[language].statsInfoCompletionImprove || 'Improve intake quality and reduce rework.',
+                details: TRANSLATIONS[language].statsInfoCompletionDetails || 'Compare Created vs Completed in filters.',
+            },
+            cancelRate: {
+                title: TRANSLATIONS[language].statsInfoCancelTitle || 'Cancel rate',
+                summary: TRANSLATIONS[language].statsInfoCancelText || 'Canceled ÷ Created for this period.',
+                factors: TRANSLATIONS[language].statsInfoCancelFactors || 'Factors: no-shows, unclear scope, long response times.',
+                improve: TRANSLATIONS[language].statsInfoCancelImprove || 'Clarify scope early and reduce no-shows.',
+                details: TRANSLATIONS[language].statsInfoCancelDetails || 'Check cancellation reasons in order details.',
+            },
+        };
+
+        const statCards = [
+            { key: 'created', label: TRANSLATIONS[language].dispatcherStatsCreated || 'Created', value: statsCreated, delta: statsDelta.created },
+            { key: 'handled', label: TRANSLATIONS[language].dispatcherStatsHandled || 'Handled', value: statsHandled, delta: statsDelta.handled },
+            { key: 'completed', label: TRANSLATIONS[language].dispatcherStatsCompleted || 'Completed', value: statsCompleted, delta: statsDelta.completed },
+            { key: 'canceled', label: TRANSLATIONS[language].dispatcherStatsCanceled || 'Canceled', value: statsCanceled, delta: statsDelta.canceled },
+            { key: 'completionRate', label: TRANSLATIONS[language].dispatcherStatsCompletionRate || 'Completion rate', value: `${completionRate}%`, delta: null },
+            { key: 'cancelRate', label: TRANSLATIONS[language].dispatcherStatsCancelRate || 'Cancel rate', value: `${cancelRate}%`, delta: null },
+        ];
+
+        const getEventPos = (event) => {
+            const native = event?.nativeEvent || {};
+            const x = native.pageX ?? native.locationX ?? 0;
+            const y = native.pageY ?? native.locationY ?? 0;
+            return { x, y };
+        };
+
+        const renderDots = (series, maxValue, color, kind, avgValue) => (
+            <View style={styles.statsTrendArea}>
+                <View style={styles.statsTrendGrid}>
+                    <View style={styles.statsTrendGridLine} />
+                    <View style={styles.statsTrendGridLine} />
+                </View>
+                <View style={styles.statsTrendYAxis}>
+                    <Text style={[styles.statsTrendAxisText, !isDark && styles.statsTrendAxisTextLight]}>{maxValue}</Text>
+                    <Text style={[styles.statsTrendAxisText, !isDark && styles.statsTrendAxisTextLight]}>0</Text>
+                </View>
+                <View style={styles.statsTrendDots}>
+                    {series.map((value, index) => {
+                        const pct = maxValue === 0 ? 0 : value / maxValue;
+                        const dotSize = 6 + Math.round(pct * 6);
+                        const offset = Math.round(pct * (72 - dotSize));
+                        const dotDate = new Date(statsWindowStart.getTime() + (index * 24 * 60 * 60 * 1000));
+                        const showAt = (event, resetTimer = true) => {
+                            const pos = getEventPos(event);
+                            showStatsTooltip({ kind, value, date: dotDate, x: pos.x, y: pos.y }, resetTimer);
+                        };
+                        return (
+                            <View key={`${color}-${index}`} style={styles.statsTrendSlot}>
+                                <TouchableOpacity
+                                    onPress={(event) => showAt(event, true)}
+                                    onMouseEnter={Platform.OS === 'web' ? (event) => showAt(event, true) : undefined}
+                                    onMouseMove={Platform.OS === 'web'
+                                        ? (event) => {
+                                            if (!statsTooltip) {
+                                                showAt(event, true);
+                                                return;
+                                            }
+                                            const pos = getEventPos(event);
+                                            updateStatsTooltipPos(pos.x, pos.y);
+                                        }
+                                        : undefined}
+                                    onMouseLeave={Platform.OS === 'web' ? hideStatsTooltip : undefined}
+                                    style={[
+                                        styles.statsTrendDot,
+                                        { width: dotSize, height: dotSize, backgroundColor: color, marginBottom: Math.max(0, offset) }
+                                    ]}
+                                />
+                            </View>
+                        );
+                    })}
+                </View>
+                <View style={[styles.statsAvgLine, { top: 6 + (72 - (maxValue ? (avgValue / maxValue) * 72 : 0)) }]} />
+                <View style={styles.statsTrendAxis}>
+                    <Text style={[styles.statsTrendAxisText, !isDark && styles.statsTrendAxisTextLight]}>{formatShortDate(statsWindowStart)}</Text>
+                    <Text style={[styles.statsTrendAxisText, !isDark && styles.statsTrendAxisTextLight]}>{formatShortDate(new Date((statsWindowStart.getTime() + statsWindowEnd.getTime()) / 2))}</Text>
+                    <Text style={[styles.statsTrendAxisText, !isDark && styles.statsTrendAxisTextLight]}>{formatShortDate(statsWindowEnd)}</Text>
+                </View>
+            </View>
+        );
+
+        return (
+            <View style={styles.statsContainer}>
+                <View style={styles.statsHeader}>
+                    <Text style={[styles.statsTitle, !isDark && styles.textDark]}>
+                        {TRANSLATIONS[language].dispatcherStatsTitle || 'Dispatcher Stats'}
+                    </Text>
+                    <View style={styles.statsRangeRow}>
+                        <TouchableOpacity
+                            style={[
+                                styles.statsRangeBtn,
+                                statsRange === 'week' && styles.statsRangeBtnActive,
+                                !isDark && styles.statsRangeBtnLight,
+                                !isDark && statsRange === 'week' && styles.statsRangeBtnActiveLight
+                            ]}
+                            onPress={() => setStatsRange('week')}
+                        >
+                            <Text style={[
+                                styles.statsRangeText,
+                                statsRange === 'week' && styles.statsRangeTextActive,
+                                !isDark && styles.statsRangeTextLight,
+                                !isDark && statsRange === 'week' && styles.statsRangeTextActiveLight
+                            ]}>
+                                {TRANSLATIONS[language].dispatcherStatsRangeWeek || 'Week'}
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[
+                                styles.statsRangeBtn,
+                                statsRange === 'month' && styles.statsRangeBtnActive,
+                                !isDark && styles.statsRangeBtnLight,
+                                !isDark && statsRange === 'month' && styles.statsRangeBtnActiveLight
+                            ]}
+                            onPress={() => setStatsRange('month')}
+                        >
+                            <Text style={[
+                                styles.statsRangeText,
+                                statsRange === 'month' && styles.statsRangeTextActive,
+                                !isDark && styles.statsRangeTextLight,
+                                !isDark && statsRange === 'month' && styles.statsRangeTextActiveLight
+                            ]}>
+                                {TRANSLATIONS[language].dispatcherStatsRangeMonth || 'Month'}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                <View style={styles.statsRangeInfo}>
+                    <Text style={[styles.statsRangeLabel, !isDark && styles.statsRangeLabelLight]}>
+                        {(TRANSLATIONS[language].dispatcherStatsRangeLabel || 'Range')}: {dateRangeLabel}
+                    </Text>
+                    <View style={styles.statsRangeBadges}>
+                        <View style={[styles.statsBadge, !isDark && styles.statsBadgeLight]}>
+                            <Text style={[styles.statsBadgeText, !isDark && styles.statsBadgeTextLight]}>
+                                {TRANSLATIONS[language].dispatcherStatsActiveDays || 'Active days'}: {activeDays}
+                            </Text>
+                        </View>
+                        {activeDays <= Math.ceil(statsWindowDays / 3) && (
+                            <View style={[styles.statsBadgeMuted, !isDark && styles.statsBadgeMutedLight]}>
+                                <Text style={[styles.statsBadgeMutedText, !isDark && styles.statsBadgeMutedTextLight]}>
+                                    {TRANSLATIONS[language].dispatcherStatsQuiet || 'Quiet period'}
+                                </Text>
+                            </View>
+                        )}
+                    </View>
+                </View>
+                <Text style={[styles.statsHintText, !isDark && styles.textSecondary]}>
+                    {TRANSLATIONS[language].statsInfoHint || 'Tap a metric card for details'}
+                </Text>
+
+                <View
+                    style={styles.statsCards}
+                    onLayout={(event) => setStatsGridWidth(event.nativeEvent.layout.width)}
+                >
+                    {statCards.map((card) => (
+                        <TouchableOpacity
+                            key={card.key}
+                            style={[
+                                styles.statsCard,
+                                !isDark && styles.cardLight,
+                                statsGridWidth > 0 && {
+                                    width: Math.floor(
+                                        (statsGridWidth - (statsColumns - 1) * 10) / statsColumns
+                                    )
+                                }
+                            ]}
+                            activeOpacity={0.85}
+                            onPress={() => setStatsInfo(statsInfoContent[card.key])}
+                        >
+                            <Text style={styles.statsCardLabel}>{card.label}</Text>
+                            <Text style={[styles.statsCardValue, !isDark && styles.textDark]}>{card.value}</Text>
+                            {card.delta !== null && (
+                                <Text style={[styles.statsCardDelta, card.delta >= 0 ? styles.statsDeltaUp : styles.statsDeltaDown]}>
+                                    {card.delta >= 0 ? '+' : ''}{card.delta}% {TRANSLATIONS[language].dispatcherStatsDelta || 'vs prev'}
+                                </Text>
+                            )}
+                        </TouchableOpacity>
+                    ))}
+                </View>
+
+                <View style={styles.statsCharts}>
+                    <View style={[styles.statsChartCard, !isDark && styles.cardLight]}>
+                        <View style={styles.statsChartHeader}>
+                            <Text style={styles.statsChartTitle}>{TRANSLATIONS[language].dispatcherStatsTrendCreated || 'Created trend'}</Text>
+                            <Text style={styles.statsChartMeta}>
+                                {(TRANSLATIONS[language].dispatcherStatsAvgPerDay || 'Avg/day')}: {createdMeta.avg.toFixed(1)} · {(TRANSLATIONS[language].analyticsMax || 'Max')}: {createdMeta.max}
+                            </Text>
+                        </View>
+                        {emptyCreated
+                            ? <Text style={styles.statsEmptyText}>{TRANSLATIONS[language].analyticsEmpty || 'No activity in this period'}</Text>
+                            : renderDots(createdSeries, createdMax, '#3b82f6', 'created', createdMeta.avg)}
+                    </View>
+                    <View style={[styles.statsChartCard, !isDark && styles.cardLight]}>
+                        <View style={styles.statsChartHeader}>
+                            <Text style={styles.statsChartTitle}>{TRANSLATIONS[language].dispatcherStatsTrendHandled || 'Handled trend'}</Text>
+                            <Text style={styles.statsChartMeta}>
+                                {(TRANSLATIONS[language].dispatcherStatsAvgPerDay || 'Avg/day')}: {handledMeta.avg.toFixed(1)} · {(TRANSLATIONS[language].analyticsMax || 'Max')}: {handledMeta.max}
+                            </Text>
+                        </View>
+                        {emptyHandled
+                            ? <Text style={styles.statsEmptyText}>{TRANSLATIONS[language].analyticsEmpty || 'No activity in this period'}</Text>
+                            : renderDots(handledSeries, handledMax, '#22c55e', 'handled', handledMeta.avg)}
+                    </View>
+                </View>
+
+                {statsTooltip && (
+                    <View
+                        style={[
+                            styles.statsTooltip,
+                            !isDark && styles.statsTooltipLight,
+                            statsTooltip?.x != null && statsTooltip?.y != null
+                                ? (() => {
+                                    if (Platform.OS !== 'web') {
+                                        return { left: 16, right: 16, bottom: 16 };
+                                    }
+                                    const tooltipW = 220;
+                                    const tooltipH = 120;
+                                    const padding = 12;
+                                    const viewportW = typeof window !== 'undefined' ? window.innerWidth : SCREEN_WIDTH;
+                                    const viewportH = typeof window !== 'undefined' ? window.innerHeight : 600;
+                                    let left = statsTooltip.x + 12;
+                                    let top = statsTooltip.y + 12;
+                                    if (left + tooltipW + padding > viewportW) {
+                                        left = statsTooltip.x - tooltipW - 12;
+                                    }
+                                    if (top + tooltipH + padding > viewportH) {
+                                        top = statsTooltip.y - tooltipH - 12;
+                                    }
+                                    left = Math.max(padding, Math.min(left, viewportW - tooltipW - padding));
+                                    top = Math.max(padding, Math.min(top, viewportH - tooltipH - padding));
+                                    return { position: 'fixed', left, top };
+                                })()
+                                : { right: 16, bottom: 16 }
+                        ]}
+                    >
+                        <Text style={[styles.statsTooltipTitle, !isDark && styles.textDark]}>
+                            {statsTooltip.kind === 'created'
+                                ? (TRANSLATIONS[language].dispatcherStatsTrendCreated || 'Created trend')
+                                : (TRANSLATIONS[language].dispatcherStatsTrendHandled || 'Handled trend')}
+                        </Text>
+                        <Text style={[styles.statsTooltipText, !isDark && styles.textSecondary]}>
+                            {(TRANSLATIONS[language].dispatcherStatsTooltipDate || 'Date')}: {formatShortDate(statsTooltip.date)}
+                        </Text>
+                        <Text style={[styles.statsTooltipText, !isDark && styles.textSecondary]}>
+                            {(TRANSLATIONS[language].dispatcherStatsTooltipValue || 'Orders')}: {statsTooltip.value}
+                        </Text>
+                    </View>
+                )}
+
+                {statsInfo && (
+                    <Modal transparent visible onRequestClose={() => setStatsInfo(null)}>
+                        <View style={styles.statsInfoOverlay}>
+                            <View style={[styles.statsInfoCard, !isDark && styles.cardLight]}>
+                                <Text style={[styles.statsInfoTitle, !isDark && styles.textDark]}>{statsInfo.title}</Text>
+                                <Text style={[styles.statsInfoText, !isDark && styles.textSecondary]}>{statsInfo.summary}</Text>
+                                {statsInfo.factors && (
+                                    <>
+                                        <Text style={[styles.statsInfoSection, !isDark && styles.textSecondary]}>
+                                            {TRANSLATIONS[language].statsInfoFactorsLabel || 'Factors'}
+                                        </Text>
+                                        <Text style={[styles.statsInfoText, !isDark && styles.textSecondary]}>{statsInfo.factors}</Text>
+                                    </>
+                                )}
+                                <Text style={[styles.statsInfoSection, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].statsInfoImproveLabel || 'How to improve'}</Text>
+                                <Text style={[styles.statsInfoText, !isDark && styles.textSecondary]}>{statsInfo.improve}</Text>
+                                <Text style={[styles.statsInfoSection, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].statsInfoDetailsLabel || 'Where to see details'}</Text>
+                                <Text style={[styles.statsInfoText, !isDark && styles.textSecondary]}>{statsInfo.details}</Text>
+                                <TouchableOpacity style={styles.statsInfoCloseBtn} onPress={() => setStatsInfo(null)}>
+                                    <Text style={styles.statsInfoCloseText}>{TRANSLATIONS[language].actionClose || 'Close'}</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    </Modal>
+                )}
             </View>
         );
     };
@@ -1689,6 +2260,133 @@ export default function DispatcherDashboard({ navigation, route }) {
             </View>
         );
     };
+
+    const renderSettings = () => {
+        const profileName = user?.full_name || 'Dispatcher';
+        const profilePhone = user?.phone || user?.phone_number || user?.phoneNumber || '—';
+        const profileEmail = user?.email || '—';
+        const profileRole = TRANSLATIONS[language].dispatcherRole || 'Dispatcher';
+        const initials = profileName
+            .split(' ')
+            .filter(Boolean)
+            .map(part => part[0])
+            .join('')
+            .substring(0, 2)
+            .toUpperCase();
+
+        const handleSupport = () => Linking.openURL('tel:+996500105415');
+        const handleWhatsApp = () => Linking.openURL('https://wa.me/996500105415');
+        const handleTelegram = () => Linking.openURL('https://t.me/konevor');
+
+        return (
+            <View style={styles.settingsContainer}>
+                <View style={[styles.settingsCard, !isDark && styles.cardLight]}>
+                    <Text style={[styles.settingsTitle, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].sectionProfile || 'Profile'}</Text>
+                    <View style={styles.settingsProfileRow}>
+                        <View style={styles.settingsAvatar}>
+                            <Text style={styles.settingsAvatarText}>{initials}</Text>
+                        </View>
+                        <View style={styles.settingsProfileInfo}>
+                            <Text style={[styles.settingsValue, !isDark && styles.textDark]}>{profileName}</Text>
+                            <View style={[styles.settingsRoleChip, !isDark && styles.settingsRoleChipLight]}>
+                                <Text style={[styles.settingsRoleText, !isDark && styles.settingsRoleTextLight]}>
+                                    {profileRole}
+                                </Text>
+                            </View>
+                        </View>
+                    </View>
+                    <Text style={[styles.settingsMeta, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].phone}: {profilePhone}</Text>
+                    <Text style={[styles.settingsMeta, !isDark && styles.textSecondary]}>{profileEmail}</Text>
+                </View>
+
+                <View style={[styles.settingsCard, !isDark && styles.cardLight]}>
+                    <Text style={[styles.settingsTitle, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].settingsLanguage || 'Language'}</Text>
+                    <View style={styles.settingsOptionsRow}>
+                        {['en', 'ru', 'kg'].map(code => (
+                            <TouchableOpacity
+                                key={code}
+                                style={[
+                                    styles.settingsOption,
+                                    language === code && styles.settingsOptionActive,
+                                    !isDark && styles.settingsOptionLight,
+                                    !isDark && language === code && styles.settingsOptionActiveLight
+                                ]}
+                                onPress={() => {
+                                    if (language !== code) setLanguage?.(code);
+                                }}
+                            >
+                                <Text style={[
+                                    styles.settingsOptionText,
+                                    language === code && styles.settingsOptionTextActive,
+                                    !isDark && styles.settingsOptionTextLight,
+                                    !isDark && language === code && styles.settingsOptionTextActiveLight
+                                ]}>
+                                    {code.toUpperCase()}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                </View>
+
+                <View style={[styles.settingsCard, !isDark && styles.cardLight]}>
+                    <View style={styles.settingsToggleRow}>
+                        <View>
+                            <Text style={[styles.settingsTitle, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].settingsTheme || 'Theme'}</Text>
+                            <Text style={[styles.settingsHint, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].settingsThemeHint || 'Adjust appearance'}</Text>
+                        </View>
+                        <TouchableOpacity
+                            style={[styles.settingsToggle, { backgroundColor: isDark ? '#2563eb' : '#e2e8f0' }]}
+                            onPress={() => setIsDark(!isDark)}
+                        >
+                            <View style={[styles.settingsToggleThumb, { left: isDark ? 22 : 3 }]} />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                <View style={[styles.settingsCard, !isDark && styles.cardLight]}>
+                    <Text style={[styles.settingsTitle, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].settingsSupport || 'Support'}</Text>
+                    <View style={styles.settingsSupportList}>
+                        <TouchableOpacity
+                            style={[styles.settingsSupportRow, !isDark && styles.settingsSupportRowLight]}
+                            onPress={handleSupport}
+                        >
+                            <View style={styles.settingsSupportLeft}>
+                                <Text style={styles.settingsSupportIcon}>☎</Text>
+                                <Text style={[styles.settingsSupportLabel, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS[language].settingsSupportPhone || 'Call Support'}
+                                </Text>
+                            </View>
+                            <Text style={[styles.settingsSupportValue, !isDark && styles.textSecondary]}>+996 500 105 415</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.settingsSupportRow, !isDark && styles.settingsSupportRowLight]}
+                            onPress={handleWhatsApp}
+                        >
+                            <View style={styles.settingsSupportLeft}>
+                                <Text style={styles.settingsSupportIcon}>💬</Text>
+                                <Text style={[styles.settingsSupportLabel, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS[language].settingsSupportWhatsApp || 'WhatsApp'}
+                                </Text>
+                            </View>
+                            <Text style={[styles.settingsSupportValue, !isDark && styles.textSecondary]}>+996 500 105 415</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.settingsSupportRow, !isDark && styles.settingsSupportRowLight]}
+                            onPress={handleTelegram}
+                        >
+                            <View style={styles.settingsSupportLeft}>
+                                <Text style={styles.settingsSupportIcon}>✈</Text>
+                                <Text style={[styles.settingsSupportLabel, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS[language].settingsSupportTelegram || 'Telegram'}
+                                </Text>
+                            </View>
+                            <Text style={[styles.settingsSupportValue, !isDark && styles.textSecondary]}>@konevor</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </View>
+        );
+    };
     const renderDetailsDrawer = () => {
         if (!detailsOrder) return null;
         // NOTE: handleSaveEdit is defined earlier in the component (around line 1146)
@@ -1764,6 +2462,44 @@ export default function DispatcherDashboard({ navigation, route }) {
                                             <Text style={styles.drawerBtnText}>{TRANSLATIONS[language].actionPay}</Text>
                                         </TouchableOpacity>
                                     )}
+                                </View>
+                            </View>
+
+                            <View style={styles.drawerSection}>
+                                <Text style={styles.drawerSectionTitle}>{TRANSLATIONS[language].sectionDispatcher || 'Dispatcher'}</Text>
+                                <View style={[styles.drawerCard, !isDark && styles.drawerCardLight]}>
+                                    {(() => {
+                                        const assignedDispatcherId = detailsOrder.assigned_dispatcher_id || detailsOrder.dispatcher_id;
+                                        const assignedDispatcher = detailsOrder.assigned_dispatcher
+                                            || detailsOrder.dispatcher
+                                            || dispatchers.find(d => d?.id === assignedDispatcherId);
+                                        const assignedName = assignedDispatcher?.full_name || 'Dispatcher';
+                                        const assignedPhone = assignedDispatcher?.phone;
+                                        const isCurrentHandler = assignedDispatcherId && user?.id && String(assignedDispatcherId) === String(user.id);
+                                        return (
+                                            <>
+                                                <Text style={[styles.drawerCardTitle, !isDark && styles.textDark]}>
+                                                    {isCurrentHandler ? (TRANSLATIONS[language].labelYou || 'You') : assignedName}
+                                                </Text>
+                                                {assignedPhone && (
+                                                    <View style={styles.drawerRow}>
+                                                        <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>{assignedPhone}</Text>
+                                                        <View style={styles.drawerRowBtns}>
+                                                            <TouchableOpacity onPress={() => copyToClipboard(assignedPhone)} style={styles.drawerIconBtn}><Text style={styles.drawerIconBtnText}>{TRANSLATIONS[language].btnCopy}</Text></TouchableOpacity>
+                                                            <TouchableOpacity onPress={() => Linking.openURL(`tel:${assignedPhone}`)} style={styles.drawerIconBtn}><Text style={styles.drawerIconBtnText}>{TRANSLATIONS[language].btnCall}</Text></TouchableOpacity>
+                                                        </View>
+                                                    </View>
+                                                )}
+                                                {isCurrentHandler && (
+                                                    <View style={{ marginTop: 10 }}>
+                                                        <TouchableOpacity style={styles.drawerBtnSecondary} onPress={() => openTransferPicker(detailsOrder)}>
+                                                            <Text style={styles.drawerBtnSecondaryText}>{TRANSLATIONS[language].actionTransfer || 'Transfer'}</Text>
+                                                        </TouchableOpacity>
+                                                    </View>
+                                                )}
+                                            </>
+                                        );
+                                    })()}
                                 </View>
                             </View>
 
@@ -2058,7 +2794,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     // MAIN RENDER
     // ============================================
 
-    if (loading) {
+    if (loading && activeTab !== 'queue') {
         return (
             <LinearGradient colors={['#0f172a', '#1e293b']} style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color="#3b82f6" />
@@ -2070,8 +2806,10 @@ export default function DispatcherDashboard({ navigation, route }) {
         <LinearGradient colors={isDark ? ['#0f172a', '#1e293b'] : ['#f1f5f9', '#e2e8f0']} style={styles.container}>
             {renderSidebar()}
             {renderHeader()}
+            {activeTab === 'stats' && renderStats()}
             {activeTab === 'queue' && renderQueue()}
             {activeTab === 'create' && renderCreateOrder()}
+            {activeTab === 'settings' && renderSettings()}
             {renderDetailsDrawer()}
             {renderPaymentModal()}
             {renderAssignModal()}
@@ -2162,6 +2900,116 @@ const styles = StyleSheet.create({
     // Queue
     queueContainer: { flex: 1 },
     listContent: { padding: 16, paddingBottom: 100 },
+    statsContainer: { flex: 1, padding: 16, gap: 12 },
+    statsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    statsTitle: { fontSize: 18, fontWeight: '700', color: '#fff' },
+    statsRangeRow: { flexDirection: 'row', gap: 8 },
+    statsRangeBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, backgroundColor: 'rgba(71,85,105,0.3)' },
+    statsRangeBtnActive: { backgroundColor: '#3b82f6' },
+    statsRangeBtnLight: { backgroundColor: '#e2e8f0' },
+    statsRangeBtnActiveLight: { backgroundColor: '#2563eb' },
+    statsRangeText: { fontSize: 12, fontWeight: '700', color: '#cbd5f5' },
+    statsRangeTextActive: { color: '#fff' },
+    statsRangeTextLight: { color: '#475569' },
+    statsRangeTextActiveLight: { color: '#fff' },
+    statsHintText: { fontSize: 11, color: '#94a3b8' },
+    statsCards: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+    statsCard: { flexGrow: 1, flexBasis: '48%', minWidth: 160, minHeight: 92, backgroundColor: 'rgba(71,85,105,0.3)', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: 'rgba(71,85,105,0.4)' },
+    statsCardLabel: { fontSize: 11, color: '#94a3b8', textTransform: 'uppercase' },
+    statsCardValue: { fontSize: 20, fontWeight: '700', color: '#fff', marginTop: 4 },
+    statsCardDelta: { marginTop: 6, fontSize: 11, fontWeight: '600' },
+    statsDeltaUp: { color: '#22c55e' },
+    statsDeltaDown: { color: '#ef4444' },
+    statsRatesRow: { flexDirection: 'row', gap: 10 },
+    statsRateCard: { flex: 1, backgroundColor: 'rgba(71,85,105,0.3)', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: 'rgba(71,85,105,0.4)' },
+    statsRangeInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    statsRangeLabel: { fontSize: 11, color: '#94a3b8' },
+    statsRangeLabelLight: { color: '#64748b' },
+    statsRangeBadges: { flexDirection: 'row', gap: 8 },
+    statsBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: 'rgba(59,130,246,0.15)' },
+    statsBadgeText: { fontSize: 10, color: '#bfdbfe' },
+    statsBadgeMuted: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: 'rgba(148,163,184,0.15)' },
+    statsBadgeMutedText: { fontSize: 10, color: '#94a3b8' },
+    statsBadgeLight: { backgroundColor: '#e5edff' },
+    statsBadgeTextLight: { color: '#1e3a8a' },
+    statsBadgeMutedLight: { backgroundColor: '#eef2f7' },
+    statsBadgeMutedTextLight: { color: '#475569' },
+    statsCharts: { gap: 10 },
+    statsChartCard: { backgroundColor: 'rgba(71,85,105,0.3)', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: 'rgba(71,85,105,0.4)' },
+    statsChartHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+    statsChartTitle: { fontSize: 11, color: '#94a3b8', textTransform: 'uppercase' },
+    statsChartMeta: { fontSize: 10, color: '#94a3b8' },
+    statsEmptyText: { fontSize: 11, color: '#94a3b8', textAlign: 'center', paddingVertical: 14 },
+    statsTrendArea: { height: 90 },
+    statsTrendGrid: { position: 'absolute', left: 0, right: 0, top: 10, bottom: 18, justifyContent: 'space-between' },
+    statsTrendGridLine: { height: 1, backgroundColor: 'rgba(148,163,184,0.15)' },
+    statsTrendYAxis: { position: 'absolute', left: 0, top: 6, bottom: 18, justifyContent: 'space-between' },
+    statsTrendDots: { flexDirection: 'row', height: 72, marginTop: 6, gap: 4, alignItems: 'flex-end' },
+    statsTrendSlot: { flex: 1, height: 72, alignItems: 'center', justifyContent: 'flex-end' },
+    statsTrendDot: { borderRadius: 999 },
+    statsAvgLine: { position: 'absolute', left: 0, right: 0, height: 1, backgroundColor: 'rgba(148,163,184,0.25)', borderStyle: 'dashed' },
+    statsTrendAxis: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
+    statsTrendAxisText: { fontSize: 10, color: '#94a3b8' },
+    statsTrendAxisTextLight: { color: '#64748b' },
+    statsTooltip: { position: 'absolute', backgroundColor: 'rgba(15,23,42,0.95)', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: 'rgba(148,163,184,0.3)' },
+    statsTooltipLight: { backgroundColor: '#ffffff', borderColor: '#e2e8f0' },
+    statsTooltipTitle: { fontSize: 12, fontWeight: '700', color: '#fff', marginBottom: 6 },
+    statsTooltipText: { fontSize: 11, color: '#cbd5f5' },
+    statsInfoOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+    statsInfoCard: { width: '100%', maxWidth: 420, backgroundColor: '#1e293b', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: 'rgba(71,85,105,0.4)' },
+    statsInfoTitle: { fontSize: 16, fontWeight: '700', color: '#fff', marginBottom: 6 },
+    statsInfoSection: { fontSize: 11, fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', marginTop: 10 },
+    statsInfoText: { fontSize: 12, color: '#cbd5f5', lineHeight: 18 },
+    statsInfoCloseBtn: { marginTop: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: '#3b82f6', alignItems: 'center' },
+    statsInfoCloseText: { fontSize: 13, fontWeight: '700', color: '#fff' },
+
+    // Settings
+    settingsContainer: { flex: 1, padding: 16, gap: 12 },
+    settingsCard: { backgroundColor: 'rgba(71,85,105,0.3)', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: 'rgba(71,85,105,0.4)' },
+    settingsTitle: { fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 8 },
+    settingsValue: { fontSize: 16, fontWeight: '700', color: '#fff', marginBottom: 6 },
+    settingsMeta: { fontSize: 12, color: '#94a3b8', marginBottom: 4 },
+    settingsProfileRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10 },
+    settingsAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center' },
+    settingsAvatarText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+    settingsProfileInfo: { flex: 1 },
+    settingsRoleChip: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: 'rgba(59,130,246,0.15)' },
+    settingsRoleText: { fontSize: 10, fontWeight: '700', color: '#bfdbfe', textTransform: 'uppercase' },
+    settingsRoleChipLight: { backgroundColor: '#e0e7ff' },
+    settingsRoleTextLight: { color: '#1e3a8a' },
+    settingsOptionsRow: { flexDirection: 'row', gap: 8 },
+    settingsOption: { flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(71,85,105,0.4)', backgroundColor: 'rgba(71,85,105,0.2)', alignItems: 'center' },
+    settingsOptionActive: { borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.25)' },
+    settingsOptionText: { fontSize: 12, fontWeight: '700', color: '#cbd5f5' },
+    settingsOptionTextActive: { color: '#fff' },
+    settingsOptionLight: { borderColor: '#e2e8f0', backgroundColor: '#f8fafc' },
+    settingsOptionActiveLight: { borderColor: '#2563eb', backgroundColor: '#e0e7ff' },
+    settingsOptionTextLight: { color: '#475569' },
+    settingsOptionTextActiveLight: { color: '#1d4ed8' },
+    settingsToggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    settingsToggle: { width: 48, height: 26, borderRadius: 999, justifyContent: 'center' },
+    settingsToggleThumb: { position: 'absolute', width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff' },
+    settingsHint: { fontSize: 11, color: '#94a3b8' },
+    settingsActionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+    settingsActionBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: 'rgba(59,130,246,0.2)' },
+    settingsActionText: { fontSize: 12, fontWeight: '600', color: '#60a5fa' },
+    settingsActionBtnLight: { backgroundColor: '#e2e8f0' },
+    settingsActionTextLight: { color: '#1d4ed8' },
+    settingsSupportList: { gap: 8, marginTop: 4 },
+    settingsSupportRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(71,85,105,0.4)', backgroundColor: 'rgba(71,85,105,0.2)' },
+    settingsSupportRowLight: { borderColor: '#e2e8f0', backgroundColor: '#f8fafc' },
+    settingsSupportLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    settingsSupportIcon: { fontSize: 14, color: '#94a3b8' },
+    settingsSupportLabel: { fontSize: 12, fontWeight: '600', color: '#fff' },
+    settingsSupportValue: { fontSize: 11, color: '#94a3b8' },
+    skeletonCard: { borderRadius: 18, borderWidth: 1, padding: 14, marginBottom: 12, borderColor: '#1f2937', backgroundColor: '#0f172a' },
+    skeletonCardLight: { borderColor: '#e2e8f0', backgroundColor: '#f1f5f9' },
+    skeletonHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+    skeletonLineWide: { height: 14, borderRadius: 8, width: '55%', backgroundColor: 'rgba(148,163,184,0.25)' },
+    skeletonLineShort: { height: 14, borderRadius: 8, width: '22%', backgroundColor: 'rgba(148,163,184,0.25)' },
+    skeletonLineMid: { height: 10, borderRadius: 6, width: '70%', backgroundColor: 'rgba(148,163,184,0.22)', marginBottom: 8 },
+    skeletonLineFull: { height: 10, borderRadius: 6, width: '100%', backgroundColor: 'rgba(148,163,184,0.22)' },
+    skeletonAction: { height: 34, borderRadius: 12, backgroundColor: 'rgba(148,163,184,0.22)', marginTop: 12 },
     empty: { alignItems: 'center', paddingVertical: 60 },
     emptyText: { fontSize: 16, color: '#64748b' },
 
@@ -2263,6 +3111,8 @@ const styles = StyleSheet.create({
     drawerStatusText: { fontSize: 12, fontWeight: '700', color: '#fff', textTransform: 'uppercase' },
     drawerBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, backgroundColor: '#3b82f6' },
     drawerBtnText: { fontSize: 12, fontWeight: '700', color: '#fff' },
+    drawerBtnSecondary: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#3b82f6', alignSelf: 'flex-start' },
+    drawerBtnSecondaryText: { fontSize: 12, fontWeight: '700', color: '#3b82f6' },
     drawerSectionTitle: { fontSize: 10, fontWeight: '700', color: '#64748b', textTransform: 'uppercase', marginBottom: 8 },
     drawerCard: { backgroundColor: 'rgba(71,85,105,0.3)', borderRadius: 10, padding: 12 },
     drawerCardTitle: { fontSize: 14, fontWeight: '700', color: '#fff', marginBottom: 4 },

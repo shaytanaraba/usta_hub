@@ -243,10 +243,11 @@ class EarningsService {
         console.log(`${LOG_PREFIX} Fetching commission statistics with filter:`, dateFilter);
 
         try {
-            // Build date range query
+            // Commission is now deducted directly from balance transactions
             let query = supabase
-                .from('master_earnings')
-                .select('commission_amount, status, created_at, master_id');
+                .from('balance_transactions')
+                .select('amount, transaction_type, created_at')
+                .in('transaction_type', ['commission', 'commission_deduct']);
 
             // Apply date filters if needed
             if (dateFilter.type !== 'all') {
@@ -278,33 +279,18 @@ class EarningsService {
                 }
             }
 
-            const { data: earnings, error } = await query;
+            const { data: transactions, error } = await query;
             if (error) throw error;
 
-            const totalOutstanding = earnings
-                .filter(e => e.status === 'pending')
-                .reduce((sum, e) => sum + (Number(e.commission_amount) || 0), 0);
-
-            const totalCollected = earnings
-                .filter(e => e.status === 'paid')
-                .reduce((sum, e) => sum + (Number(e.commission_amount) || 0), 0);
-
-            // Fetch full list of masters with outstanding commission
-            const { data: mastersWithDebt, error: mastersError } = await supabase
-                .from('profiles')
-                .select('id, full_name, phone, total_commission_owed')
-                .eq('role', 'master')
-                .gt('total_commission_owed', 0)
-                .order('total_commission_owed', { ascending: false });
-
-            if (mastersError) {
-                console.error(`${LOG_PREFIX} Failed to fetch masters with debt:`, mastersError);
-            }
+            const totalCollected = (transactions || [])
+                .map(t => Number(t.amount))
+                .filter(val => Number.isFinite(val))
+                .reduce((sum, val) => sum + Math.abs(val), 0);
 
             const stats = {
-                totalOutstanding,
+                totalOutstanding: 0,
                 totalCollected,
-                mastersWithDebt: mastersWithDebt || [] // Full array instead of count
+                mastersWithDebt: []
             };
 
             console.log(`${LOG_PREFIX} Commission stats:`, stats);
@@ -334,6 +320,43 @@ class EarningsService {
         } catch (error) {
             console.error(`${LOG_PREFIX} getBalanceTransactions failed:`, error);
             return [];
+        }
+    }
+
+    /**
+     * Get aggregate top-up stats across all masters
+     * @param {Date|null} startDate
+     * @param {Date|null} endDate
+     */
+    async getBalanceTopUpStats(startDate = null, endDate = null) {
+        try {
+            let query = supabase
+                .from('balance_transactions')
+                .select('amount, created_at, transaction_type')
+                .eq('transaction_type', 'top_up');
+
+            if (startDate instanceof Date && !Number.isNaN(startDate.getTime())) {
+                query = query.gte('created_at', startDate.toISOString());
+            }
+            if (endDate instanceof Date && !Number.isNaN(endDate.getTime())) {
+                query = query.lte('created_at', endDate.toISOString());
+            }
+
+            const { data, error } = await query;
+            if (error) throw error;
+
+            const amounts = (data || [])
+                .map(item => Number(item.amount))
+                .filter(val => Number.isFinite(val) && val > 0);
+
+            const totalTopUps = amounts.reduce((sum, val) => sum + val, 0);
+            const count = amounts.length;
+            const avgTopUp = count ? totalTopUps / count : 0;
+
+            return { totalTopUps, avgTopUp, count };
+        } catch (error) {
+            console.error(`${LOG_PREFIX} getBalanceTopUpStats failed:`, error);
+            return { totalTopUps: 0, avgTopUp: 0, count: 0 };
         }
     }
 

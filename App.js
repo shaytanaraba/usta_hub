@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity, LogBox } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { ToastProvider } from './src/contexts/ToastContext';
@@ -152,6 +152,38 @@ function AppNavigator() {
 import { LocalizationProvider } from './src/contexts/LocalizationContext';
 
 export default function App() {
+  useEffect(() => {
+    const ignoredLogs = [
+      'It looks like you might be using shared value',
+      'Source map error',
+      'Source Map URL',
+    ];
+
+    LogBox.ignoreLogs(ignoredLogs);
+
+    const originalWarn = console.warn;
+    const originalError = console.error;
+
+    console.warn = (...args) => {
+      if (typeof args[0] === 'string' && ignoredLogs.some(msg => args[0].includes(msg))) {
+        return;
+      }
+      originalWarn(...args);
+    };
+
+    console.error = (...args) => {
+      if (typeof args[0] === 'string' && ignoredLogs.some(msg => args[0].includes(msg))) {
+        return;
+      }
+      originalError(...args);
+    };
+
+    return () => {
+      console.warn = originalWarn;
+      console.error = originalError;
+    };
+  }, []);
+
   useEffect(() => {
     let attempts = 0;
     const tryReady = () => {
