@@ -1366,13 +1366,23 @@ class OrdersService {
     console.log(`${LOG_PREFIX} Admin confirming payment for order: ${orderId}`);
 
     try {
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+      const adminId = authData?.user?.id;
+      if (!adminId) {
+        throw new Error('Unauthorized');
+      }
+
+      const confirmedAt = new Date().toISOString();
       const { data, error } = await supabase
         .from('orders')
         .update({
           status: ORDER_STATUS.CONFIRMED,
-          confirmed_at: new Date().toISOString(),
+          confirmed_at: confirmedAt,
           payment_method: paymentMethod,
           payment_proof_url: paymentProofUrl || null,
+          payment_confirmed_by: adminId,
+          payment_confirmed_at: confirmedAt,
         })
         .eq('id', orderId)
         .eq('status', ORDER_STATUS.COMPLETED)
@@ -1388,6 +1398,35 @@ class OrdersService {
       return { success: true, message: 'Payment confirmed!', order: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} confirmPaymentAdmin failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Admin override final price (updates commission + ledger)
+   */
+  overrideFinalPriceAdmin = async (orderId, finalPrice, reason = 'admin_price_override') => {
+    console.log(`${LOG_PREFIX} Admin overriding final price for order: ${orderId}`, finalPrice);
+
+    try {
+      const { data, error } = await supabase.rpc('admin_override_final_price', {
+        p_order_id: orderId,
+        p_final_price: finalPrice,
+        p_reason: reason
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} overrideFinalPriceAdmin error:`, error);
+        throw error;
+      }
+
+      if (!data?.success) {
+        return { success: false, message: data?.message || data?.error || 'Override failed' };
+      }
+
+      return { success: true, order: data?.order || null };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} overrideFinalPriceAdmin failed:`, error);
       return { success: false, message: error.message };
     }
   }
@@ -1735,7 +1774,8 @@ class OrdersService {
                 *,
                 client:client_id(full_name, phone),
                 master:master_id(full_name, phone),
-                dispatcher:dispatcher_id(full_name)
+                dispatcher:dispatcher_id(full_name),
+                assigned_dispatcher:assigned_dispatcher_id(id, full_name, phone)
               `)
         .order('created_at', { ascending: false });
 

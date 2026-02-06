@@ -483,8 +483,20 @@ const BoxPlotChart = ({
         };
     }).filter(Boolean);
 
+    const meanPoints = buckets.map((b, idx) => {
+        if (!b.stats?.n || !Number.isFinite(b.stats.mean)) return null;
+        return {
+            x: padding.left + bucketWidth * idx + bucketWidth / 2,
+            y: yPos(b.stats.mean),
+        };
+    }).filter(Boolean);
+
     const medianPath = medianPoints.length
         ? medianPoints.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
+        : null;
+
+    const meanPath = meanPoints.length
+        ? meanPoints.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
         : null;
 
     const hasData = buckets.some(b => b.stats?.n);
@@ -575,6 +587,15 @@ const BoxPlotChart = ({
                                     fill="none"
                                 />
                             ) : null}
+                            {meanPath ? (
+                                <Path
+                                    d={meanPath}
+                                    stroke={isDark ? '#f59e0b' : '#d97706'}
+                                    strokeWidth="2"
+                                    strokeDasharray="4 4"
+                                    fill="none"
+                                />
+                            ) : null}
 
                             {buckets.map((bucket, idx) => {
                                 const stats = bucket.stats;
@@ -639,7 +660,6 @@ const BoxPlotChart = ({
                                 />
                             ))}
                         </View>
-                        )}
                     </View>
 
                     <View style={[styles.analyticsBoxplotLabels, { paddingLeft: padding.left, paddingRight: padding.right }]}>
@@ -1147,13 +1167,22 @@ export default function AdminDashboard({ navigation }) {
             canceled: canceledOrders,
         };
 
+        const commissionRate = Number(settings?.commission_rate) || 0;
+        const confirmedOrdersList = analyticsOrders.filter(o => normalizeStatus(o.status) === 'confirmed');
+        const completedUnconfirmedList = analyticsOrders.filter(o => normalizeStatus(o.status) === 'completed');
+        const commissionCollected = confirmedOrdersList.reduce((sum, o) => {
+            const price = Number(o.final_price ?? o.initial_price ?? o.callout_fee ?? 0);
+            return sum + (Number.isFinite(price) ? price * commissionRate : 0);
+        }, 0);
+        const commissionOwed = completedUnconfirmedList.reduce((sum, o) => {
+            const price = Number(o.final_price ?? o.initial_price ?? o.callout_fee ?? 0);
+            return sum + (Number.isFinite(price) ? price * commissionRate : 0);
+        }, 0);
+        const avgCommissionPerOrder = confirmedOrdersList.length ? commissionCollected / confirmedOrdersList.length : 0;
+
         const totalBalances = masters.reduce((sum, m) => sum + (m.prepaid_balance || 0), 0);
         const avgBalance = masters.length ? totalBalances / masters.length : 0;
         const lowBalanceCount = masters.filter(m => (m.prepaid_balance || 0) < 500).length;
-        const commissionCollected = Number(commissionStats.totalCollected || 0);
-        const commissionOutstanding = Number(commissionStats.totalOutstanding || 0);
-        const avgCommissionPerOrder = completedOrders ? commissionCollected / completedOrders : 0;
-        const commissionRate = Number(settings?.commission_rate) || 0;
 
         const avgOrderValueForLost = avgTicket || 0;
         let lostEarningsTotal = 0;
@@ -1184,24 +1213,6 @@ export default function AdminDashboard({ navigation }) {
         });
         const lostEarningsAvg = lostEarningsCount ? lostEarningsTotal / lostEarningsCount : 0;
 
-        const dailyCommissionMap = {};
-        analyticsOrders.forEach(order => {
-            if (!COMPLETED_STATUSES.has(normalizeStatus(order.status))) return;
-            const stamp = order.completed_at || order.confirmed_at || order.updated_at || order.created_at;
-            if (!stamp) return;
-            const ts = new Date(stamp);
-            if (Number.isNaN(ts.getTime())) return;
-            const key = ts.toISOString().slice(0, 10);
-            const price = Number(order.final_price ?? order.initial_price ?? order.callout_fee ?? 0);
-            if (!Number.isFinite(price)) return;
-            dailyCommissionMap[key] = (dailyCommissionMap[key] || 0) + price * commissionRate;
-        });
-        const dailyCommissionValues = Object.values(dailyCommissionMap);
-        const dailyCommissionStats = calcStats(dailyCommissionValues);
-        const commissionVolatilityRatio = dailyCommissionStats.p50
-            ? dailyCommissionStats.std / dailyCommissionStats.p50
-            : 0;
-
         return {
             totalOrders,
             completedOrders,
@@ -1227,21 +1238,21 @@ export default function AdminDashboard({ navigation }) {
             activeJobs,
             availablePool,
             commissionCollected,
-            commissionOutstanding,
             avgCommissionPerOrder,
+            commissionOwed,
+            commissionOwedCount: completedUnconfirmedList.length,
             lostEarningsTotal,
             lostEarningsCount,
             lostEarningsAvg,
             totalBalances,
             avgBalance,
             lowBalanceCount,
-            commissionVolatilityRatio,
             topUpTotal: Number(balanceTopUpStats.totalTopUps || 0),
             topUpAvg: Number(balanceTopUpStats.avgTopUp || 0),
             topUpCount: Number(balanceTopUpStats.count || 0),
             statusBreakdown,
         };
-    }, [analyticsOrders, commissionStats, masters, balanceTopUpStats, settings]);
+    }, [analyticsOrders, masters, balanceTopUpStats, settings]);
 
     const analyticsLists = useMemo(() => {
         const hoursUnit = TRANSLATIONS.analyticsHoursUnit || 'hours';
@@ -1355,12 +1366,15 @@ export default function AdminDashboard({ navigation }) {
             if (diffDays >= 0 && diffDays < 7) {
                 const idx = 6 - diffDays;
                 ordersSeries[idx] += 1;
-                if (COMPLETED_STATUSES.has(normalizeStatus(order.status))) {
+                const normalized = normalizeStatus(order.status);
+                if (COMPLETED_STATUSES.has(normalized)) {
                     completedSeries[idx] += 1;
                     const price = Number(order.final_price ?? order.initial_price ?? 0);
                     if (Number.isFinite(price)) {
                         revenueSeries[idx] += price;
-                        commissionSeries[idx] += price * commissionRate;
+                        if (normalized === 'confirmed') {
+                            commissionSeries[idx] += price * commissionRate;
+                        }
                     }
                 }
             }
@@ -1501,7 +1515,9 @@ export default function AdminDashboard({ navigation }) {
                     const price = Number(order.final_price ?? order.initial_price ?? 0);
                     if (Number.isFinite(price)) {
                         revenueSeries[idx] += price;
-                        commissionSeries[idx] += price * commissionRate;
+                        if (normalizeStatus(order.status) === 'confirmed') {
+                            commissionSeries[idx] += price * commissionRate;
+                        }
                     }
                 }
             }
@@ -2025,10 +2041,10 @@ export default function AdminDashboard({ navigation }) {
     }, [analyticsOrders.length, analyticsRange, analyticsFilters, analyticsGranularity, activeTab]);
 
     useEffect(() => {
-        if (loading) return;
+        if (loading || activeTab !== 'analytics') return;
         loadCommissionData();
         loadBalanceTopUpStats();
-    }, [analyticsRangeWindow, loading]);
+    }, [analyticsRangeWindow, loading, activeTab, orders]);
 
     useEffect(() => {
         if (analyticsSection === 'quality') {
@@ -2147,7 +2163,7 @@ export default function AdminDashboard({ navigation }) {
 
     useEffect(() => {
         if (districtModal.visible) {
-            setTempDistrict(districtModal.district ? { ...districtModal.district } : { code: '', name_en: '', name_ru: '', name_kg: '', region: '', sort_order: 99, is_active: true });
+            setTempDistrict(districtModal.district ? { ...districtModal.district } : { code: '', name_en: '', name_ru: '', name_kg: '', region: 'bishkek', sort_order: 99, is_active: true });
         }
     }, [districtModal]);
 
@@ -2193,6 +2209,8 @@ export default function AdminDashboard({ navigation }) {
     const [showMasterDetails, setShowMasterDetails] = useState(false);
     const [masterDetails, setMasterDetails] = useState(null);
     const [masterDetailsLoading, setMasterDetailsLoading] = useState(false);
+    const [masterBalanceHistory, setMasterBalanceHistory] = useState([]);
+    const [masterBalanceHistoryLoading, setMasterBalanceHistoryLoading] = useState(false);
     const [showDepositModal, setShowDepositModal] = useState(false);
     const [depositAmount, setDepositAmount] = useState('');
     const [detailsPerson, setDetailsPerson] = useState(null); // For person details drawer (master/dispatcher)
@@ -2202,6 +2220,10 @@ export default function AdminDashboard({ navigation }) {
     const [masterOrderHistory, setMasterOrderHistory] = useState([]);
     const [orderHistoryLoading, setOrderHistoryLoading] = useState(false);
     const orderHistoryCache = useRef(new Map());
+    const [showTopUpHistoryModal, setShowTopUpHistoryModal] = useState(false);
+    const [topUpHistory, setTopUpHistory] = useState([]);
+    const [topUpHistoryLoading, setTopUpHistoryLoading] = useState(false);
+    const topUpHistoryCache = useRef(new Map());
 
     // NEW: Add User Modal State
     const [showAddUserModal, setShowAddUserModal] = useState(false);
@@ -2212,6 +2234,30 @@ export default function AdminDashboard({ navigation }) {
     const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
     const [passwordResetTarget, setPasswordResetTarget] = useState(null);
     const [newPassword, setNewPassword] = useState('');
+
+    useEffect(() => {
+        if (!detailsPerson?.id || detailsPerson?.type !== 'master') {
+            setMasterBalanceHistory([]);
+            setMasterBalanceHistoryLoading(false);
+            return;
+        }
+        let isActive = true;
+        setMasterBalanceHistoryLoading(true);
+        earningsService.getBalanceTransactions(detailsPerson.id, 10)
+            .then((history) => {
+                if (!isActive) return;
+                setMasterBalanceHistory(history || []);
+            })
+            .catch(() => {
+                if (!isActive) return;
+                setMasterBalanceHistory([]);
+            })
+            .finally(() => {
+                if (!isActive) return;
+                setMasterBalanceHistoryLoading(false);
+            });
+        return () => { isActive = false; };
+    }, [detailsPerson?.id, detailsPerson?.type]);
     const [confirmPassword, setConfirmPassword] = useState('');
 
     // Initial Load
@@ -2463,17 +2509,17 @@ export default function AdminDashboard({ navigation }) {
         setActionLoading(true);
         try {
             const { icon, ...payload } = typeData || {};
-            if (payload.id) {
-                await ordersService.updateServiceType(payload.id, payload);
-                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
-            } else {
-                await ordersService.addServiceType(payload);
-                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
+            const result = payload.id
+                ? await ordersService.updateServiceType(payload.id, payload)
+                : await ordersService.addServiceType(payload);
+            if (!result?.success) {
+                throw new Error(result?.message || 'Failed to save service type');
             }
+            showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
             setServiceTypeModal({ visible: false, type: null });
             loadServiceTypes();
         } catch (e) {
-            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (e?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
         } finally {
             setActionLoading(false);
         }
@@ -2507,21 +2553,22 @@ export default function AdminDashboard({ navigation }) {
                 name_en: districtData.name_en,
                 name_ru: districtData.name_ru || null,
                 name_kg: districtData.name_kg || null,
-                region: districtData.region || null,
+                region: districtData.region || 'bishkek',
                 sort_order: districtData.sort_order ? parseInt(districtData.sort_order, 10) : 99,
                 is_active: districtData.is_active !== false,
             };
-            if (districtData.id) {
-                await ordersService.updateDistrict(districtData.id, payload);
-            } else {
-                await ordersService.addDistrict(payload);
+            const result = districtData.id
+                ? await ordersService.updateDistrict(districtData.id, payload)
+                : await ordersService.addDistrict(payload);
+            if (!result?.success) {
+                throw new Error(result?.message || 'Failed to save district');
             }
             setDistrictModal({ visible: false, district: null });
             loadManagedDistricts();
             loadDistricts();
             showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
         } catch (e) {
-            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (e?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
         } finally {
             setActionLoading(false);
         }
@@ -2559,16 +2606,17 @@ export default function AdminDashboard({ navigation }) {
                 sort_order: reasonData.sort_order ? parseInt(reasonData.sort_order, 10) : 0,
                 is_active: reasonData.is_active !== false,
             };
-            if (reasonData.id) {
-                await ordersService.updateCancellationReason(reasonData.id, payload);
-            } else {
-                await ordersService.addCancellationReason(payload);
+            const result = reasonData.id
+                ? await ordersService.updateCancellationReason(reasonData.id, payload)
+                : await ordersService.addCancellationReason(payload);
+            if (!result?.success) {
+                throw new Error(result?.message || 'Failed to save cancellation reason');
             }
             setCancellationReasonModal({ visible: false, reason: null });
             loadCancellationReasons();
             showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
         } catch (e) {
-            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (e?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
         } finally {
             setActionLoading(false);
         }
@@ -2737,6 +2785,22 @@ export default function AdminDashboard({ navigation }) {
                 return;
             }
 
+            const canEditFinal = ['completed', 'confirmed'].includes(detailsOrder?.status);
+            const parsedFinal = canEditFinal && editForm.final_price !== '' && editForm.final_price !== null && editForm.final_price !== undefined
+                ? parseFloat(editForm.final_price)
+                : null;
+            const finalValue = !isNaN(parsedFinal) ? parsedFinal : null;
+            const existingFinal = detailsOrder?.final_price !== null && detailsOrder?.final_price !== undefined
+                ? parseFloat(detailsOrder.final_price)
+                : null;
+            const finalChanged = canEditFinal && finalValue !== null && (existingFinal === null || finalValue !== existingFinal);
+
+            if (finalChanged && calloutValue !== null && finalValue < calloutValue) {
+                showToast?.(TRANSLATIONS.errorInitialBelowCallout || 'Final price cannot be lower than call-out fee', 'error');
+                setActionLoading(false);
+                return;
+            }
+
             const updates = {
                 problem_description: editForm.problem_description,
                 dispatcher_note: editForm.dispatcher_note,
@@ -2749,6 +2813,15 @@ export default function AdminDashboard({ navigation }) {
                 client_phone: editForm.client_phone || detailsOrder.client?.phone
             };
 
+            if (finalChanged && ordersService.overrideFinalPriceAdmin) {
+                const overrideResult = await ordersService.overrideFinalPriceAdmin(detailsOrder.id, finalValue, 'admin_price_override');
+                if (!overrideResult?.success) {
+                    showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (overrideResult?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                    setActionLoading(false);
+                    return;
+                }
+            }
+
             const result = await ordersService.updateOrderInline(detailsOrder.id, updates);
             if (result.success) {
                 showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
@@ -2757,6 +2830,7 @@ export default function AdminDashboard({ navigation }) {
                 setDetailsOrder(prev => ({
                     ...prev,
                     ...editForm,
+                    final_price: finalChanged ? finalValue : prev.final_price,
                     client: { ...prev.client, full_name: editForm.client_name, phone: editForm.client_phone }
                 }));
             } else { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
@@ -2964,15 +3038,30 @@ export default function AdminDashboard({ navigation }) {
         setShowMasterDetails(true);
         setMasterDetails({ profile: master, summary: null });
         setMasterDetailsLoading(true);
-        const summary = await earningsService.getMasterFinancialSummary(master.id);
-        setMasterDetails({ profile: master, summary });
-        setMasterDetailsLoading(false);
+        setMasterBalanceHistory([]);
+        setMasterBalanceHistoryLoading(true);
+        try {
+            const [summary, history] = await Promise.all([
+                earningsService.getMasterFinancialSummary(master.id),
+                earningsService.getBalanceTransactions(master.id, 10),
+            ]);
+            setMasterDetails({ profile: master, summary });
+            setMasterBalanceHistory(history || []);
+        } catch (e) {
+            setMasterDetails({ profile: master, summary: null });
+            setMasterBalanceHistory([]);
+        } finally {
+            setMasterDetailsLoading(false);
+            setMasterBalanceHistoryLoading(false);
+        }
     };
 
     const closeMasterDetails = () => {
         setShowMasterDetails(false);
         setMasterDetails(null);
         setMasterDetailsLoading(false);
+        setMasterBalanceHistory([]);
+        setMasterBalanceHistoryLoading(false);
     };
 
     const handleCancelOrderAdmin = async (orderId) => {
@@ -3277,6 +3366,46 @@ export default function AdminDashboard({ navigation }) {
             loadOrderHistory(selectedMaster);
         }
     }, [showOrderHistoryModal, selectedMaster, masterOrderHistory.length]);
+
+    const loadTopUpHistory = async (person, force = false) => {
+        if (!person?.id) return;
+        if (person?.type !== 'master' && person?.role !== 'master') return;
+        const cacheKey = `master:${person.id}`;
+
+        if (!force && topUpHistoryCache.current.has(cacheKey)) {
+            setTopUpHistory(topUpHistoryCache.current.get(cacheKey));
+            return;
+        }
+
+        if (topUpHistoryLoading) return;
+
+        setTopUpHistoryLoading(true);
+        try {
+            const history = await earningsService.getBalanceTransactions(person.id, 50);
+            const filtered = (history || []).filter(tx => ['top_up', 'initial_deposit'].includes(tx.transaction_type));
+            topUpHistoryCache.current.set(cacheKey, filtered);
+            setTopUpHistory(filtered);
+        } catch (e) {
+            console.error('Failed to load top-up history:', e);
+            setTopUpHistory([]);
+        } finally {
+            setTopUpHistoryLoading(false);
+        }
+    };
+
+    const openTopUpHistory = async (person) => {
+        if (!person?.id) return;
+        setSelectedMaster(person);
+        setTopUpHistory([]);
+        setShowTopUpHistoryModal(true);
+        await loadTopUpHistory(person, true);
+    };
+
+    useEffect(() => {
+        if (showTopUpHistoryModal && selectedMaster?.id && topUpHistory.length === 0) {
+            loadTopUpHistory(selectedMaster);
+        }
+    }, [showTopUpHistoryModal, selectedMaster, topUpHistory.length]);
 
     const clearAnalyticsTooltipTimer = useCallback(() => {
         if (analyticsTooltipTimer.current) {
@@ -4126,7 +4255,7 @@ export default function AdminDashboard({ navigation }) {
                                     />
                                     <View style={styles.analyticsStackedChartDivider} />
                                     <LabeledBarChart
-                                        title={TRANSLATIONS.analyticsCommission || 'Commission'}
+                                        title={TRANSLATIONS.analyticsCommissionConfirmed || TRANSLATIONS.analyticsCommission || 'Commission (confirmed)'}
                                         subtitle={chartSubtitle}
                                         series={analyticsChartSeries.commissionSeries}
                                         labels={analyticsChartSeries.labels}
@@ -4154,10 +4283,10 @@ export default function AdminDashboard({ navigation }) {
                                     </View>
                                     <View style={styles.analyticsFinancialMetricItem}>
                                         <AnalyticsMetricCard
-                                            label={TRANSLATIONS.analyticsCommission || 'Commission'}
+                                            label={TRANSLATIONS.analyticsCommissionConfirmed || TRANSLATIONS.analyticsCommission || 'Commission (confirmed)'}
                                             value={formatMoney(analyticsStats.commissionCollected)}
-                                            subLabel={`${TRANSLATIONS.analyticsAvgCommission || 'Avg commission per order'} ${formatMoney(analyticsStats.avgCommissionPerOrder)}`}
-                                            infoText={TRANSLATIONS.analyticsCommissionTip || 'Total commission deducted from completed orders (price × rate). Indicates platform earnings; subtitle shows avg per order.'}
+                                            subLabel={`${TRANSLATIONS.analyticsAvgCommissionConfirmed || TRANSLATIONS.analyticsAvgCommission || 'Avg commission per confirmed order'} ${formatMoney(analyticsStats.avgCommissionPerOrder)}`}
+                                            infoText={TRANSLATIONS.analyticsCommissionConfirmedTip || 'Commission collected from confirmed orders only (price × rate). Subtitle shows average per confirmed order.'}
                                             infoHandlers={analyticsInfoHandlers}
                                             isDark={isDark}
                                         />
@@ -4184,10 +4313,10 @@ export default function AdminDashboard({ navigation }) {
                                     </View>
                                     <View style={styles.analyticsFinancialMetricItem}>
                                         <AnalyticsMetricCard
-                                            label={TRANSLATIONS.analyticsCommissionVolatility || 'Commission Volatility'}
-                                            value={formatPercent(analyticsStats.commissionVolatilityRatio)}
-                                            subLabel={TRANSLATIONS.analyticsVolatilityFormula || 'STD / Median (daily commission)'}
-                                            infoText={TRANSLATIONS.analyticsCommissionVolatilityTip || 'Volatility of daily commission: STD(daily commission) / median. Higher % = more variability.'}
+                                            label={TRANSLATIONS.analyticsCommissionOwed || 'Commission Owed'}
+                                            value={formatMoney(analyticsStats.commissionOwed)}
+                                            subLabel={`${formatNumber(analyticsStats.commissionOwedCount)} ${TRANSLATIONS.analyticsPendingConfirmations || 'pending confirmations'}`}
+                                            infoText={TRANSLATIONS.analyticsCommissionOwedTip || 'Estimated commission owed from completed but not yet confirmed orders (price × rate).'}
                                             infoHandlers={analyticsInfoHandlers}
                                             isDark={isDark}
                                         />
@@ -4686,7 +4815,7 @@ export default function AdminDashboard({ navigation }) {
                                             <InfoTip
                                                 text={
                                                     TRANSLATIONS.analyticsPriceDistributionTip
-                                                    || 'Distribution of order prices by time bucket. Box = P25–P75, line = median. Whiskers show P5–P95. Hover a bucket to see mean and spread.'
+                                                    || 'Distribution of order prices by time bucket. Box = P25–P75, solid line = median, dashed line = mean trend. Whiskers show P5–P95. Hover a bucket to see mean and spread.'
                                                 }
                                                 isDark={isDark}
                                                 handlers={analyticsInfoHandlers}
@@ -4840,7 +4969,7 @@ export default function AdminDashboard({ navigation }) {
                                         {priceDistSummary?.n ? (
                                             <View>
                                                 <Text style={[styles.analyticsPriceDistNote, !isDark && styles.textSecondary]}>
-                                                    {TRANSLATIONS.analyticsPriceDistributionWhiskers || 'Whiskers show P5–P95'}
+                                                    {TRANSLATIONS.analyticsPriceDistributionWhiskers || 'Whiskers show P5–P95. Solid line = median, dashed = mean.'}
                                                 </Text>
                                             </View>
                                         ) : (
@@ -6167,9 +6296,8 @@ export default function AdminDashboard({ navigation }) {
                                 >
                                     <Ionicons name={cancellationReasonsCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />
                                 </TouchableOpacity>
-                                </View>
                             </View>
-                        )}
+                        </View>
 
                         {!cancellationReasonsCollapsed && (
                             <>
@@ -7257,6 +7385,7 @@ export default function AdminDashboard({ navigation }) {
                                             orientir: detailsOrder.orientir || '',
                                             problem_description: detailsOrder.problem_description || '',
                                             initial_price: detailsOrder.initial_price ?? '',
+                                            final_price: detailsOrder.final_price ?? '',
                                             callout_fee: detailsOrder.callout_fee ?? '',
                                             dispatcher_note: detailsOrder.dispatcher_note || '',
                                         });
@@ -7373,6 +7502,19 @@ export default function AdminDashboard({ navigation }) {
                                     keyboardType="numeric"
                                     placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                 />
+
+                                {['completed', 'confirmed'].includes(detailsOrder?.status) && (
+                                    <>
+                                        <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS.labelFinal || 'Final Price'}</Text>
+                                        <TextInput
+                                            style={[styles.input, !isDark && styles.inputLight]}
+                                            value={String(editForm.final_price ?? '')}
+                                            onChangeText={t => setEditForm({ ...editForm, final_price: sanitizeNumberInput(t) })}
+                                            keyboardType="numeric"
+                                            placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                        />
+                                    </>
+                                )}
 
                                 <Text style={[styles.inputLabel, !isDark && styles.textDark]}>{TRANSLATIONS.sectionNote || 'Internal Note'}</Text>
                                 <TextInput
@@ -7628,6 +7770,42 @@ export default function AdminDashboard({ navigation }) {
                             {masterDetails?.summary?.balanceBlocked && (
                                 <Text style={styles.masterDetailsBlocked}>{TRANSLATIONS.balanceBlocked || 'Balance Blocked'}</Text>
                             )}
+                            <View style={styles.masterDetailsSection}>
+                                <Text style={styles.masterDetailsSectionTitle}>
+                                    {TRANSLATIONS.topUpHistory || TRANSLATIONS.analyticsTopUpTotal || 'Top-up history'}
+                                </Text>
+                                {masterBalanceHistoryLoading ? (
+                                    <ActivityIndicator color="#fff" />
+                                ) : (
+                                    (() => {
+                                        const topUps = (masterBalanceHistory || []).filter(tx => ['top_up', 'initial_deposit'].includes(tx.transaction_type));
+                                        if (!topUps.length) {
+                                            return (
+                                                <Text style={styles.masterDetailsEmpty}>
+                                                    {TRANSLATIONS.emptyList || 'No top-ups yet'}
+                                                </Text>
+                                            );
+                                        }
+                                        return topUps.map(tx => (
+                                            <View key={tx.id} style={styles.masterDetailsTxRow}>
+                                                <View>
+                                                    <Text style={styles.masterDetailsTxLabel}>
+                                                        {tx.transaction_type === 'initial_deposit'
+                                                            ? (TRANSLATIONS.initialDeposit || 'Initial deposit')
+                                                            : (TRANSLATIONS.transactionTopUp || 'Top Up')}
+                                                    </Text>
+                                                    <Text style={styles.masterDetailsTxMeta}>
+                                                        {tx.created_at ? new Date(tx.created_at).toLocaleDateString() : '—'}
+                                                    </Text>
+                                                </View>
+                                                <Text style={styles.masterDetailsTxAmount}>
+                                                    +{Number(tx.amount || 0).toFixed(0)}
+                                                </Text>
+                                            </View>
+                                        ));
+                                    })()
+                                )}
+                            </View>
                         </View>
                     )}
                 </View>
@@ -7941,6 +8119,12 @@ export default function AdminDashboard({ navigation }) {
                                             <Text style={styles.actionButtonText}>{TRANSLATIONS.viewOrderHistory || 'View Order History'}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: '#334155' }]}
+                                            onPress={() => openTopUpHistory(detailsPerson)}
+                                        >
+                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.topUpHistory || 'View Top Up History'}</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
                                             style={[styles.actionButton, { backgroundColor: '#3b82f6' }]}
                                             onPress={() => { setSelectedMaster(detailsPerson); setShowBalanceModal(true); setDetailsPerson(null); }}
                                         >
@@ -8034,7 +8218,24 @@ export default function AdminDashboard({ navigation }) {
                         </View>
 
                         <ScrollView showsVerticalScrollIndicator={false}>
-                            {masterOrderHistory.length === 0 ? (
+                            {orderHistoryLoading ? (
+                                <View style={{ paddingVertical: 10 }}>
+                                    {Array.from({ length: 5 }).map((_, idx) => (
+                                        <View
+                                            key={`history-skeleton-${idx}`}
+                                            style={[
+                                                styles.card,
+                                                !isDark && styles.cardLight,
+                                                { marginBottom: 10, padding: 16 }
+                                            ]}
+                                        >
+                                            <View style={{ height: 12, width: '60%', backgroundColor: isDark ? '#334155' : '#e2e8f0', borderRadius: 6, marginBottom: 10 }} />
+                                            <View style={{ height: 10, width: '40%', backgroundColor: isDark ? '#334155' : '#e2e8f0', borderRadius: 6, marginBottom: 14 }} />
+                                            <View style={{ height: 10, width: '30%', backgroundColor: isDark ? '#334155' : '#e2e8f0', borderRadius: 6 }} />
+                                        </View>
+                                    ))}
+                                </View>
+                            ) : masterOrderHistory.length === 0 ? (
                                 <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 60 }}>
                                     <Ionicons name="document-text-outline" size={48} color="#64748b" />
                                     <Text style={{ color: '#64748b', marginTop: 12 }}>{TRANSLATIONS.noOrderHistory || 'No order history'}</Text>
@@ -8075,6 +8276,89 @@ export default function AdminDashboard({ navigation }) {
                                                 <Text style={{ color: '#64748b', fontSize: 11, marginLeft: 4 }}>{TRANSLATIONS.tapViewDetails || 'Tap to view details'}</Text>
                                             </View>
                                         </TouchableOpacity>
+                                    );
+                                })
+                            )}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Master Top-Up History Modal */}
+            <Modal
+                animationType="fade"
+                transparent={true}
+                visible={showTopUpHistoryModal}
+                onRequestClose={() => setShowTopUpHistoryModal(false)}
+            >
+                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', flexDirection: 'row', justifyContent: 'flex-end' }}>
+                    <TouchableOpacity style={{ flex: 1 }} onPress={() => setShowTopUpHistoryModal(false)} />
+                    <View style={{ width: Math.min(500, SCREEN_WIDTH), backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
+                            <View>
+                                <Text style={[styles.pageTitle, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS.topUpHistory || 'Top Up History'}
+                                </Text>
+                                <Text style={{ color: '#64748b', marginTop: 4 }}>{selectedMaster?.full_name}</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setShowTopUpHistoryModal(false)}>
+                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>X</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView showsVerticalScrollIndicator={false}>
+                            {topUpHistoryLoading ? (
+                                <View style={{ paddingVertical: 10 }}>
+                                    {Array.from({ length: 5 }).map((_, idx) => (
+                                        <View
+                                            key={`topup-skeleton-${idx}`}
+                                            style={[
+                                                styles.card,
+                                                !isDark && styles.cardLight,
+                                                { marginBottom: 10, padding: 16 }
+                                            ]}
+                                        >
+                                            <View style={{ height: 12, width: '60%', backgroundColor: isDark ? '#334155' : '#e2e8f0', borderRadius: 6, marginBottom: 10 }} />
+                                            <View style={{ height: 10, width: '40%', backgroundColor: isDark ? '#334155' : '#e2e8f0', borderRadius: 6, marginBottom: 14 }} />
+                                            <View style={{ height: 10, width: '30%', backgroundColor: isDark ? '#334155' : '#e2e8f0', borderRadius: 6 }} />
+                                        </View>
+                                    ))}
+                                </View>
+                            ) : topUpHistory.length === 0 ? (
+                                <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 60 }}>
+                                    <Ionicons name="cash-outline" size={48} color="#64748b" />
+                                    <Text style={{ color: '#64748b', marginTop: 12 }}>
+                                        {TRANSLATIONS.emptyList || 'No top-ups yet'}
+                                    </Text>
+                                </View>
+                            ) : (
+                                topUpHistory.map((tx, idx) => {
+                                    const label = tx.transaction_type === 'initial_deposit'
+                                        ? (TRANSLATIONS.initialDeposit || 'Initial deposit')
+                                        : (TRANSLATIONS.transactionTopUp || 'Top Up');
+                                    return (
+                                        <View
+                                            key={tx.id || idx}
+                                            style={[styles.card, !isDark && styles.cardLight, { marginBottom: 10 }]}
+                                        >
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{label}</Text>
+                                                    <Text style={styles.itemSubtitle}>{tx.notes || '—'}</Text>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginTop: 4 }}>
+                                                        {tx.created_at ? new Date(tx.created_at).toLocaleDateString() : 'N/A'}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ alignItems: 'flex-end' }}>
+                                                    <Text style={{ color: '#22c55e', fontWeight: '700', fontSize: 14 }}>
+                                                        +{Number(tx.amount || 0).toFixed(0)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                    </Text>
+                                                    <Text style={{ color: '#64748b', fontSize: 11 }}>
+                                                        {TRANSLATIONS.balance || 'Balance'}: {Number(tx.balance_after || 0).toFixed(0)}
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        </View>
                                     );
                                 })
                             )}
@@ -8559,6 +8843,13 @@ const styles = StyleSheet.create({
     masterDetailsLabel: { fontSize: 12, color: '#64748b' },
     masterDetailsValue: { fontSize: 12, fontWeight: '700', color: '#fff' },
     masterDetailsBlocked: { marginTop: 8, fontSize: 12, color: '#ef4444', fontWeight: '600' },
+    masterDetailsSection: { marginTop: 16, paddingTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(148,163,184,0.2)' },
+    masterDetailsSectionTitle: { fontSize: 12, fontWeight: '700', color: '#e2e8f0', marginBottom: 8 },
+    masterDetailsTxRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+    masterDetailsTxLabel: { fontSize: 12, color: '#e2e8f0' },
+    masterDetailsTxMeta: { fontSize: 10, color: '#94a3b8' },
+    masterDetailsTxAmount: { fontSize: 12, fontWeight: '700', color: '#22c55e' },
+    masterDetailsEmpty: { fontSize: 11, color: '#94a3b8' },
     input: {
         backgroundColor: '#0f172a',
         borderRadius: 8,

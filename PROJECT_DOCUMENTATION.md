@@ -81,6 +81,8 @@ master-kg/
 
 - **Web build NetworkError (fetch failed)**: If the web build logs `TypeError: NetworkError when attempting to fetch resource` for orders/profile, this is usually **environment or connectivity** (Supabase URL not reachable, CORS, backend down, or wrong `EXPO_PUBLIC_SUPABASE_URL/ANON_KEY`). Confirm the Supabase URL is reachable from the browser and that CORS allows the web origin.
 - **Admin password reset audit log mismatch**: `PATCH_ADMIN_PASSWORD_RESET.sql` writes to `profile_audit_log(action_type, changes)` which do not exist in the current schema. The consolidated setup (`COMPLETE_SETUP_V3.sql`) logs to the existing columns (`change_type`, `new_value`, `reason`) so the RPC works. If you need the patch file to be literal, add those columns or update the patch.
+- **Admin confirm payment requires `payment_confirmed_by`**: The DB trigger blocks `status = confirmed` if `payment_method` or `payment_confirmed_by` is missing. `confirmPaymentAdmin` now sets `payment_confirmed_by` (current admin) and `payment_confirmed_at` to avoid the error.
+- **Admin final price override**: Use RPC `admin_override_final_price(order_id, final_price, reason)` for completed/confirmed orders. It recalculates commission, updates master earnings, adjusts balance, and logs the change.
 - **Recent UI updates (Master dashboard)**: Orders list now uses skeleton loading; filters are a compact overlay row that expands into a horizontal chip panel; order cards were restyled to match the prototype and now show landmark/orientir even before claim; the active order peek widget/bottom sheet layout was updated; My Account now hides raw order IDs in history and shows human-friendly context; Settings screen got language flags and a support contact card.
 
 ---
@@ -598,6 +600,23 @@ npx expo start --clear
 
 ### UX Stability
 - **Loading Loop Fix**: Removed the `session?.user && !user` loading gate to avoid infinite loading screens.
+
+## v5.4.0 - Admin UX, Finance Analytics, and Settings Reliability (February 6, 2026)
+
+### Admin UX
+- **Top Up History Sidebar**: Added a dedicated "View Top Up History" button for masters that opens a right-side history panel (separate from Order History).
+
+### Finance & Analytics
+- **Price Distribution Trendline**: Added a dashed mean trendline to the order price distribution chart.
+- **Commission Metrics**: Renamed confirmed-only totals to "Commission (confirmed)" and added **Commission Owed** (completed but not confirmed). Removed commission volatility.
+- **Chart Cleanup**: Removed stray UI artifacts under the distribution chart.
+
+### Settings & Management
+- **Districts/Add Buttons Reliability**: Add/Update flows now surface Supabase errors instead of showing false success. District `region` defaults to `bishkek` when empty.
+- **Render Fix**: Resolved a settings render error caused by a stray text node.
+
+### Database Patches
+- **Admin Final Price Override**: Ensure `admin_override_final_price` RPC is deployed via `data/PATCH_ADMIN_OVERRIDE_FINAL_PRICE.sql`.
 
 ## v5.3.0 - Auth Stability, Navigation History, and Retries (January 28, 2026)
 
