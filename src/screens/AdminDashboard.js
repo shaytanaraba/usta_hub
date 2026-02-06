@@ -195,6 +195,19 @@ const AnalyticsListCard = ({ title, items, emptyLabel, onPress, isDark, actionLa
     </TouchableOpacity>
 );
 
+const getPointerPos = (event) => {
+    const native = event?.nativeEvent || {};
+    let x = native.clientX;
+    let y = native.clientY;
+    if ((x == null || y == null) && typeof window !== 'undefined') {
+        if (native.pageX != null) x = native.pageX - window.scrollX;
+        if (native.pageY != null) y = native.pageY - window.scrollY;
+    }
+    if (x == null) x = native.locationX ?? 0;
+    if (y == null) y = native.locationY ?? 0;
+    return { x, y };
+};
+
 const InfoTip = ({ text, isDark, handlers }) => {
     const onShow = handlers?.onShow;
     const onMove = handlers?.onMove;
@@ -207,19 +220,15 @@ const InfoTip = ({ text, isDark, handlers }) => {
     const handleShow = (event) => {
         stopEvent(event);
         if (!onShow) return;
-        const payload = {
-            text,
-            x: event?.nativeEvent?.pageX,
-            y: event?.nativeEvent?.pageY,
-        };
+        const { x, y } = getPointerPos(event);
+        const payload = { text, x, y };
         onShow(payload, true);
     };
 
     const handleMove = (event) => {
         stopEvent(event);
         if (!onMove) return;
-        const x = event?.nativeEvent?.pageX;
-        const y = event?.nativeEvent?.pageY;
+        const { x, y } = getPointerPos(event);
         if (x == null || y == null) return;
         onMove(x, y);
     };
@@ -270,11 +279,14 @@ const MiniBars = ({ data = [], isDark, height = 34, barWidth = 8 }) => {
 };
 
 const StatusLegend = ({ segments, total, hasData, isDark }) => (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.analyticsStatusLegend}>
+    <View style={styles.analyticsStatusLegend}>
         {segments.map((seg) => (
             <View key={`${seg.label}-legend`} style={styles.analyticsStatusLegendItem}>
                 <View style={[styles.analyticsStatusDot, { backgroundColor: seg.color, opacity: hasData ? 1 : 0.5 }]} />
-                <Text style={[styles.analyticsStatusLegendText, { color: isDark ? '#cbd5e1' : '#0f172a' }]} numberOfLines={1}>
+                <Text
+                    style={[styles.analyticsStatusLegendText, { color: isDark ? '#cbd5e1' : '#0f172a' }]}
+                    numberOfLines={2}
+                >
                     {seg.label}
                 </Text>
                 <View style={styles.analyticsStatusLegendMeta}>
@@ -287,7 +299,7 @@ const StatusLegend = ({ segments, total, hasData, isDark }) => (
                 </View>
             </View>
         ))}
-    </ScrollView>
+    </View>
 );
 
 const polarToCartesian = (centerX, centerY, radius, angleInDegrees) => {
@@ -627,6 +639,7 @@ const BoxPlotChart = ({
                                 />
                             ))}
                         </View>
+                        )}
                     </View>
 
                     <View style={[styles.analyticsBoxplotLabels, { paddingLeft: padding.left, paddingRight: padding.right }]}>
@@ -769,6 +782,7 @@ export default function AdminDashboard({ navigation }) {
     const TRANSLATIONS = translations[language] || translations['en'] || {};
     const { logout } = useAuth();
     const analyticsLocale = useMemo(() => (language === 'ru' ? 'ru-RU' : language === 'kg' ? 'ky-KG' : 'en-US'), [language]);
+    const isWeb = Platform.OS === 'web';
     const getLocalizedName = useCallback((item, fallback = '') => {
         if (!item) return fallback;
         const primary = language === 'ru' ? item.name_ru : language === 'kg' ? item.name_kg : item.name_en;
@@ -858,9 +872,10 @@ export default function AdminDashboard({ navigation }) {
     const [tempCancellationReason, setTempCancellationReason] = useState({ code: '', name_en: '', name_ru: '', applicable_to: 'both', sort_order: '', is_active: true });
     const [districtSearch, setDistrictSearch] = useState('');
     const [cancellationSearch, setCancellationSearch] = useState('');
-    const [serviceTypesCollapsed, setServiceTypesCollapsed] = useState(false);
-    const [districtsCollapsed, setDistrictsCollapsed] = useState(false);
-    const [cancellationReasonsCollapsed, setCancellationReasonsCollapsed] = useState(false);
+    const [serviceTypesCollapsed, setServiceTypesCollapsed] = useState(true);
+    const [districtsCollapsed, setDistrictsCollapsed] = useState(true);
+    const [cancellationReasonsCollapsed, setCancellationReasonsCollapsed] = useState(true);
+    const [configurationCollapsed, setConfigurationCollapsed] = useState(true);
 
     const openDistrictPicker = () => {
         setPickerModal({
@@ -935,13 +950,54 @@ export default function AdminDashboard({ navigation }) {
         })),
     ]), [serviceTypes, language]);
 
+    const districtLookup = useMemo(() => {
+        const source = managedDistricts?.length ? managedDistricts : districts;
+        const map = new Map();
+        (source || []).forEach(district => {
+            [district?.id, district?.code, district?.label, district?.name_en, district?.name_ru, district?.name_kg]
+                .filter(Boolean)
+                .forEach(key => {
+                    const normalized = String(key);
+                    if (!map.has(normalized)) map.set(normalized, district);
+                });
+        });
+        return map;
+    }, [managedDistricts, districts]);
+
+    const cancellationReasonLookup = useMemo(() => {
+        const map = new Map();
+        (cancellationReasons || []).forEach(reason => {
+            [reason?.code, reason?.id, reason?.value, reason?.label, reason?.name_en, reason?.name_ru, reason?.name_kg]
+                .filter(Boolean)
+                .forEach(key => {
+                    const normalized = String(key);
+                    if (!map.has(normalized)) map.set(normalized, reason);
+                });
+        });
+        return map;
+    }, [cancellationReasons]);
+
+    const getAreaLabel = useCallback((area) => {
+        if (!area) return '';
+        const key = String(area);
+        const district = districtLookup.get(key);
+        return getLocalizedName(district, area);
+    }, [districtLookup, getLocalizedName]);
+
+    const getCancelReasonLabel = useCallback((code) => {
+        if (!code || code === 'unknown') return TRANSLATIONS.analyticsUnknown || 'Unknown';
+        const key = String(code);
+        const reason = cancellationReasonLookup.get(key);
+        return getLocalizedName(reason, key);
+    }, [cancellationReasonLookup, getLocalizedName, TRANSLATIONS]);
+
     const analyticsAreaOptions = useMemo(() => {
         const areas = Array.from(new Set(orders.map(o => o.area).filter(Boolean))).sort();
         return [
             { id: 'all', label: TRANSLATIONS.filterAll || 'All' },
-            ...areas.map(area => ({ id: area, label: area })),
+            ...areas.map(area => ({ id: area, label: getAreaLabel(area) || area })),
         ];
-    }, [orders, language]);
+    }, [orders, getAreaLabel, TRANSLATIONS]);
 
     const matchesDispatcher = useCallback((order, dispatcherId) => {
         if (!order) return false;
@@ -1188,6 +1244,7 @@ export default function AdminDashboard({ navigation }) {
     }, [analyticsOrders, commissionStats, masters, balanceTopUpStats, settings]);
 
     const analyticsLists = useMemo(() => {
+        const hoursUnit = TRANSLATIONS.analyticsHoursUnit || 'hours';
         const buildTopList = (entries) => {
             const sorted = [...entries].sort((a, b) => b.count - a.count);
             const sliced = sorted.slice(0, 6);
@@ -1209,7 +1266,10 @@ export default function AdminDashboard({ navigation }) {
             if (order.urgency && urgencyCounts[order.urgency] !== undefined) urgencyCounts[order.urgency] += 1;
         });
 
-        const topAreas = buildTopList(Object.entries(areaCounts).map(([label, count]) => ({ label, count })));
+        const topAreas = buildTopList(Object.entries(areaCounts).map(([label, count]) => ({
+            label: getAreaLabel(label),
+            count,
+        })));
         const topServices = buildTopList(Object.entries(serviceCounts).map(([label, count]) => ({
             label: getServiceLabel(label, t),
             count,
@@ -1230,19 +1290,22 @@ export default function AdminDashboard({ navigation }) {
         const cancelCounts = {};
         analyticsOrders.forEach(order => {
             if (!CANCELED_STATUSES.has(normalizeStatus(order.status))) return;
-            const code = order.cancel_reason_code || order.cancel_reason || order.cancellation_reason || 'Unknown';
-            const label = code || (TRANSLATIONS.analyticsUnknown || 'Unknown');
-            cancelCounts[label] = (cancelCounts[label] || 0) + 1;
+            const code = order.cancel_reason_code || order.cancel_reason || order.cancellation_reason;
+            const normalized = code ? String(code) : 'unknown';
+            cancelCounts[normalized] = (cancelCounts[normalized] || 0) + 1;
         });
-        const cancelReasons = buildTopList(Object.entries(cancelCounts).map(([label, count]) => ({ label, count })));
+        const cancelReasons = buildTopList(Object.entries(cancelCounts).map(([code, count]) => ({
+            label: getCancelReasonLabel(code),
+            count,
+        })));
 
         const backlogOrders = analyticsOrders
             .filter(order => !COMPLETED_STATUSES.has(normalizeStatus(order.status)) && !CANCELED_STATUSES.has(normalizeStatus(order.status)))
             .map(order => {
                 const age = hoursSince(order.created_at);
                 return {
-                    label: `${getServiceLabel(order.service_type, t)} • ${order.area || '-'}`,
-                    value: age ? `${age.toFixed(1)}h` : '—',
+                    label: `${getServiceLabel(order.service_type, t)} • ${getAreaLabel(order.area) || '-'}`,
+                    value: age ? `${age.toFixed(1)} ${hoursUnit}` : '—',
                     subLabel: order.urgency ? (TRANSLATIONS[`urgency${order.urgency.charAt(0).toUpperCase() + order.urgency.slice(1)}`] || order.urgency) : null,
                     age: age ?? 0,
                 };
@@ -1274,7 +1337,7 @@ export default function AdminDashboard({ navigation }) {
             backlogOrders,
             funnel: funnelWithRatio,
         };
-    }, [analyticsOrders, t, TRANSLATIONS]);
+    }, [analyticsOrders, t, TRANSLATIONS, getAreaLabel, getCancelReasonLabel]);
 
     const analyticsDailySeries = useMemo(() => {
         const ordersSeries = Array(7).fill(0);
@@ -2137,6 +2200,8 @@ export default function AdminDashboard({ navigation }) {
     const [editPersonData, setEditPersonData] = useState({});
     const [showOrderHistoryModal, setShowOrderHistoryModal] = useState(false);
     const [masterOrderHistory, setMasterOrderHistory] = useState([]);
+    const [orderHistoryLoading, setOrderHistoryLoading] = useState(false);
+    const orderHistoryCache = useRef(new Map());
 
     // NEW: Add User Modal State
     const [showAddUserModal, setShowAddUserModal] = useState(false);
@@ -3167,20 +3232,35 @@ export default function AdminDashboard({ navigation }) {
     };
 
     // Load order history when modal opens (works for both masters and dispatchers)
-    const loadOrderHistory = async (person) => {
+    const loadOrderHistory = async (person, force = false) => {
+        if (!person?.id) return;
+        const cacheKey = `${person?.type || person?.role || 'person'}:${person.id}`;
+
+        if (!force && orderHistoryCache.current.has(cacheKey)) {
+            setMasterOrderHistory(orderHistoryCache.current.get(cacheKey));
+            return;
+        }
+
+        if (orderHistoryLoading) return;
+
+        setOrderHistoryLoading(true);
         try {
             let history;
             if (person?.type === 'dispatcher' || person?.role === 'dispatcher') {
-                // Get orders created by this dispatcher
+                // Get orders created/handled by this dispatcher
                 history = await ordersService.getDispatcherOrderHistory(person.id);
             } else {
-                // Get orders completed by this master
+                // Get orders related to this master
                 history = await ordersService.getMasterOrderHistory(person.id);
             }
-            setMasterOrderHistory(history || []);
+            const safeHistory = history || [];
+            orderHistoryCache.current.set(cacheKey, safeHistory);
+            setMasterOrderHistory(safeHistory);
         } catch (e) {
             console.error('Failed to load order history:', e);
             setMasterOrderHistory([]);
+        } finally {
+            setOrderHistoryLoading(false);
         }
     };
 
@@ -3189,14 +3269,14 @@ export default function AdminDashboard({ navigation }) {
         setSelectedMaster(person);
         setMasterOrderHistory([]);
         setShowOrderHistoryModal(true);
-        await loadOrderHistory(person);
+        await loadOrderHistory(person, true);
     };
 
     useEffect(() => {
-        if (showOrderHistoryModal && selectedMaster?.id) {
+        if (showOrderHistoryModal && selectedMaster?.id && masterOrderHistory.length === 0) {
             loadOrderHistory(selectedMaster);
         }
-    }, [showOrderHistoryModal, selectedMaster]);
+    }, [showOrderHistoryModal, selectedMaster, masterOrderHistory.length]);
 
     const clearAnalyticsTooltipTimer = useCallback(() => {
         if (analyticsTooltipTimer.current) {
@@ -3208,7 +3288,7 @@ export default function AdminDashboard({ navigation }) {
     const showAnalyticsTooltip = useCallback((payload, resetTimer = true) => {
         if (!payload?.text) return;
         setAnalyticsTooltip(payload);
-        if (resetTimer) {
+        if (resetTimer && Platform.OS !== 'web') {
             clearAnalyticsTooltipTimer();
             analyticsTooltipTimer.current = setTimeout(() => {
                 setAnalyticsTooltip(null);
@@ -3235,7 +3315,7 @@ export default function AdminDashboard({ navigation }) {
     const showAnalyticsTrendTooltip = useCallback((payload, resetTimer = true) => {
         if (!payload?.title) return;
         setAnalyticsTrendTooltip(payload);
-        if (resetTimer) {
+        if (resetTimer && Platform.OS !== 'web') {
             clearAnalyticsTrendTooltipTimer();
             analyticsTrendTooltipTimer.current = setTimeout(() => {
                 setAnalyticsTrendTooltip(null);
@@ -3278,8 +3358,9 @@ export default function AdminDashboard({ navigation }) {
     // Menu items for admin sidebar
     const MENU_ITEMS = [
         { key: 'analytics', label: TRANSLATIONS.analytics || 'Analytics', icon: 'analytics' },
-        { key: 'orders', label: TRANSLATIONS.orders || 'Orders', icon: 'list' },
         { key: 'people', label: TRANSLATIONS.people || 'People', icon: 'people' },
+        { key: 'create_order', label: TRANSLATIONS.createOrder || 'Create Order', icon: 'add' },
+        { key: 'orders', label: TRANSLATIONS.ordersQueue || TRANSLATIONS.orders || 'Order Queue', icon: 'list' },
         { key: 'settings', label: TRANSLATIONS.settings || 'Settings', icon: 'settings' },
     ];
 
@@ -3299,22 +3380,10 @@ export default function AdminDashboard({ navigation }) {
 
                     {/* Sidebar Navigation */}
                     <View style={styles.sidebarNav}>
-                        {/* Create Order */}
-                        <TouchableOpacity
-                            style={[styles.sidebarNavItem, activeTab === 'create_order' && styles.sidebarNavItemActive]}
-                            onPress={() => { setActiveTab('create_order'); setIsSidebarOpen(false); }}
-                        >
-                            <Text style={[styles.sidebarNavText, activeTab === 'create_order' && styles.sidebarNavTextActive]}>
-                                + {TRANSLATIONS.createOrder || 'Create Order'}
-                            </Text>
-                        </TouchableOpacity>
-
                         {/* Main Navigation */}
                         {MENU_ITEMS.map(item => {
                             const isActive = activeTab === item.key;
-                            const label = item.key === 'orders'
-                                ? (TRANSLATIONS.ordersQueue || TRANSLATIONS.orders || 'Orders')
-                                : item.label;
+                            const label = item.label;
                             return (
                                 <TouchableOpacity
                                     key={item.key}
@@ -3399,7 +3468,7 @@ export default function AdminDashboard({ navigation }) {
     const renderSearchBar = () => (
         <View style={styles.searchRow}>
             <View style={styles.searchInputWrapper}>
-                <Ionicons name="search" size={16} color="#64748b" style={{ marginRight: 8 }} />
+                <Text style={styles.searchIconText}>⌕</Text>
                 <TextInput
                     style={styles.searchInput}
                     placeholder={TRANSLATIONS.placeholderSearch || 'Search...'}
@@ -3552,6 +3621,7 @@ export default function AdminDashboard({ navigation }) {
         const handlePriceDistHover = (bucket, event) => {
             if (!bucket?.stats?.n) return;
             const stats = bucket.stats;
+            const { x, y } = getPointerPos(event);
             showPriceDistTooltip({
                 title: formatBucketRangeLabel(bucket),
                 n: stats.n,
@@ -3564,11 +3634,14 @@ export default function AdminDashboard({ navigation }) {
                 std: stats.std,
                 p90: stats.p90,
                 smallSample: bucket.smallSample,
-                x: event?.nativeEvent?.pageX,
-                y: event?.nativeEvent?.pageY,
+                x,
+                y,
             });
         };
-        const handlePriceDistMove = (event) => updatePriceDistTooltipPos(event?.nativeEvent?.pageX, event?.nativeEvent?.pageY);
+        const handlePriceDistMove = (event) => {
+            const { x, y } = getPointerPos(event);
+            updatePriceDistTooltipPos(x, y);
+        };
         const handlePriceDistLeave = () => hidePriceDistTooltip();
         const handlePriceDistPress = (bucket, event) => {
             if (!bucket?.orders?.length) return;
@@ -3617,32 +3690,93 @@ export default function AdminDashboard({ navigation }) {
             topDispatchersRevenue: analyticsDispatchers.topByRevenue,
         };
 
-        const handleCustomDateChange = (field, event, selectedDate) => {
-            if (Platform.OS !== 'ios') {
-                setShowAnalyticsStartPicker(false);
-                setShowAnalyticsEndPicker(false);
-            }
-            if (!selectedDate) return;
+        const normalizeDateValue = (value) => {
+            if (!value) return null;
+            if (value instanceof Date) return value;
+            const parsed = new Date(value);
+            return Number.isNaN(parsed.getTime()) ? null : parsed;
+        };
+
+        const updateCustomRange = (field, value) => {
+            const normalized = normalizeDateValue(value);
+            if (!normalized) return;
             setAnalyticsCustomRange(prev => {
-                const next = { ...prev, [field]: selectedDate };
+                const next = { ...prev, [field]: normalized };
                 if (next.start && next.end && next.start > next.end) {
-                    if (field === 'start') next.end = selectedDate;
-                    else next.start = selectedDate;
+                    if (field === 'start') next.end = normalized;
+                    else next.start = normalized;
                 }
                 return next;
             });
         };
 
+        const handleCustomDateChange = (field, event, selectedDate) => {
+            if (Platform.OS !== 'ios') {
+                setShowAnalyticsStartPicker(false);
+                setShowAnalyticsEndPicker(false);
+            }
+            updateCustomRange(field, selectedDate);
+        };
+
+        const handleCustomDateText = (field, text) => {
+            updateCustomRange(field, text);
+        };
+
         const formatCustomDate = (date) => (
-            date ? date.toLocaleDateString(analyticsLocale) : (TRANSLATIONS.selectDate || 'Select date')
+            date ? normalizeDateValue(date)?.toLocaleDateString(analyticsLocale) : (TRANSLATIONS.selectDate || 'Select date')
         );
 
-        const getTrendEventPos = (event) => {
-            const native = event?.nativeEvent || {};
-            const x = native.pageX ?? native.locationX ?? 0;
-            const y = native.pageY ?? native.locationY ?? 0;
-            return { x, y };
+        const formatCustomDateInput = (date) => {
+            const normalized = normalizeDateValue(date);
+            if (!normalized) return '';
+            return normalized.toISOString().slice(0, 10);
         };
+
+        const openWebDatePicker = (field, event) => {
+            if (!isWeb || typeof document === 'undefined') return;
+            const input = document.createElement('input');
+            input.type = 'date';
+            input.style.position = 'fixed';
+            input.style.opacity = '0';
+            input.style.pointerEvents = 'none';
+            input.style.width = '1px';
+            input.style.height = '1px';
+            input.style.zIndex = '2147483647';
+            const native = event?.nativeEvent || {};
+            const x = native.clientX ?? native.pageX ?? 0;
+            const y = native.clientY ?? native.pageY ?? 0;
+            const viewportW = typeof window !== 'undefined' ? window.innerWidth : 0;
+            const viewportH = typeof window !== 'undefined' ? window.innerHeight : 0;
+            const left = Math.max(8, Math.min(x, Math.max(8, viewportW - 40)));
+            const top = Math.max(8, Math.min(y, Math.max(8, viewportH - 40)));
+            input.style.left = `${left}px`;
+            input.style.top = `${top}px`;
+            const currentValue = formatCustomDateInput(analyticsCustomRange[field]);
+            if (currentValue) input.value = currentValue;
+            if (field === 'end' && analyticsCustomRange.start) {
+                const minValue = formatCustomDateInput(analyticsCustomRange.start);
+                if (minValue) input.min = minValue;
+            }
+            const maxValue = formatCustomDateInput(new Date());
+            if (maxValue) input.max = maxValue;
+            const cleanup = () => {
+                if (input.parentNode) input.parentNode.removeChild(input);
+            };
+            input.onchange = (event) => {
+                const value = event?.target?.value;
+                if (value) updateCustomRange(field, value);
+                cleanup();
+            };
+            input.onblur = cleanup;
+            document.body.appendChild(input);
+            if (input.showPicker) {
+                input.showPicker();
+            } else {
+                input.click();
+            }
+        };
+
+        const getTrendEventPos = (event) => getPointerPos(event);
 
         const renderTrendDots = (series, maxValue, color, title, windowStart, windowEnd, avgValue, valueLabel, valueFormatter) => (
             <View style={styles.analyticsTrendArea}>
@@ -3859,41 +3993,67 @@ export default function AdminDashboard({ navigation }) {
 
                     {analyticsRange === 'custom' && (
                         <View style={styles.analyticsCustomRow}>
-                            <TouchableOpacity
-                                style={[styles.analyticsCustomButton, !isDark && styles.analyticsCustomButtonLight]}
-                                onPress={() => setShowAnalyticsStartPicker(true)}
-                            >
-                                <Text style={styles.analyticsCustomLabel}>{TRANSLATIONS.startDate || 'Start'}</Text>
-                                <Text style={[styles.analyticsCustomValue, !isDark && styles.textDark]}>{formatCustomDate(analyticsCustomRange.start)}</Text>
-                            </TouchableOpacity>
-                            <Text style={[styles.analyticsCustomSeparator, !isDark && styles.textDark]}>→</Text>
-                            <TouchableOpacity
-                                style={[styles.analyticsCustomButton, !isDark && styles.analyticsCustomButtonLight]}
-                                onPress={() => setShowAnalyticsEndPicker(true)}
-                            >
-                                <Text style={styles.analyticsCustomLabel}>{TRANSLATIONS.endDate || 'End'}</Text>
-                                <Text style={[styles.analyticsCustomValue, !isDark && styles.textDark]}>{formatCustomDate(analyticsCustomRange.end)}</Text>
-                            </TouchableOpacity>
+                            {isWeb ? (
+                                <>
+                                    <TouchableOpacity
+                                        style={[styles.analyticsCustomButton, !isDark && styles.analyticsCustomButtonLight]}
+                                        onPress={(event) => openWebDatePicker('start', event)}
+                                    >
+                                        <Text style={styles.analyticsCustomLabel}>{TRANSLATIONS.startDate || 'Start'}</Text>
+                                        <Text style={[styles.analyticsCustomValue, !isDark && styles.textDark]}>
+                                            {formatCustomDate(analyticsCustomRange.start)}
+                                        </Text>
+                                    </TouchableOpacity>
+                                    <Text style={[styles.analyticsCustomSeparator, !isDark && styles.textDark]}>→</Text>
+                                    <TouchableOpacity
+                                        style={[styles.analyticsCustomButton, !isDark && styles.analyticsCustomButtonLight]}
+                                        onPress={(event) => openWebDatePicker('end', event)}
+                                    >
+                                        <Text style={styles.analyticsCustomLabel}>{TRANSLATIONS.endDate || 'End'}</Text>
+                                        <Text style={[styles.analyticsCustomValue, !isDark && styles.textDark]}>
+                                            {formatCustomDate(analyticsCustomRange.end)}
+                                        </Text>
+                                    </TouchableOpacity>
+                                </>
+                            ) : (
+                                <>
+                                    <TouchableOpacity
+                                        style={[styles.analyticsCustomButton, !isDark && styles.analyticsCustomButtonLight]}
+                                        onPress={() => setShowAnalyticsStartPicker(true)}
+                                    >
+                                        <Text style={styles.analyticsCustomLabel}>{TRANSLATIONS.startDate || 'Start'}</Text>
+                                        <Text style={[styles.analyticsCustomValue, !isDark && styles.textDark]}>{formatCustomDate(analyticsCustomRange.start)}</Text>
+                                    </TouchableOpacity>
+                                    <Text style={[styles.analyticsCustomSeparator, !isDark && styles.textDark]}>→</Text>
+                                    <TouchableOpacity
+                                        style={[styles.analyticsCustomButton, !isDark && styles.analyticsCustomButtonLight]}
+                                        onPress={() => setShowAnalyticsEndPicker(true)}
+                                    >
+                                        <Text style={styles.analyticsCustomLabel}>{TRANSLATIONS.endDate || 'End'}</Text>
+                                        <Text style={[styles.analyticsCustomValue, !isDark && styles.textDark]}>{formatCustomDate(analyticsCustomRange.end)}</Text>
+                                    </TouchableOpacity>
 
-                            {showAnalyticsStartPicker && (
-                                <DateTimePicker
-                                    value={analyticsCustomRange.start || new Date()}
-                                    mode="date"
-                                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                    onChange={(e, d) => handleCustomDateChange('start', e, d)}
-                                    maximumDate={new Date()}
-                                />
-                            )}
+                                    {showAnalyticsStartPicker && (
+                                        <DateTimePicker
+                                            value={analyticsCustomRange.start || new Date()}
+                                            mode="date"
+                                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                            onChange={(e, d) => handleCustomDateChange('start', e, d)}
+                                            maximumDate={new Date()}
+                                        />
+                                    )}
 
-                            {showAnalyticsEndPicker && (
-                                <DateTimePicker
-                                    value={analyticsCustomRange.end || new Date()}
-                                    mode="date"
-                                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                    onChange={(e, d) => handleCustomDateChange('end', e, d)}
-                                    maximumDate={new Date()}
-                                    minimumDate={analyticsCustomRange.start || undefined}
-                                />
+                                    {showAnalyticsEndPicker && (
+                                        <DateTimePicker
+                                            value={analyticsCustomRange.end || new Date()}
+                                            mode="date"
+                                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                            onChange={(e, d) => handleCustomDateChange('end', e, d)}
+                                            maximumDate={new Date()}
+                                            minimumDate={analyticsCustomRange.start || undefined}
+                                        />
+                                    )}
+                                </>
                             )}
                         </View>
                     )}
@@ -3987,6 +4147,8 @@ export default function AdminDashboard({ navigation }) {
                                             label={TRANSLATIONS.analyticsGMVFull || 'Gross Merchandise Value (GMV)'}
                                             value={formatMoney(analyticsStats.gmv)}
                                             subLabel={`${TRANSLATIONS.analyticsAvgOrderValue || 'Average Order Value'} ${formatMoney(analyticsStats.avgTicket)}`}
+                                            infoText={TRANSLATIONS.analyticsGMVTip || 'Sum of completed order values in the selected range (final/initial price). Tracks gross volume; subtitle shows AOV.'}
+                                            infoHandlers={analyticsInfoHandlers}
                                             isDark={isDark}
                                         />
                                     </View>
@@ -3995,6 +4157,8 @@ export default function AdminDashboard({ navigation }) {
                                             label={TRANSLATIONS.analyticsCommission || 'Commission'}
                                             value={formatMoney(analyticsStats.commissionCollected)}
                                             subLabel={`${TRANSLATIONS.analyticsAvgCommission || 'Avg commission per order'} ${formatMoney(analyticsStats.avgCommissionPerOrder)}`}
+                                            infoText={TRANSLATIONS.analyticsCommissionTip || 'Total commission deducted from completed orders (price × rate). Indicates platform earnings; subtitle shows avg per order.'}
+                                            infoHandlers={analyticsInfoHandlers}
                                             isDark={isDark}
                                         />
                                     </View>
@@ -4003,6 +4167,8 @@ export default function AdminDashboard({ navigation }) {
                                         label={TRANSLATIONS.analyticsPotentialEarningsLost || 'Potential Earnings Lost'}
                                         value={formatMoney(analyticsStats.lostEarningsTotal)}
                                         subLabel={`${TRANSLATIONS.analyticsAvgLost || 'Avg lost'} ${formatMoney(analyticsStats.lostEarningsAvg)}`}
+                                        infoText={TRANSLATIONS.analyticsPotentialEarningsLostTip || 'Estimated net earnings lost from canceled jobs. Fixed-price uses order price; master quit uses average order price.'}
+                                        infoHandlers={analyticsInfoHandlers}
                                         isDark={isDark}
                                     />
                                 </View>
@@ -4011,6 +4177,8 @@ export default function AdminDashboard({ navigation }) {
                                             label={TRANSLATIONS.analyticsTopUpTotal || 'Topped Up Balance'}
                                             value={formatMoney(analyticsStats.topUpTotal)}
                                             subLabel={`${TRANSLATIONS.analyticsTopUpAvg || 'Average Top Up'} ${formatMoney(analyticsStats.topUpAvg)}`}
+                                            infoText={TRANSLATIONS.analyticsTopUpTotalTip || 'Total balance top-ups made by admins to masters in this period. Subtitle shows average top-up.'}
+                                            infoHandlers={analyticsInfoHandlers}
                                             isDark={isDark}
                                         />
                                     </View>
@@ -4019,6 +4187,8 @@ export default function AdminDashboard({ navigation }) {
                                             label={TRANSLATIONS.analyticsCommissionVolatility || 'Commission Volatility'}
                                             value={formatPercent(analyticsStats.commissionVolatilityRatio)}
                                             subLabel={TRANSLATIONS.analyticsVolatilityFormula || 'STD / Median (daily commission)'}
+                                            infoText={TRANSLATIONS.analyticsCommissionVolatilityTip || 'Volatility of daily commission: STD(daily commission) / median. Higher % = more variability.'}
+                                            infoHandlers={analyticsInfoHandlers}
                                             isDark={isDark}
                                         />
                                     </View>
@@ -4027,6 +4197,8 @@ export default function AdminDashboard({ navigation }) {
                                         label={TRANSLATIONS.analyticsTotalBalances || 'Total Balances'}
                                         value={formatMoney(analyticsStats.totalBalances)}
                                         subLabel={`${TRANSLATIONS.analyticsAvgBalance || 'Average Balance'} ${formatMoney(analyticsStats.avgBalance)}`}
+                                        infoText={TRANSLATIONS.analyticsTotalBalancesTip || 'Sum of current master balances. Subtitle shows average balance; helps track overall liability.'}
+                                        infoHandlers={analyticsInfoHandlers}
                                         isDark={isDark}
                                     />
                                 </View>
@@ -4438,6 +4610,8 @@ export default function AdminDashboard({ navigation }) {
                                         value={formatNumber(analyticsStats.inProgress)}
                                         subLabel={`${formatNumber(analyticsStats.startedCount)} ${TRANSLATIONS.analyticsStarted || 'started'}`}
                                         onPress={() => openAnalyticsOrdersModal(TRANSLATIONS.analyticsInProgress || 'In Progress', o => ['claimed', 'started'].includes(normalizeStatus(o.status)))}
+                                        infoText={TRANSLATIONS.analyticsInProgressTip || 'Orders currently claimed or started. Shows active workload; rising values mean more jobs in progress.'}
+                                        infoHandlers={analyticsInfoHandlers}
                                         isDark={isDark}
                                     />
                                 </View>
@@ -4447,6 +4621,8 @@ export default function AdminDashboard({ navigation }) {
                                         value={formatNumber(analyticsStats.urgentCount)}
                                         subLabel={`${formatNumber(analyticsStats.emergencyCount)} ${TRANSLATIONS.urgencyEmergency || 'Emergency'}`}
                                         onPress={() => setAnalyticsDetail({ type: 'urgencyMix' })}
+                                        infoText={TRANSLATIONS.analyticsUrgentOrdersTip || 'Orders marked urgent/emergency. Highlights fast-response demand; compare emergency count in the subtitle.'}
+                                        infoHandlers={analyticsInfoHandlers}
                                         isDark={isDark}
                                     />
                                 </View>
@@ -4456,15 +4632,19 @@ export default function AdminDashboard({ navigation }) {
                                         value={formatNumber(analyticsStats.availablePool)}
                                         subLabel={`${formatNumber(analyticsStats.claimedCount)} ${TRANSLATIONS.analyticsClaimed || 'claimed'}`}
                                         onPress={() => openAnalyticsOrdersModal(TRANSLATIONS.analyticsAvailablePool || 'Available Pool', o => ['placed', 'reopened'].includes(normalizeStatus(o.status)))}
+                                        infoText={TRANSLATIONS.analyticsAvailablePoolTip || 'Open and unclaimed orders (placed/reopened). Indicates queue size waiting for assignment.'}
+                                        infoHandlers={analyticsInfoHandlers}
                                         isDark={isDark}
                                     />
                                 </View>
                                 <View style={styles.analyticsOperationsMetricItem}>
                                     <AnalyticsMetricCard
                                         label={TRANSLATIONS.analyticsOldestOpen || 'Oldest Open'}
-                                        value={analyticsStats.oldestOpenAge ? `${analyticsStats.oldestOpenAge.toFixed(1)}h` : '—'}
-                                        subLabel={`${TRANSLATIONS.analyticsAvgAge || 'Average Age'} ${analyticsStats.avgOpenAge ? `${analyticsStats.avgOpenAge.toFixed(1)}h` : '—'}`}
+                                        value={analyticsStats.oldestOpenAge ? `${analyticsStats.oldestOpenAge.toFixed(1)} ${TRANSLATIONS.analyticsHoursUnit || 'hours'}` : '—'}
+                                        subLabel={`${TRANSLATIONS.analyticsAvgAge || 'Average Age'} ${analyticsStats.avgOpenAge ? `${analyticsStats.avgOpenAge.toFixed(1)} ${TRANSLATIONS.analyticsHoursUnit || 'hours'}` : '—'}`}
                                         onPress={() => setAnalyticsDetail({ type: 'backlog' })}
+                                        infoText={TRANSLATIONS.analyticsOldestOpenTip || 'Age of the oldest open order. High values signal delays; subtitle shows average open age.'}
+                                        infoHandlers={analyticsInfoHandlers}
                                         isDark={isDark}
                                     />
                                 </View>
@@ -4473,6 +4653,8 @@ export default function AdminDashboard({ navigation }) {
                                         label={TRANSLATIONS.analyticsServiceLevelRisk || 'Service Level Risk'}
                                         value={formatNumber(analyticsStats.openOlder48h)}
                                         subLabel={TRANSLATIONS.analyticsOver48h || 'open > 48h'}
+                                        infoText={TRANSLATIONS.analyticsServiceLevelRiskTip || 'Count of open orders older than 48 hours. Use as an SLA risk indicator.'}
+                                        infoHandlers={analyticsInfoHandlers}
                                         isDark={isDark}
                                     />
                                 </View>
@@ -4481,6 +4663,8 @@ export default function AdminDashboard({ navigation }) {
                                         label={TRANSLATIONS.analyticsReopened || 'Reopened'}
                                         value={formatNumber(analyticsStats.reopenedCount)}
                                         subLabel={`${formatPercent(analyticsStats.reopenRate)} ${TRANSLATIONS.analyticsReopenRate || 'reopen rate'}`}
+                                        infoText={TRANSLATIONS.analyticsReopenedTip || 'Orders reopened after cancel/expiry. Reopen rate = reopened / total orders in range.'}
+                                        infoHandlers={analyticsInfoHandlers}
                                         isDark={isDark}
                                     />
                                 </View>
@@ -4760,7 +4944,7 @@ export default function AdminDashboard({ navigation }) {
                     </View>
                 )}
 
-                {analyticsSection !== 'dispatchers' && analyticsSection !== 'masters' && (
+                {analyticsSection === 'operations' && (
                     <>
                         <View style={styles.analyticsRow}>
                             <View style={styles.analyticsRowItem}>
@@ -4870,19 +5054,16 @@ export default function AdminDashboard({ navigation }) {
                                     }
                                     const tooltipW = 240;
                                     const tooltipH = 120;
-                                    const padding = 12;
+                                    const edgePad = 4;
+                                    const cursorPad = 4;
                                     const viewportW = typeof window !== 'undefined' ? window.innerWidth : SCREEN_WIDTH;
                                     const viewportH = typeof window !== 'undefined' ? window.innerHeight : 600;
-                                    let left = analyticsTooltip.x + 12;
-                                    let top = analyticsTooltip.y + 12;
-                                    if (left + tooltipW + padding > viewportW) {
-                                        left = analyticsTooltip.x - tooltipW - 12;
-                                    }
-                                    if (top + tooltipH + padding > viewportH) {
-                                        top = analyticsTooltip.y - tooltipH - 12;
-                                    }
-                                    left = Math.max(padding, Math.min(left, viewportW - tooltipW - padding));
-                                    top = Math.max(padding, Math.min(top, viewportH - tooltipH - padding));
+                                    let left = analyticsTooltip.x + cursorPad;
+                                    let top = analyticsTooltip.y + cursorPad;
+                                    const maxLeft = viewportW - tooltipW - edgePad;
+                                    const maxTop = viewportH - tooltipH - edgePad;
+                                    left = Math.max(edgePad, Math.min(left, maxLeft));
+                                    top = Math.max(edgePad, Math.min(top, maxTop));
                                     return { position: 'fixed', left, top, width: tooltipW };
                                 })()
                                 : { right: 16, bottom: 16 }
@@ -4907,19 +5088,16 @@ export default function AdminDashboard({ navigation }) {
                                     }
                                     const tooltipW = 220;
                                     const tooltipH = 120;
-                                    const padding = 12;
+                                    const edgePad = 4;
+                                    const cursorPad = 4;
                                     const viewportW = typeof window !== 'undefined' ? window.innerWidth : SCREEN_WIDTH;
                                     const viewportH = typeof window !== 'undefined' ? window.innerHeight : 600;
-                                    let left = analyticsTrendTooltip.x + 12;
-                                    let top = analyticsTrendTooltip.y + 12;
-                                    if (left + tooltipW + padding > viewportW) {
-                                        left = analyticsTrendTooltip.x - tooltipW - 12;
-                                    }
-                                    if (top + tooltipH + padding > viewportH) {
-                                        top = analyticsTrendTooltip.y - tooltipH - 12;
-                                    }
-                                    left = Math.max(padding, Math.min(left, viewportW - tooltipW - padding));
-                                    top = Math.max(padding, Math.min(top, viewportH - tooltipH - padding));
+                                    let left = analyticsTrendTooltip.x + cursorPad;
+                                    let top = analyticsTrendTooltip.y + cursorPad;
+                                    const maxLeft = viewportW - tooltipW - edgePad;
+                                    const maxTop = viewportH - tooltipH - edgePad;
+                                    left = Math.max(edgePad, Math.min(left, maxLeft));
+                                    top = Math.max(edgePad, Math.min(top, maxTop));
                                     return { position: 'fixed', left, top, width: tooltipW };
                                 })()
                                 : { right: 16, bottom: 16 }
@@ -4950,19 +5128,16 @@ export default function AdminDashboard({ navigation }) {
                                     }
                                     const tooltipW = 240;
                                     const tooltipH = 180;
-                                    const padding = 12;
+                                    const edgePad = 4;
+                                    const cursorPad = 4;
                                     const viewportW = typeof window !== 'undefined' ? window.innerWidth : SCREEN_WIDTH;
                                     const viewportH = typeof window !== 'undefined' ? window.innerHeight : 600;
-                                    let left = priceDistTooltip.x + 12;
-                                    let top = priceDistTooltip.y + 12;
-                                    if (left + tooltipW + padding > viewportW) {
-                                        left = priceDistTooltip.x - tooltipW - 12;
-                                    }
-                                    if (top + tooltipH + padding > viewportH) {
-                                        top = priceDistTooltip.y - tooltipH - 12;
-                                    }
-                                    left = Math.max(padding, Math.min(left, viewportW - tooltipW - padding));
-                                    top = Math.max(padding, Math.min(top, viewportH - tooltipH - padding));
+                                    let left = priceDistTooltip.x + cursorPad;
+                                    let top = priceDistTooltip.y + cursorPad;
+                                    const maxLeft = viewportW - tooltipW - edgePad;
+                                    const maxTop = viewportH - tooltipH - edgePad;
+                                    left = Math.max(edgePad, Math.min(left, maxLeft));
+                                    top = Math.max(edgePad, Math.min(top, maxTop));
                                     return { position: 'fixed', left, top, width: tooltipW };
                                 })()
                                 : { right: 16, bottom: 16 }
@@ -5137,7 +5312,7 @@ export default function AdminDashboard({ navigation }) {
                 {/* Search */}
                 <View style={styles.searchRow}>
                     <View style={[styles.searchInputWrapper, !isDark && styles.btnLight]}>
-                        <Text style={styles.searchIcon}>??</Text>
+                        <Text style={styles.searchIconText}>⌕</Text>
                         <TextInput
                             style={[styles.searchInput, !isDark && styles.textDark]}
                             placeholder={TRANSLATIONS.placeholderSearch || 'Search...'}
@@ -5636,6 +5811,7 @@ export default function AdminDashboard({ navigation }) {
                     .filter(Boolean)
                     .some(val => String(val).toLowerCase().includes(cq))
             );
+        const isNarrow = SCREEN_WIDTH < 640;
 
         return (
             <View style={{ flex: 1 }}>
@@ -5663,9 +5839,9 @@ export default function AdminDashboard({ navigation }) {
                             </View>
 
                             {/* Edit/Save Buttons - Now on the left within section flow */}
-                            <View style={styles.settingsActionRow}>
+                            <View style={[styles.settingsActionRow, isNarrow && styles.settingsActionRowStacked]}>
                                 {isEditing ? (
-                                    <View style={{ flexDirection: 'row', gap: 10 }}>
+                                    <View style={styles.settingsActionGroup}>
                                         <TouchableOpacity
                                             onPress={() => setIsEditing(false)}
                                             style={[styles.settingsBtn, styles.settingsBtnSecondary, !isDark && styles.settingsBtnSecondaryLight]}
@@ -5725,12 +5901,18 @@ export default function AdminDashboard({ navigation }) {
                                         <Text style={[styles.settingsBtnText, { color: '#3b82f6' }]}>{TRANSLATIONS.editSettings || 'Edit Settings'}</Text>
                                     </TouchableOpacity>
                                 )}
+                                <TouchableOpacity
+                                    onPress={() => setConfigurationCollapsed(prev => !prev)}
+                                    style={[styles.collapseBtn, !isDark && styles.collapseBtnLight]}
+                                >
+                                    <Ionicons name={configurationCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />
+                                </TouchableOpacity>
                             </View>
                         </View>
 
-                        {/* Configuration Grid */}
-                        <View style={[styles.settingsCard, !isDark && styles.settingsCardLight]}>
-                            <View style={styles.settingsGrid}>
+                        {!configurationCollapsed && (
+                            <View style={[styles.settingsCard, !isDark && styles.settingsCardLight]}>
+                                <View style={styles.settingsGrid}>
                                 {/* Row 1 */}
                                 <View style={styles.settingsGridItem}>
                                     <Text style={[styles.settingsFieldLabel, !isDark && styles.textDark]}>{TRANSLATIONS.basePayout || 'Default Call-out Fee'}</Text>
@@ -5847,6 +6029,7 @@ export default function AdminDashboard({ navigation }) {
                                 <View style={[styles.settingsGridItem, { opacity: 0 }]} />
                             </View>
                         </View>
+                        )}
                     </View>
 
                     {/* Section Divider */}
@@ -5871,7 +6054,7 @@ export default function AdminDashboard({ navigation }) {
                                 </View>
                             </View>
 
-                            <View style={styles.settingsActionRow}>
+                            <View style={[styles.settingsActionRow, isNarrow && styles.settingsActionRowStacked]}>
                                 <TouchableOpacity
                                     onPress={() => setDistrictModal({ visible: true, district: null })}
                                     style={[styles.settingsBtn, styles.settingsBtnPrimary]}
@@ -5892,7 +6075,7 @@ export default function AdminDashboard({ navigation }) {
                             <>
                                 <View style={styles.settingsSearchRow}>
                                     <View style={[styles.searchInputWrapper, !isDark && styles.searchInputWrapperLight]}>
-                                        <Ionicons name="search" size={16} color="#64748b" style={{ marginRight: 8 }} />
+                                        <Text style={styles.searchIconText}>⌕</Text>
                                         <TextInput
                                             style={[styles.searchInput, !isDark && styles.searchInputTextLight]}
                                             placeholder={TRANSLATIONS.searchDistricts || 'Search districts...'}
@@ -5970,7 +6153,7 @@ export default function AdminDashboard({ navigation }) {
                                 </View>
                             </View>
 
-                            <View style={styles.settingsActionRow}>
+                            <View style={[styles.settingsActionRow, isNarrow && styles.settingsActionRowStacked]}>
                                 <TouchableOpacity
                                     onPress={() => setCancellationReasonModal({ visible: true, reason: null })}
                                     style={[styles.settingsBtn, styles.settingsBtnPrimary]}
@@ -5984,14 +6167,15 @@ export default function AdminDashboard({ navigation }) {
                                 >
                                     <Ionicons name={cancellationReasonsCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />
                                 </TouchableOpacity>
+                                </View>
                             </View>
-                        </View>
+                        )}
 
                         {!cancellationReasonsCollapsed && (
                             <>
                                 <View style={styles.settingsSearchRow}>
                                     <View style={[styles.searchInputWrapper, !isDark && styles.searchInputWrapperLight]}>
-                                        <Ionicons name="search" size={16} color="#64748b" style={{ marginRight: 8 }} />
+                                        <Text style={styles.searchIconText}>⌕</Text>
                                         <TextInput
                                             style={[styles.searchInput, !isDark && styles.searchInputTextLight]}
                                             placeholder={TRANSLATIONS.searchCancellationReasons || 'Search reasons...'}
@@ -6075,7 +6259,7 @@ export default function AdminDashboard({ navigation }) {
                                 </View>
                             </View>
 
-                            <View style={styles.settingsActionRow}>
+                            <View style={[styles.settingsActionRow, isNarrow && styles.settingsActionRowStacked]}>
                                 {/* Add Service Type Button */}
                                 <TouchableOpacity
                                     onPress={() => setServiceTypeModal({ visible: true, type: null })}
@@ -6205,7 +6389,7 @@ export default function AdminDashboard({ navigation }) {
                                     ]}
                                     value={tempServiceType.code}
                                     onChangeText={v => setTempServiceType({ ...tempServiceType, code: v })}
-                                    placeholder="e.g. plumbing, electrician"
+                                    placeholder={TRANSLATIONS.placeholderServiceCode || 'e.g. plumbing, electrician'}
                                     placeholderTextColor="#64748b"
                                     editable={!serviceTypeModal.type}
                                 />
@@ -6225,7 +6409,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempServiceType.name_en}
                                         onChangeText={v => setTempServiceType({ ...tempServiceType, name_en: v })}
-                                        placeholder="Service Name"
+                                        placeholder={TRANSLATIONS.placeholderServiceNameEn || 'Service name'}
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -6343,7 +6527,7 @@ export default function AdminDashboard({ navigation }) {
                                     ]}
                                     value={tempDistrict.code || ''}
                                     onChangeText={v => setTempDistrict({ ...tempDistrict, code: v })}
-                                    placeholder="e.g. oktyabrsky"
+                                    placeholder={TRANSLATIONS.placeholderDistrictCode || 'e.g. oktyabrsky'}
                                     placeholderTextColor="#64748b"
                                     editable={!districtModal.district}
                                 />
@@ -6362,7 +6546,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempDistrict.name_en || ''}
                                         onChangeText={v => setTempDistrict({ ...tempDistrict, name_en: v })}
-                                        placeholder="District Name"
+                                        placeholder={TRANSLATIONS.placeholderDistrictNameEn || 'District name'}
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -6400,7 +6584,7 @@ export default function AdminDashboard({ navigation }) {
                                     style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                     value={tempDistrict.region || ''}
                                     onChangeText={v => setTempDistrict({ ...tempDistrict, region: v })}
-                                    placeholder="e.g. Bishkek"
+                                    placeholder={TRANSLATIONS.placeholderRegion || 'e.g. Bishkek'}
                                     placeholderTextColor="#64748b"
                                 />
                             </View>
@@ -6411,7 +6595,7 @@ export default function AdminDashboard({ navigation }) {
                                     style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                     value={String(tempDistrict.sort_order || '')}
                                     onChangeText={v => setTempDistrict({ ...tempDistrict, sort_order: v })}
-                                    placeholder="99"
+                                    placeholder={TRANSLATIONS.placeholderDistrictSortOrder || '99'}
                                     placeholderTextColor="#64748b"
                                     keyboardType="numeric"
                                 />
@@ -6447,7 +6631,7 @@ export default function AdminDashboard({ navigation }) {
                                 <ActivityIndicator color="#fff" size="small" />
                             ) : (
                                 <Text style={[styles.sidebarDrawerBtnText, { color: '#fff' }]}>
-                                    {districtModal.district ? (TRANSLATIONS.updateDistrict || 'Update District') : (TRANSLATIONS.createDistrict || 'Create District')}
+                                    {districtModal.district ? (TRANSLATIONS.updateDistrict || 'Update District') : (TRANSLATIONS.addDistrict || 'Add District')}
                                 </Text>
                             )}
                         </TouchableOpacity>
@@ -6512,7 +6696,7 @@ export default function AdminDashboard({ navigation }) {
                                     ]}
                                     value={tempCancellationReason.code || ''}
                                     onChangeText={v => setTempCancellationReason({ ...tempCancellationReason, code: v })}
-                                    placeholder="e.g. client_request"
+                                    placeholder={TRANSLATIONS.placeholderReasonCode || 'e.g. client_request'}
                                     placeholderTextColor="#64748b"
                                     editable={!cancellationReasonModal.reason}
                                 />
@@ -6531,7 +6715,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempCancellationReason.name_en || ''}
                                         onChangeText={v => setTempCancellationReason({ ...tempCancellationReason, name_en: v })}
-                                        placeholder="Reason name"
+                                        placeholder={TRANSLATIONS.placeholderReasonNameEn || 'Reason name'}
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -6544,7 +6728,7 @@ export default function AdminDashboard({ navigation }) {
                                         style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                         value={tempCancellationReason.name_ru || ''}
                                         onChangeText={v => setTempCancellationReason({ ...tempCancellationReason, name_ru: v })}
-                                        placeholder={TRANSLATIONS.placeholderServiceNameRu || 'Reason name (RU)'}
+                                        placeholder={TRANSLATIONS.placeholderReasonNameRu || 'Reason name (RU)'}
                                         placeholderTextColor="#64748b"
                                     />
                                 </View>
@@ -6589,7 +6773,7 @@ export default function AdminDashboard({ navigation }) {
                                     style={[styles.sidebarFormInput, !isDark && styles.sidebarFormInputLight]}
                                     value={String(tempCancellationReason.sort_order || '')}
                                     onChangeText={v => setTempCancellationReason({ ...tempCancellationReason, sort_order: v })}
-                                    placeholder="0"
+                                    placeholder={TRANSLATIONS.placeholderReasonSortOrder || '0'}
                                     placeholderTextColor="#64748b"
                                     keyboardType="numeric"
                                 />
@@ -8515,6 +8699,7 @@ const styles = StyleSheet.create({
     searchRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
     searchInputWrapper: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(71,85,105,0.3)', borderRadius: 12, paddingHorizontal: 14 },
     searchIcon: { fontSize: 16, color: '#64748b', marginRight: 8 },
+    searchIconText: { fontSize: 16, color: '#64748b', marginRight: 8 },
     searchInput: { flex: 1, paddingVertical: 12, color: '#fff', fontSize: 14 },
     searchClear: { padding: 4 },
     searchClearText: { fontSize: 14, color: '#64748b' },
@@ -8836,6 +9021,8 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 14,
+        flex: 1,
+        minWidth: 220,
     },
     settingsSectionIcon: {
         width: 44,
@@ -8860,14 +9047,32 @@ const styles = StyleSheet.create({
     settingsActionRow: {
         flexDirection: 'row',
         alignItems: 'center',
+        gap: 10,
+        marginLeft: 'auto',
+        flexShrink: 0,
+    },
+    settingsActionRowStacked: {
+        width: '100%',
+        justifyContent: 'flex-end',
+        marginLeft: 0,
+        flexBasis: '100%',
+    },
+    settingsActionGroup: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
     },
     settingsBtn: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-        paddingVertical: 10,
+        height: 44,
+        paddingVertical: 0,
         paddingHorizontal: 16,
         borderRadius: 10,
+        minWidth: 160,
+        justifyContent: 'center',
     },
     settingsBtnPrimary: {
         backgroundColor: '#22c55e',
@@ -9554,6 +9759,12 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         color: '#fff',
     },
+    analyticsCustomInput: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+        padding: 0,
+    },
     analyticsCustomSeparator: {
         fontSize: 16,
         color: '#64748b',
@@ -10118,7 +10329,7 @@ const styles = StyleSheet.create({
     analyticsStatusLegend: {
         flexDirection: 'row',
         alignItems: 'center',
-        flexWrap: 'nowrap',
+        flexWrap: 'wrap',
         gap: 16,
         paddingBottom: 2,
         paddingRight: 6,
@@ -10130,7 +10341,9 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 8,
         paddingRight: 6,
-        flexShrink: 0,
+        flexBasis: '48%',
+        flexGrow: 1,
+        minWidth: 140,
     },
     analyticsStatusLegendMeta: {
         flexDirection: 'row',
@@ -10151,6 +10364,8 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '500',
         color: '#cbd5e1',
+        flexShrink: 1,
+        maxWidth: 140,
     },
     analyticsStatusLegendCount: {
         fontSize: 12,

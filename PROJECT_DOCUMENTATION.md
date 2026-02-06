@@ -80,6 +80,7 @@ master-kg/
 ## 1.5 Known Issues / Notes
 
 - **Web build NetworkError (fetch failed)**: If the web build logs `TypeError: NetworkError when attempting to fetch resource` for orders/profile, this is usually **environment or connectivity** (Supabase URL not reachable, CORS, backend down, or wrong `EXPO_PUBLIC_SUPABASE_URL/ANON_KEY`). Confirm the Supabase URL is reachable from the browser and that CORS allows the web origin.
+- **Admin password reset audit log mismatch**: `PATCH_ADMIN_PASSWORD_RESET.sql` writes to `profile_audit_log(action_type, changes)` which do not exist in the current schema. The consolidated setup (`COMPLETE_SETUP_V3.sql`) logs to the existing columns (`change_type`, `new_value`, `reason`) so the RPC works. If you need the patch file to be literal, add those columns or update the patch.
 - **Recent UI updates (Master dashboard)**: Orders list now uses skeleton loading; filters are a compact overlay row that expands into a horizontal chip panel; order cards were restyled to match the prototype and now show landmark/orientir even before claim; the active order peek widget/bottom sheet layout was updated; My Account now hides raw order IDs in history and shows human-friendly context; Settings screen got language flags and a support contact card.
 
 ---

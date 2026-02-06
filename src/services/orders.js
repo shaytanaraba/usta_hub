@@ -905,39 +905,7 @@ class OrdersService {
     }
   }
 
-  /**
-   * Get master's order history (admin) - All orders regardless of status
-   */
-  getMasterOrderHistory = async (masterId, limit = 50) => {
-    console.log(`${LOG_PREFIX} Fetching order history for master: ${masterId}`);
-
-    try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          id,
-          service_type,
-          status,
-          area,
-          initial_price,
-          final_price,
-          created_at,
-          confirmed_at,
-          canceled_at
-        `)
-        .eq('master_id', masterId)
-        .order('created_at', { ascending: false })
-        .limit(limit);
-
-      if (error) throw error;
-
-      console.log(`${LOG_PREFIX} Found ${data.length} orders in history for master`);
-      return data;
-    } catch (error) {
-      console.error(`${LOG_PREFIX} getMasterOrderHistory failed:`, error);
-      return [];
-    }
-  }
+  // (Admin) Order history is implemented near the end of this file to use RPCs.
 
   // ============================================
   // SERVICE TYPES MANAGEMENT
@@ -1940,26 +1908,24 @@ class OrdersService {
   }
 
   /**
-   * Get complete order history for master (for My Account tab)
-   * Includes all statuses, not just active ones
+   * Get complete order history for master (admin view)
+   * Includes orders where the master touched the order (audit log),
+   * even if the master_id was later cleared.
    */
   getMasterOrderHistory = async (masterId, limit = 100) => {
     console.log(`${LOG_PREFIX} Fetching complete order history for master: ${masterId}`);
     try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          id, service_type, status, urgency, area,
-          initial_price, final_price, commission_amount,
-          created_at, claimed_at, completed_at, confirmed_at,
-          client:client_id(full_name)
-        `)
-        .eq('master_id', masterId)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+      const { data, error } = await supabase.rpc('get_master_order_history_admin', {
+        master_uuid: masterId,
+        limit_count: limit
+      });
 
       if (error) throw error;
-      return data || [];
+
+      return (data || []).map(row => ({
+        ...row,
+        client: row.client_name ? { full_name: row.client_name } : null
+      }));
     } catch (error) {
       console.error(`${LOG_PREFIX} getMasterOrderHistory failed:`, error);
       return [];
@@ -1967,27 +1933,24 @@ class OrdersService {
   }
 
   /**
-   * Get complete order history for dispatcher (for admin view)
-   * Shows all orders created by this dispatcher
+   * Get complete order history for dispatcher (admin view)
+   * Includes orders created or handled by this dispatcher.
    */
   getDispatcherOrderHistory = async (dispatcherId, limit = 100) => {
     console.log(`${LOG_PREFIX} Fetching complete order history for dispatcher: ${dispatcherId}`);
     try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          id, service_type, status, urgency, area,
-          initial_price, final_price,
-          created_at, claimed_at, completed_at, confirmed_at,
-          client:client_id(full_name),
-          master:master_id(full_name)
-        `)
-        .eq('dispatcher_id', dispatcherId)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+      const { data, error } = await supabase.rpc('get_dispatcher_order_history_admin', {
+        dispatcher_uuid: dispatcherId,
+        limit_count: limit
+      });
 
       if (error) throw error;
-      return data || [];
+
+      return (data || []).map(row => ({
+        ...row,
+        client: row.client_name ? { full_name: row.client_name } : null,
+        master: row.master_name ? { full_name: row.master_name } : null
+      }));
     } catch (error) {
       console.error(`${LOG_PREFIX} getDispatcherOrderHistory failed:`, error);
       return [];
