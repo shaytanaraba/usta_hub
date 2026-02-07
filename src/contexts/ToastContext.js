@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, Animated, TouchableOpacity, Platform } from 'react-native';
+import { View, Text, StyleSheet, Animated, TouchableOpacity, Platform, Modal } from 'react-native';
+import { CheckCircle2, XCircle, AlertTriangle, Info, X } from 'lucide-react-native';
 
 const ToastContext = createContext();
 
@@ -14,13 +15,14 @@ export const useToast = () => {
 export const ToastProvider = ({ children }) => {
     const [toasts, setToasts] = useState([]);
 
-    const showToast = useCallback((message, type = 'info', duration = 3000) => {
+    const showToast = useCallback((message, type = 'info', duration = 3500) => {
+        if (!message) return;
+
         const id = Date.now() + Math.random();
-        const newToast = { id, message, type, duration };
+        const newToast = { id, message: String(message), type, duration };
 
-        setToasts(prev => [...prev, newToast]);
+        setToasts(prev => [...prev.slice(-2), newToast]);
 
-        // Auto-dismiss
         setTimeout(() => {
             setToasts(prev => prev.filter(t => t.id !== id));
         }, duration);
@@ -40,12 +42,15 @@ export const ToastProvider = ({ children }) => {
 
 const ToastContainer = ({ toasts, onDismiss }) => {
     if (toasts.length === 0) return null;
+
     return (
-        <View style={styles.container}>
-            {toasts.map(toast => (
-                <Toast key={toast.id} toast={toast} onDismiss={onDismiss} />
-            ))}
-        </View>
+        <Modal transparent visible animationType="none" onRequestClose={() => {}}>
+            <View style={styles.container} pointerEvents="box-none">
+                {toasts.map(toast => (
+                    <Toast key={toast.id} toast={toast} onDismiss={onDismiss} />
+                ))}
+            </View>
+        </Modal>
     );
 };
 
@@ -53,20 +58,18 @@ const Toast = ({ toast, onDismiss }) => {
     const [fadeAnim] = useState(new Animated.Value(0));
 
     React.useEffect(() => {
-        Animated.sequence([
-            Animated.timing(fadeAnim, {
-                toValue: 1,
-                duration: 300,
-                useNativeDriver: true,
-            }),
-        ]).start();
-    }, []);
+        Animated.timing(fadeAnim, {
+            toValue: 1,
+            duration: 220,
+            useNativeDriver: true,
+        }).start();
+    }, [fadeAnim]);
 
     const getBackgroundColor = () => {
         switch (toast.type) {
             case 'success': return '#28a745';
             case 'error': return '#dc3545';
-            case 'warning': return '#ffc107';
+            case 'warning': return '#f59e0b';
             case 'info': return '#17a2b8';
             default: return '#6c757d';
         }
@@ -74,13 +77,16 @@ const Toast = ({ toast, onDismiss }) => {
 
     const getIcon = () => {
         switch (toast.type) {
-            case 'success': return '✓';
-            case 'error': return '✕';
-            case 'warning': return '⚠';
-            case 'info': return 'ℹ';
-            default: return '•';
+            case 'success': return <CheckCircle2 size={18} color="#fff" />;
+            case 'error': return <XCircle size={18} color="#fff" />;
+            case 'warning': return <AlertTriangle size={18} color="#111827" />;
+            case 'info': return <Info size={18} color="#fff" />;
+            default: return <Info size={18} color="#fff" />;
         }
     };
+
+    const warningTone = toast.type === 'warning';
+    const textColor = warningTone ? '#111827' : '#ffffff';
 
     return (
         <Animated.View
@@ -89,10 +95,10 @@ const Toast = ({ toast, onDismiss }) => {
                 { backgroundColor: getBackgroundColor(), opacity: fadeAnim },
             ]}
         >
-            <Text style={styles.icon}>{getIcon()}</Text>
-            <Text style={styles.message}>{toast.message}</Text>
+            <View style={styles.iconWrap}>{getIcon()}</View>
+            <Text style={[styles.message, { color: textColor }]}>{toast.message}</Text>
             <TouchableOpacity onPress={() => onDismiss(toast.id)} style={styles.closeButton}>
-                <Text style={styles.closeText}>✕</Text>
+                <X size={16} color={textColor} />
             </TouchableOpacity>
         </Animated.View>
     );
@@ -105,7 +111,8 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         alignItems: 'center',
-        zIndex: 9999,
+        zIndex: 99999,
+        elevation: 99999,
     },
     toast: {
         flexDirection: 'row',
@@ -116,32 +123,25 @@ const styles = StyleSheet.create({
         marginHorizontal: 16,
         borderRadius: 8,
         minWidth: 250,
-        maxWidth: 400,
+        maxWidth: 440,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.25,
         shadowRadius: 4,
         elevation: 5,
     },
-    icon: {
-        fontSize: 18,
-        color: '#fff',
+    iconWrap: {
+        alignItems: 'center',
+        justifyContent: 'center',
         marginRight: 12,
-        fontWeight: 'bold',
     },
     message: {
         flex: 1,
-        color: '#fff',
         fontSize: 14,
-        fontWeight: '500',
+        lineHeight: 20,
     },
     closeButton: {
         marginLeft: 12,
         padding: 4,
-    },
-    closeText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: 'bold',
     },
 });

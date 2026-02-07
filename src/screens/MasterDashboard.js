@@ -33,7 +33,7 @@ import deviceUtils from '../utils/device';
 import { getOrderStatusLabel, getServiceLabel } from '../utils/orderHelpers';
 
 const LOG_PREFIX = '[MasterDashboard]';
-const PAGE_LIMIT = 5;
+const PAGE_LIMIT = 20;
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const sanitizeNumberInput = (value) => {
     if (value === null || value === undefined) return '';
@@ -41,6 +41,18 @@ const sanitizeNumberInput = (value) => {
     const parts = cleaned.split('.');
     if (parts.length <= 1) return cleaned;
     return `${parts.shift()}.${parts.join('')}`;
+};
+
+const formatPlannedDateTime = (preferredDate, preferredTime, language = 'en') => {
+    if (!preferredDate) return '';
+    const locale = language === 'ru' ? 'ru-RU' : (language === 'kg' ? 'ky-KG' : 'en-US');
+    const timePart = preferredTime || '00:00:00';
+    const parsed = new Date(`${preferredDate}T${timePart}`);
+    if (Number.isNaN(parsed.getTime())) return `${preferredDate} ${preferredTime || ''}`.trim();
+    const options = preferredTime
+        ? { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }
+        : { day: '2-digit', month: 'short' };
+    return parsed.toLocaleString(locale, options);
 };
 
 // ============================================
@@ -99,13 +111,14 @@ const Dropdown = ({ label, value, options, optionLabels = {}, onChange }) => {
 // ============================================
 // HEADER COMPONENT
 // ============================================
-const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, onRefresh }) => {
+const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, onRefresh, topInset = 0 }) => {
     const { language } = useLocalization();
     const { theme, isDark } = useTheme();
     const getFlagEmoji = () => ({ ru: '🇷🇺', kg: '🇰🇬' }[language] || '🇬🇧');
+    const headerTopPadding = Math.max(8, topInset || 0);
 
     return (
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: headerTopPadding }]}>
             <View style={styles.headerLeft}>
                 {user ? (
                     <>
@@ -135,8 +148,8 @@ const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, o
 // ============================================
 // ORDER CARD COMPONENT
 // ============================================
-const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoading, onClaim, onStart, onComplete, onRefuse, onCopyAddress, onOpen }) => {
-    const { t } = useLocalization();
+const OrderCard = ({ order, isPool, isSelected, canClaim, actionLoading, onClaim, onStart, onComplete, onRefuse, onCopyAddress, onOpen }) => {
+    const { t, language } = useLocalization();
     const { theme } = useTheme();
     const { width } = Dimensions.get('window');
     const columns = deviceUtils.getGridColumns();
@@ -173,21 +186,24 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
         : calloutFee !== null && calloutFee !== undefined
             ? `${t('labelCallout') || 'Call-out:'} ${calloutFee}`
             : (t('priceOpen') || 'Open');
+    const pricingSchemeLabel = order.pricing_type === 'fixed'
+        ? (t('fixedPrice') || 'Fixed price')
+        : (t('priceOpen') || 'Open');
 
     const getLocationDisplay = () => {
         if (isPool) return districtText;
-        if (isClaimed) return `${districtText} - ${t('cardStartToSeeAddress')}`;
-        if (isStarted) return districtText || order.full_address;
-        return districtText;
+        return districtText || order.full_address || '-';
     };
 
     const addressText = order.full_address || order.address || '';
-    const addressValue = isStarted ? (addressText || districtText) : t('cardStartToSeeAddress');
-    const showAddressCopy = Boolean(isStarted && addressText);
-    const showClientInfo = isStarted;
+    const addressValue = (isClaimed || isStarted) ? (addressText || districtText) : t('cardStartToSeeAddress');
+    const showAddressCopy = Boolean((isClaimed || isStarted) && addressText);
+    const showClientInfo = isClaimed || isStarted;
     const showDetailsBlock = !isPool;
     const showLandmarkInline = Boolean(isPool && landmarkText);
-    const userCanClaim = userVerified && !userBalanceBlocked;
+    const plannedScheduleText = order.urgency === 'planned'
+        ? formatPlannedDateTime(order.preferred_date, order.preferred_time, language)
+        : '';
     const cardMargin = 6;
     const containerPadding = 16;
     const totalGaps = (columns - 1) * (cardMargin * 2);
@@ -196,8 +212,8 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
 
     return (
         <TouchableOpacity
-            activeOpacity={isPool ? 1 : 0.8}
-            onPress={() => (!isPool ? onOpen?.(order) : null)}
+            activeOpacity={onOpen ? 0.85 : 1}
+            onPress={() => onOpen?.(order)}
             style={[styles.orderCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary, width: cardWidth, opacity: isConfirmed ? 0.6 : 1 }]}
         >
             <View style={styles.cardContent}>
@@ -213,12 +229,28 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
                             {isPool ? t(`urgency${order.urgency.charAt(0).toUpperCase() + order.urgency.slice(1)}`) : statusLabel}
                         </Text>
                     </View>
+                    <View style={[styles.pricingBadge, { backgroundColor: `${theme.accentIndigo}14`, borderColor: theme.accentIndigo }]}>
+                        <Text style={[styles.pricingText, { color: theme.accentIndigo }]} numberOfLines={1}>
+                            {pricingSchemeLabel}
+                        </Text>
+                    </View>
                     <View style={styles.locationContainer}>
                         <MapPin size={10} color={theme.textMuted} />
                         <Text style={[styles.locationText, { color: theme.textMuted }]} numberOfLines={1}>{getLocationDisplay()}</Text>
                     </View>
                 </View>
                 <Text style={[styles.description, { color: theme.textSecondary }]} numberOfLines={2}>{order.problem_description}</Text>
+                {plannedScheduleText ? (
+                    <View style={[styles.plannedRow, { borderColor: theme.borderPrimary, backgroundColor: theme.bgSecondary }]}>
+                        <Clock size={12} color={theme.textMuted} />
+                        <Text style={[styles.plannedLabel, { color: theme.textMuted }]}>
+                            {t('urgencyPlanned') || 'Planned'}:
+                        </Text>
+                        <Text style={[styles.plannedText, { color: theme.textSecondary }]} numberOfLines={1}>
+                            {plannedScheduleText}
+                        </Text>
+                    </View>
+                ) : null}
                 {showLandmarkInline && (
                     <View style={styles.inlineHintRow}>
                         <Text style={[styles.inlineHintLabel, { color: theme.textMuted }]}>{orientirLabel}:</Text>
@@ -231,7 +263,7 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
                             <Text style={[styles.cardInfoLabel, { color: theme.textMuted }]}>{districtLabel}</Text>
                             <Text style={[styles.cardInfoValue, { color: theme.textPrimary }]} numberOfLines={1}>{districtText}</Text>
                         </View>
-                        {landmarkText && (
+                        {Boolean(landmarkText) && (
                             <View style={styles.cardInfoRow}>
                                 <Text style={[styles.cardInfoLabel, { color: theme.textMuted }]}>{orientirLabel}</Text>
                                 <Text style={[styles.cardInfoValue, { color: theme.textPrimary }]} numberOfLines={1}>{landmarkText}</Text>
@@ -261,11 +293,19 @@ const OrderCard = ({ order, isPool, userVerified, userBalanceBlocked, actionLoad
                 )}
                 {!isConfirmed && (
                     <View style={styles.cardActions}>
-                        {isPool && (
-                            <TouchableOpacity style={[styles.actionButton, { backgroundColor: userCanClaim ? theme.accentIndigo : theme.borderSecondary }]}
-                                disabled={!userCanClaim || actionLoading} onPress={() => onClaim?.(order.id)}>
-                                {actionLoading ? <ActivityIndicator size="small" color="#fff" /> :
-                                    <Text style={styles.actionButtonText}>{userCanClaim ? t('actionClaim') : t('actionLocked')}</Text>}
+                        {isPool && isSelected && (
+                            <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: canClaim ? theme.accentIndigo : theme.borderSecondary }]}
+                                disabled={!canClaim || actionLoading}
+                                onPress={() => onClaim?.(order.id)}
+                            >
+                                {actionLoading ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                ) : (
+                                    <Text style={styles.actionButtonText}>
+                                        {canClaim ? t('actionClaim') : t('actionLocked')}
+                                    </Text>
+                                )}
                             </TouchableOpacity>
                         )}
                         {isClaimed && (
@@ -360,10 +400,16 @@ const SectionToggle = ({ sections, activeSection, onSectionChange }) => {
 // ============================================
 // MY ACCOUNT TAB
 // ============================================
-const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransactions = [], refreshing, onRefresh }) => {
+const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransactions = [], districts = [], refreshing, onRefresh }) => {
     const { t, language, setLanguage } = useLocalization();
     const { theme, isDark, toggleTheme } = useTheme();
     const [accountView, setAccountView] = useState('menu');
+    const safeT = useCallback((key, fallback) => {
+        const value = t(key);
+        return value && value !== key ? value : fallback;
+    }, [t]);
+    const [historyFilter, setHistoryFilter] = useState('all'); // all | financial | orders
+    const [historySort, setHistorySort] = useState('desc'); // desc | asc
     const languageOptions = [
         { code: 'en', label: 'EN', flag: '🇬🇧' },
         { code: 'ru', label: 'RU', flag: '🇷🇺' },
@@ -386,6 +432,17 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
         profile: t('sectionProfile'),
         settings: t('sectionSettings') || 'Settings'
     }[accountView];
+    const formatAccountingAmount = (value) => {
+        const num = Number(value);
+        if (Number.isNaN(num)) return '-';
+        const abs = Math.abs(num).toFixed(0);
+        return num < 0 ? `(${abs})` : abs;
+    };
+    const getAmountColor = (value) => {
+        const num = Number(value);
+        if (Number.isNaN(num) || num === 0) return theme.textMuted;
+        return num < 0 ? theme.accentDanger : theme.accentSuccess;
+    };
 
     return (
         <ScrollView style={styles.accountContainer} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}>
@@ -449,23 +506,105 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
             {/* History Section - Combined orders and balance transactions */}
             {accountView === 'history' && (
                 <View style={styles.historySection}>
+                    <View style={styles.historyFilterRow}>
+                        {[
+                            { key: 'all', label: safeT('filterAll', 'All') },
+                            { key: 'financial', label: safeT('historyFilterFinancial', 'Financial') },
+                            { key: 'orders', label: safeT('historyFilterOrders', 'Orders') },
+                        ].map((option) => {
+                            const isActive = historyFilter === option.key;
+                            return (
+                                <TouchableOpacity
+                                    key={option.key}
+                                    style={[
+                                        styles.historyFilterChip,
+                                        {
+                                            backgroundColor: isActive ? `${theme.accentIndigo}18` : theme.bgCard,
+                                            borderColor: isActive ? theme.accentIndigo : theme.borderPrimary,
+                                        },
+                                    ]}
+                                    onPress={() => setHistoryFilter(option.key)}
+                                >
+                                    <Text style={{ color: isActive ? theme.accentIndigo : theme.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>
+                                        {option.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                    <View style={styles.historySortRow}>
+                        {[
+                            { key: 'desc', label: safeT('filterNewestFirst', 'Newest First') },
+                            { key: 'asc', label: safeT('filterOldestFirst', 'Oldest First') },
+                        ].map((option) => {
+                            const isActive = historySort === option.key;
+                            return (
+                                <TouchableOpacity
+                                    key={option.key}
+                                    style={[
+                                        styles.historySortChip,
+                                        {
+                                            backgroundColor: isActive ? `${theme.accentIndigo}18` : theme.bgCard,
+                                            borderColor: isActive ? theme.accentIndigo : theme.borderPrimary,
+                                        },
+                                    ]}
+                                    onPress={() => setHistorySort(option.key)}
+                                >
+                                    <Text style={{ color: isActive ? theme.accentIndigo : theme.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>
+                                        {option.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
                     {(() => {
-                        // Combine and sort order history with balance transactions by date (newest first)
+                        // Combine and sort order history + balance transactions by date.
                         const orderById = new Map(orderHistory.map(o => [o.id, o]));
                         const uuidRegex = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
                         const contextSeparator = ' \u00b7 ';
-                        const balanceLabel = (t('balance') || 'Balance').replace(/:\s*$/, '');
+                        const balanceLabel = safeT('balance', 'Balance').replace(/:\s*$/, '');
+                        const districtLabelByCode = {};
+                        districts.forEach((d) => {
+                            if (!d?.code) return;
+                            const localized = language === 'ru'
+                                ? (d.name_ru || d.name_en)
+                                : language === 'kg'
+                                    ? (d.name_kg || d.name_en)
+                                    : d.name_en;
+                            districtLabelByCode[String(d.code).toLowerCase()] = localized;
+                        });
+                        const getAreaLabel = (area) => {
+                            if (!area) return '-';
+                            const raw = String(area).trim();
+                            const normalized = raw.toLowerCase();
+                            if (districtLabelByCode[normalized]) {
+                                return districtLabelByCode[normalized];
+                            }
+                            const parts = raw.split(/—|-/).map(p => p.trim()).filter(Boolean);
+                            if (parts.length > 1) {
+                                const tail = parts[parts.length - 1].toLowerCase();
+                                if (districtLabelByCode[tail]) {
+                                    return `${parts.slice(0, -1).join(' — ')} — ${districtLabelByCode[tail]}`;
+                                }
+                            }
+                            return raw;
+                        };
                         const formatOrderContext = (serviceType, area) => {
                             const serviceLabel = getServiceLabel(serviceType, t);
-                            const areaLabel = area || '-';
+                            const areaLabel = getAreaLabel(area);
                             return `${serviceLabel}${contextSeparator}${areaLabel}`;
                         };
                         const combinedHistory = [
                             ...orderHistory.map(o => ({ ...o, type: 'order', date: new Date(o.created_at) })),
                             ...balanceTransactions.map(tx => ({ ...tx, type: 'transaction', date: new Date(tx.created_at) }))
-                        ].sort((a, b) => b.date - a.date);
+                        ].sort((a, b) => historySort === 'desc' ? (b.date - a.date) : (a.date - b.date));
+                        const filteredHistory = combinedHistory.filter(item => {
+                            if (historyFilter === 'financial') return item.type === 'transaction';
+                            if (historyFilter === 'orders') return item.type === 'order';
+                            return true;
+                        });
 
-                        if (combinedHistory.length === 0) {
+                        if (filteredHistory.length === 0) {
                             return (
                                 <View style={styles.emptyState}>
                                     <ClipboardList size={40} color={theme.textMuted} />
@@ -474,84 +613,123 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
                             );
                         }
 
-                        return combinedHistory.map((item, i) => {
-                            // Render balance transaction (top-up, adjustment, etc)
-                            if (item.type === 'transaction') {
-                                const isPositive = item.amount > 0;
-                                const isCommissionTx = String(item.transaction_type || '').includes('commission');
-                                const noteText = String(item.notes || '').trim();
-                                const uuidMatch = noteText.match(uuidRegex);
-                                const relatedOrder = uuidMatch ? orderById.get(uuidMatch[0]) : null;
-                                const sanitizedNote = noteText
-                                    .replace(uuidRegex, '')
-                                    .replace(/\b[0-9a-fA-F]{16,}\b/g, '')
-                                    .replace(/\b\d{8,}\b/g, '')
-                                    .trim();
-                                const txTypeLabel = {
-                                    top_up: t('transactionTopUp') || 'Top Up',
-                                    adjustment: t('transactionAdjustment') || 'Adjustment',
-                                    refund: t('transactionRefund') || 'Refund',
-                                    waiver: t('transactionWaiver') || 'Waiver',
-                                    commission: t('transactionCommission') || 'Commission',
-                                    commission_deduct: t('transactionCommission') || 'Commission'
-                                }[item.transaction_type] || (isCommissionTx ? (t('transactionCommission') || 'Commission') : item.transaction_type);
-                                const relatedArea = relatedOrder?.area || relatedOrder?.district || '-';
-                                const contextLabel = relatedOrder
-                                    ? formatOrderContext(relatedOrder.service_type, relatedArea)
-                                    : (isCommissionTx ? (t('commissionClue') || 'Commission from a completed job') : (sanitizedNote || balanceLabel));
-
-                                return (
-                                    <View key={`tx-${item.id}`} style={[styles.historyItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                                        <View>
-                                            <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{txTypeLabel}</Text>
-                                            {contextLabel ? (
-                                                <Text style={{ color: theme.textMuted, fontSize: 11 }} numberOfLines={1}>
-                                                    {contextLabel}
-                                                </Text>
-                                            ) : null}
-                                            <Text style={{ color: theme.textMuted, fontSize: 10 }}>{item.date.toLocaleDateString()}</Text>
-                                        </View>
-                                        <View style={{ alignItems: 'flex-end' }}>
-                                            <Text style={{ color: isPositive ? theme.accentSuccess : theme.accentDanger, fontWeight: '600' }}>
-                                                {isPositive ? '+' : ''}{Number(item.amount).toFixed(0)}
-                                            </Text>
-                                            <Text style={{ color: theme.textMuted, fontSize: 9 }}>{item.balance_after?.toFixed(0) || '-'}</Text>
-                                        </View>
-                                    </View>
-                                );
-                            }
-
-                            // Render order history item with commission info
-                            const o = item;
-                            const orderArea = o.area || o.district || '-';
-                            const orderContext = formatOrderContext(o.service_type, orderArea);
-                            const orderEventLabel = {
-                                completed: t('jobCompleted') || 'Job completed',
-                                confirmed: t('jobConfirmed') || 'Job confirmed',
-                                canceled_by_master: t('jobCanceled') || 'Job canceled',
-                                canceled_by_client: t('jobCanceled') || 'Job canceled',
-                                expired: t('jobExpired') || 'Job expired',
-                            }[o.status] || getStatusLabel(o.status);
+                        const renderTransactionRow = (item) => {
+                            const isCommissionTx = String(item.transaction_type || '').includes('commission');
+                            const noteText = String(item.notes || '').trim();
+                            const uuidMatch = noteText.match(uuidRegex);
+                            const relatedOrder = uuidMatch ? orderById.get(uuidMatch[0]) : null;
+                            const txTypeLabel = {
+                                top_up: safeT('transactionTopUp', 'Top up'),
+                                adjustment: safeT('transactionAdjustment', 'Adjustment'),
+                                refund: safeT('transactionRefund', 'Refund'),
+                                waiver: safeT('transactionWaiver', 'Waiver'),
+                                commission: safeT('transactionCommission', 'Commission'),
+                                commission_deduct: safeT('transactionCommission', 'Commission'),
+                                initial_deposit: safeT('transactionInitialDeposit', 'Initial deposit')
+                            }[item.transaction_type] || (isCommissionTx
+                                ? safeT('transactionCommission', 'Commission')
+                                : (item.transaction_type || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+                            const contextLabel = isCommissionTx || relatedOrder
+                                ? safeT('historyOrderTag', 'Order')
+                                : safeT('historyTransactionTag', 'Transaction');
                             return (
-                                <View key={o.id} style={[styles.historyItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                                    <View>
-                                        <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{orderEventLabel}</Text>
-                                        <Text style={{ color: theme.textMuted, fontSize: 11 }}>{orderContext}</Text>
-                                        <Text style={{ color: theme.textMuted, fontSize: 10 }}>{o.date.toLocaleDateString()}</Text>
-                                    </View>
-                                    <View style={{ alignItems: 'flex-end' }}>
-                                        <Text style={{ color: theme.accentSuccess, fontWeight: '600' }}>
-                                            {o.final_price ?? o.initial_price ?? o.callout_fee ?? '-'}
+                                <View key={`tx-${item.id}`} style={[styles.historyRow, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
+                                    <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textPrimary }]} numberOfLines={1}>
+                                        {txTypeLabel}
+                                    </Text>
+                                    <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]} numberOfLines={1}>
+                                        {contextLabel}
+                                    </Text>
+                                    <View style={[styles.historyCell, styles.historyCellAmount]}>
+                                        <Text style={{ color: getAmountColor(item.amount), fontWeight: '400', fontSize: 11 }}>
+                                            {formatAccountingAmount(item.amount)}
                                         </Text>
-                                        {/* Show commission if available */}
-                                        {o.commission_amount && <Text style={{ color: theme.textMuted, fontSize: 9 }}>-{o.commission_amount} {t('transactionCommission') || 'comm.'}</Text>}
-                                        <View style={[styles.statusBadgeSmall, { backgroundColor: `${getStatusColor(o.status)}20` }]}>
-                                            <Text style={{ color: getStatusColor(o.status), fontSize: 9 }}>{getStatusLabel(o.status)}</Text>
-                                        </View>
                                     </View>
                                 </View>
                             );
-                        });
+                        };
+                        const renderOrderRow = (o) => {
+                            const orderArea = o.area || o.district || '-';
+                            const orderContext = formatOrderContext(o.service_type, orderArea);
+                            const orderEventLabel = {
+                                completed: safeT('jobCompleted', 'Job completed'),
+                                confirmed: safeT('jobConfirmed', 'Job confirmed'),
+                                canceled_by_master: safeT('jobCanceled', 'Job canceled'),
+                                canceled_by_client: safeT('jobCanceled', 'Job canceled'),
+                                expired: safeT('jobExpired', 'Job expired'),
+                            }[o.status] || getStatusLabel(o.status);
+                            const isOrderNoAmount = ['canceled_by_master', 'canceled_by_client', 'expired'].includes(o.status);
+                            return (
+                                <View key={o.id} style={[styles.historyRow, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
+                                    <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textPrimary }]} numberOfLines={1}>
+                                        {orderEventLabel}
+                                    </Text>
+                                    <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]} numberOfLines={1}>
+                                        {orderContext}
+                                    </Text>
+                                    <View style={[styles.historyCell, styles.historyCellAmount]}>
+                                        {isOrderNoAmount ? (
+                                            <Text style={{ color: theme.textMuted, fontWeight: '400', fontSize: 11 }}>
+                                                {safeT('historyNoAmount', '—')}
+                                            </Text>
+                                        ) : (
+                                            <Text style={{ color: theme.accentSuccess, fontWeight: '400', fontSize: 11 }}>
+                                                {formatAccountingAmount(o.final_price ?? o.initial_price ?? o.callout_fee ?? 0)}
+                                            </Text>
+                                        )}
+                                    </View>
+                                </View>
+                            );
+                        };
+                        const renderRow = (item) => (
+                            item.type === 'transaction'
+                                ? renderTransactionRow(item)
+                                : renderOrderRow(item)
+                        );
+                        const locale = language === 'ru' ? 'ru-RU' : language === 'kg' ? 'ky-KG' : 'en-US';
+                        const nowYear = new Date().getFullYear();
+                        const formatDayKey = (dateObj) => {
+                            const d = new Date(dateObj);
+                            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                        };
+                        const formatDayLabel = (dateObj) => {
+                            const d = new Date(dateObj);
+                            const isCurrentYear = d.getFullYear() === nowYear;
+                            return d.toLocaleDateString(locale, {
+                                day: 'numeric',
+                                month: 'short',
+                                ...(isCurrentYear ? {} : { year: 'numeric' })
+                            });
+                        };
+                        const grouped = filteredHistory.reduce((acc, item) => {
+                            const key = formatDayKey(item.date);
+                            if (!acc[key]) acc[key] = { label: formatDayLabel(item.date), items: [] };
+                            acc[key].items.push(item);
+                            return acc;
+                        }, {});
+                        return (
+                            <View style={[styles.historyTable, { borderColor: theme.borderPrimary }]}>
+                                <View style={[styles.historyRow, styles.historyHeaderRow, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                                    <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textMuted }]}>
+                                        {safeT('historyColType', 'Type')}
+                                    </Text>
+                                    <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]}>
+                                        {safeT('historyColDetails', 'Details')}
+                                    </Text>
+                                    <Text style={[styles.historyCell, styles.historyCellAmount, { color: theme.textMuted }]}>
+                                        {safeT('historyColAmount', 'Amount')}
+                                    </Text>
+                                </View>
+                                {Object.values(grouped).map((group) => (
+                                    <View key={group.label}>
+                                        <View style={[styles.historyGroupHeader, { borderTopColor: theme.borderPrimary, backgroundColor: theme.bgCard }]}>
+                                            <Text style={[styles.historyGroupHeaderText, { color: theme.textSecondary }]}>{group.label}</Text>
+                                        </View>
+                                        {group.items.map((item) => renderRow(item))}
+                                    </View>
+                                ))}
+                            </View>
+                        );
                     })()}
                 </View>
             )}
@@ -683,17 +861,77 @@ const DashboardContent = ({ navigation }) => {
         const value = t(key);
         return value && value !== key ? value : fallback;
     }, [t]);
+    const blockerLabel = useCallback((code) => {
+        const map = {
+            NOT_VERIFIED: safeT('errorNotVerified', 'Your account is not verified'),
+            INACTIVE: safeT('errorAccountInactive', 'Your account is inactive'),
+            BALANCE_BLOCKED: safeT('errorBalanceBlocked', 'Your balance is blocked by admin'),
+            NEGATIVE_BALANCE: safeT('errorNegativeBalance', 'Your balance is zero or negative. Please top up.'),
+            INSUFFICIENT_BALANCE: safeT('errorInsufficientBalance', 'Insufficient prepaid balance'),
+            IMMEDIATE_LIMIT_REACHED: safeT('errorImmediateLimitReached', 'You have reached your immediate orders limit'),
+            TOO_MANY_PENDING: safeT('errorTooManyPending', 'Too many orders are pending confirmation'),
+            MAX_JOBS_REACHED: safeT('errorMaxActiveJobsReached', 'You have reached your maximum active jobs limit'),
+            PLANNED_JOB_DUE_SOON: safeT('errorPlannedDueSoon', 'You have a planned order due soon, finish or start it first'),
+            ORDER_NOT_AVAILABLE: safeT('errorOrderNotAvailable', 'Order is no longer available'),
+        };
+        return map[code] || code;
+    }, [safeT]);
+    const normalizeActionMessage = useCallback((rawMessage, blockers = []) => {
+        if (Array.isArray(blockers) && blockers.length) {
+            return blockers.map(code => `• ${blockerLabel(code)}`).join('\n');
+        }
+
+        const message = String(rawMessage || '');
+        const lowered = message.toLowerCase();
+        if (lowered.includes('master already has an order in progress')) {
+            return safeT('errorOneStartedOrder', 'You already have an order in progress');
+        }
+        if (lowered.includes('too early to start planned order')) {
+            return safeT('errorPlannedTooEarly', 'It is too early to start this planned order');
+        }
+        if (lowered.includes('order no longer available') || lowered.includes('order is no longer available')) {
+            return safeT('errorOrderNotAvailable', 'Order is no longer available');
+        }
+        if (lowered.includes('immediate orders limit')) {
+            return safeT('errorImmediateLimitReached', 'You have reached your immediate orders limit');
+        }
+        if (lowered.includes('maximum active jobs limit') || lowered.includes('max jobs reached')) {
+            return safeT('errorMaxActiveJobsReached', 'You have reached your maximum active jobs limit');
+        }
+        if (lowered.includes('planned order starting soon') || lowered.includes('planned job due soon')) {
+            return safeT('errorPlannedDueSoon', 'You have a planned order due soon, finish or start it first');
+        }
+        return message || safeT('errorActionFailed', 'Action failed');
+    }, [blockerLabel, safeT]);
+    const localizeSuccessMessage = useCallback((rawMessage, fallbackKey, fallbackText) => {
+        const message = String(rawMessage || '');
+        const lowered = message.toLowerCase();
+        if (lowered.includes('job started')) return safeT('toastJobStarted', 'Job started!');
+        if (lowered.includes('job completed')) return safeT('toastJobCompleted', 'Job completed, awaiting confirmation');
+        if (lowered.includes('order claimed')) return safeT('toastOrderClaimed', 'Order claimed!');
+        if (lowered.includes('refused') || lowered.includes('canceled')) return safeT('toastJobRefused', 'Job canceled');
+        if (message) return message;
+        return safeT(fallbackKey, fallbackText);
+    }, [safeT]);
+    const actionSuccessMessage = useCallback((fn, rawMessage) => {
+        if (fn === ordersService.startJob) return localizeSuccessMessage(rawMessage, 'toastJobStarted', 'Job started!');
+        if (fn === ordersService.completeJob) return localizeSuccessMessage(rawMessage, 'toastJobCompleted', 'Job completed, awaiting confirmation');
+        if (fn === ordersService.refuseJob) return localizeSuccessMessage(rawMessage, 'toastJobRefused', 'Job canceled');
+        return localizeSuccessMessage(rawMessage, 'toastUpdated', 'Updated');
+    }, [localizeSuccessMessage]);
 
     const [user, setUser] = useState(null);
     const [activeTab, setActiveTab] = useState('orders');
     const [orderSection, setOrderSection] = useState('available');
     const [availableOrders, setAvailableOrders] = useState([]);
+    const [availableOrdersMeta, setAvailableOrdersMeta] = useState([]);
     const [myOrders, setMyOrders] = useState([]);
     const [financials, setFinancials] = useState(null);
     const [earnings, setEarnings] = useState([]);
     const [orderHistory, setOrderHistory] = useState([]);
     // Balance transactions for showing admin top-ups in History
     const [balanceTransactions, setBalanceTransactions] = useState([]);
+    const [districts, setDistricts] = useState([]);
     const [serviceTypes, setServiceTypes] = useState([]);
     const [cancelReasons, setCancelReasons] = useState([]);
 
@@ -709,15 +947,19 @@ const DashboardContent = ({ navigation }) => {
     const [completeData, setCompleteData] = useState({});
     const [refuseData, setRefuseData] = useState({});
     const [activeSheetOrder, setActiveSheetOrder] = useState(null);
+    const [selectedPoolOrderId, setSelectedPoolOrderId] = useState(null);
     const [sheetSnap, setSheetSnap] = useState('peek'); // 'peek' | 'half' | 'full'
     const [sheetModalVisible, setSheetModalVisible] = useState(false);
     const sheetAnim = useRef(new Animated.Value(0)).current;
     const sheetSnapAnim = useRef(new Animated.Value(0)).current;
     const filterAnim = useRef(new Animated.Value(showFilters ? 1 : 0)).current;
 
-    const { logout } = useAuth();
+    const { logout, user: authUser } = useAuth();
 
     useEffect(() => { loadData(); }, []);
+    useEffect(() => {
+        if (!authUser) setUser(null);
+    }, [authUser]);
     useEffect(() => { if (user) reloadPool(); }, [filters]);
     useEffect(() => {
         Animated.timing(filterAnim, {
@@ -728,9 +970,19 @@ const DashboardContent = ({ navigation }) => {
         }).start();
     }, [showFilters, filterAnim]);
     useEffect(() => {
+        if (orderSection !== 'available') {
+            if (selectedPoolOrderId) setSelectedPoolOrderId(null);
+            return;
+        }
+        if (selectedPoolOrderId && !availableOrders.find(o => o.id == selectedPoolOrderId)) {
+            setSelectedPoolOrderId(null);
+        }
+    }, [orderSection, availableOrders, selectedPoolOrderId]);
+
+    useEffect(() => {
         if (activeTab !== 'orders') return;
         if (activeSheetOrder) return;
-        const active = myOrders.find(o => o.status === ORDER_STATUS.STARTED || o.status === ORDER_STATUS.CLAIMED);
+        const active = myOrders.find(o => o.status === ORDER_STATUS.STARTED);
         if (active) {
             setActiveSheetOrder(active);
             setSheetSnap('peek');
@@ -797,23 +1049,43 @@ const DashboardContent = ({ navigation }) => {
     const loadData = async (reset = true) => {
         if (reset) setLoading(true);
         try {
-            const u = await authService.getCurrentUser();
-            setUser(u);
-            if (u) {
-                const [poolRes, jobsRes, fin, earn, hist, balTx, svcTypes, reasons] = await Promise.all([
+            const u = await authService.getCurrentUser({ retries: 1, retryDelayMs: 350 });
+            if (u) setUser(u);
+            const effectiveUser = u || authUser || user;
+            if (effectiveUser) {
+                const [poolRes, jobsRes, fin, earn, hist, balTx, svcTypes, reasons, districtList, poolMeta] = await Promise.all([
                     ordersService.getAvailableOrders(1, PAGE_LIMIT, filters),
-                    ordersService.getMasterOrders(u.id, 1, 100),
-                    earningsService.getMasterFinancialSummary(u.id),
-                    earningsService.getMasterEarnings(u.id),
-                    ordersService.getMasterOrderHistory(u.id),
-                    earningsService.getBalanceTransactions(u.id),  // Fetch balance transactions (top-ups)
+                    ordersService.getMasterOrders(effectiveUser.id, 1, 100),
+                    earningsService.getMasterFinancialSummary(effectiveUser.id),
+                    earningsService.getMasterEarnings(effectiveUser.id),
+                    ordersService.getMasterOrderHistory(effectiveUser.id),
+                    earningsService.getBalanceTransactions(effectiveUser.id),  // Fetch balance transactions (top-ups)
                     ordersService.getServiceTypes(),
                     ordersService.getCancellationReasons('master'),
+                    ordersService.getDistricts(),
+                    ordersService.getAvailableOrdersMeta(),
                 ]);
-                setAvailableOrders(poolRes.data); setTotalPool(poolRes.count);
+                const safePoolMeta = poolMeta || [];
+                const filteredMetaCount = safePoolMeta.length
+                    ? safePoolMeta.filter(row => {
+                        if (filters.urgency !== 'all' && row.urgency !== filters.urgency) return false;
+                        if (filters.service !== 'all' && row.service_type !== filters.service) return false;
+                        if (filters.area !== 'all' && row.area !== filters.area) return false;
+                        if (filters.pricing !== 'all' && row.pricing_type !== filters.pricing) return false;
+                        return true;
+                    }).length
+                    : 0;
+                const resolvedPoolCount = typeof poolRes.count === 'number' ? poolRes.count : filteredMetaCount;
+                const safePoolCount = poolRes.data.length > 0 && resolvedPoolCount === 0
+                    ? (filteredMetaCount || poolRes.data.length)
+                    : resolvedPoolCount;
+                setAvailableOrders(poolRes.data);
+                setTotalPool(safePoolCount);
                 setMyOrders(jobsRes.data); setFinancials(fin); setEarnings(earn);
                 setOrderHistory(hist); setBalanceTransactions(balTx);
-                setServiceTypes(svcTypes); setCancelReasons(reasons);
+                setServiceTypes(svcTypes); setCancelReasons(reasons); setDistricts(districtList || []);
+                const shouldKeepMeta = safePoolMeta.length === 0 && (typeof poolRes.count === 'number' ? poolRes.count > 0 : poolRes.data.length > 0);
+                setAvailableOrdersMeta(prev => (shouldKeepMeta ? prev : safePoolMeta));
             }
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
@@ -822,12 +1094,32 @@ const DashboardContent = ({ navigation }) => {
     const reloadPool = async () => {
         try {
             setPagePool(1);
-            const res = await ordersService.getAvailableOrders(1, PAGE_LIMIT, filters);
-            setAvailableOrders(res.data); setTotalPool(res.count);
+            const [res, poolMeta] = await Promise.all([
+                ordersService.getAvailableOrders(1, PAGE_LIMIT, filters),
+                ordersService.getAvailableOrdersMeta(),
+            ]);
+            const safePoolMeta = poolMeta || [];
+            const filteredMetaCount = safePoolMeta.length
+                ? safePoolMeta.filter(row => {
+                    if (filters.urgency !== 'all' && row.urgency !== filters.urgency) return false;
+                    if (filters.service !== 'all' && row.service_type !== filters.service) return false;
+                    if (filters.area !== 'all' && row.area !== filters.area) return false;
+                    if (filters.pricing !== 'all' && row.pricing_type !== filters.pricing) return false;
+                    return true;
+                }).length
+                : 0;
+            const resolvedPoolCount = typeof res.count === 'number' ? res.count : filteredMetaCount;
+            const safePoolCount = res.data.length > 0 && resolvedPoolCount === 0
+                ? (filteredMetaCount || res.data.length)
+                : resolvedPoolCount;
+            setAvailableOrders(res.data);
+            setTotalPool(safePoolCount);
+            const shouldKeepMeta = safePoolMeta.length === 0 && (typeof res.count === 'number' ? res.count > 0 : res.data.length > 0);
+            setAvailableOrdersMeta(prev => (shouldKeepMeta ? prev : safePoolMeta));
         } catch (e) { console.error(e); }
     };
 
-    const onRefresh = useCallback(async () => { setRefreshing(true); await loadData(); setRefreshing(false); }, []);
+    const onRefresh = useCallback(async () => { setRefreshing(true); await loadData(false); setRefreshing(false); }, []);
 
     const handleLogout = async () => {
         try {
@@ -839,27 +1131,75 @@ const DashboardContent = ({ navigation }) => {
         }
     };
 
-    const processedOrders = useMemo(() => {
-        const isHistoryStatus = (status) => (
-            status === 'completed'
-            || status === 'confirmed'
-            || status === 'canceled_by_master'
-            || status === 'canceled_by_client'
-            || status === 'expired'
-        );
-        if (orderSection === 'myJobs') {
-            return myOrders.filter(o => !isHistoryStatus(o.status));
-        }
-        return availableOrders.filter(o => {
-            if (filters.urgency !== 'all' && o.urgency !== filters.urgency) return false;
-            if (filters.service !== 'all' && o.service_type !== filters.service) return false;
-            if (filters.area !== 'all' && o.area !== filters.area) return false;
-            if (filters.pricing !== 'all' && o.pricing_type !== filters.pricing) return false;
+    const filterPoolBy = useCallback((override = {}) => {
+        const nextFilters = { ...filters, ...override };
+        const filtered = availableOrders.filter(o => {
+            if (nextFilters.urgency !== 'all' && o.urgency !== nextFilters.urgency) return false;
+            if (nextFilters.service !== 'all' && o.service_type !== nextFilters.service) return false;
+            if (nextFilters.area !== 'all' && o.area !== nextFilters.area) return false;
+            if (nextFilters.pricing !== 'all' && o.pricing_type !== nextFilters.pricing) return false;
             return true;
         });
-    }, [availableOrders, filters, myOrders, orderSection]);
+        if (nextFilters.urgency === 'all') {
+            const urgencyRank = { emergency: 0, urgent: 1, planned: 2 };
+            return [...filtered].sort((a, b) => {
+                const rankA = urgencyRank[a.urgency] ?? 9;
+                const rankB = urgencyRank[b.urgency] ?? 9;
+                if (rankA !== rankB) return rankA - rankB;
+                return new Date(b.created_at) - new Date(a.created_at);
+            });
+        }
+        return filtered;
+    }, [availableOrders, filters]);
 
-    const activeJobsCount = myOrders.filter(o => !['completed', 'confirmed', 'canceled_by_master', 'canceled_by_client', 'expired'].includes(o.status)).length;
+    const processedOrders = useMemo(() => {
+        if (orderSection === 'myJobs') {
+            const relevant = myOrders.filter(o => ['claimed', 'started', 'completed'].includes(o.status));
+            const urgencyRank = { emergency: 0, urgent: 1, planned: 2 };
+            const getPreferredStamp = (order) => {
+                if (order.preferred_date) {
+                    const dateStr = order.preferred_date;
+                    const timeStr = order.preferred_time || '00:00:00';
+                    const raw = `${dateStr}T${timeStr}`;
+                    const parsed = Date.parse(raw);
+                    return Number.isNaN(parsed) ? 0 : parsed;
+                }
+                const created = Date.parse(order.created_at);
+                return Number.isNaN(created) ? 0 : created;
+            };
+            return [...relevant].sort((a, b) => {
+                const statusPriority = { started: 0, claimed: 1, completed: 2 };
+                const priA = statusPriority[a.status] ?? 9;
+                const priB = statusPriority[b.status] ?? 9;
+                if (priA !== priB) return priA - priB;
+                if (a.status === 'claimed' && b.status === 'claimed') {
+                    const urgA = urgencyRank[a.urgency] ?? 9;
+                    const urgB = urgencyRank[b.urgency] ?? 9;
+                    if (urgA !== urgB) return urgA - urgB;
+                    return getPreferredStamp(a) - getPreferredStamp(b);
+                }
+                if (a.status === 'completed' && b.status === 'completed') {
+                    const compA = Date.parse(a.completed_at || a.created_at || '');
+                    const compB = Date.parse(b.completed_at || b.created_at || '');
+                    return (Number.isNaN(compB) ? 0 : compB) - (Number.isNaN(compA) ? 0 : compA);
+                }
+                if (a.status === 'started' && b.status === 'started') {
+                    return getPreferredStamp(a) - getPreferredStamp(b);
+                }
+                return 0;
+            });
+        }
+        return filterPoolBy();
+    }, [filterPoolBy, myOrders, orderSection]);
+
+    const activeJobsCount = myOrders.filter(o => ['claimed', 'started', 'completed'].includes(o.status)).length;
+    const immediateOrdersCount = myOrders.filter(o => ['claimed', 'started'].includes(o.status) && ['urgent', 'emergency'].includes(o.urgency)).length;
+    const startedOrdersCount = myOrders.filter(o => o.status === 'started').length;
+    const pendingOrdersCount = myOrders.filter(o => o.status === 'completed').length;
+    const maxActiveJobs = Number(user?.max_active_jobs || 2);
+    const maxImmediateOrders = Number(user?.max_immediate_orders || 1);
+    const maxPendingOrders = Number(user?.max_pending_confirmation || 3);
+    const totalPages = useMemo(() => Math.max(1, Math.ceil(totalPool / PAGE_LIMIT)), [totalPool]);
     const sheetAddress = activeSheetOrder?.full_address || activeSheetOrder?.address || '';
     const sheetArea = activeSheetOrder?.area || '';
     const sheetOrientir = activeSheetOrder?.orientir || activeSheetOrder?.landmark || '';
@@ -867,7 +1207,13 @@ const DashboardContent = ({ navigation }) => {
     const sheetClientPhone = activeSheetOrder?.client_phone || activeSheetOrder?.client?.phone || '';
     const sheetDispatcherName = activeSheetOrder?.dispatcher?.full_name || activeSheetOrder?.dispatcher_name || '';
     const sheetDispatcherPhone = activeSheetOrder?.dispatcher?.phone || activeSheetOrder?.dispatcher_phone || '';
-    const sheetCanSeeDetails = activeSheetOrder?.status === ORDER_STATUS.STARTED;
+    const sheetCanSeeDetails = activeSheetOrder?.status === ORDER_STATUS.STARTED || activeSheetOrder?.status === ORDER_STATUS.CLAIMED;
+    const activeSheetPlannedText = activeSheetOrder?.urgency === 'planned'
+        ? formatPlannedDateTime(activeSheetOrder?.preferred_date, activeSheetOrder?.preferred_time, language)
+        : '';
+    const activeSheetPricingLabel = activeSheetOrder?.pricing_type === 'fixed'
+        ? safeT('fixedPrice', 'Fixed price')
+        : safeT('priceOpen', 'Open');
     const screenHeight = Dimensions.get('window').height || 800;
     const tabBarHeight = Platform.OS === 'ios' ? 72 : 56;
     const sheetBottomInset = tabBarHeight + (insets?.bottom || 0); // keep above tab bar + safe area
@@ -891,17 +1237,64 @@ const DashboardContent = ({ navigation }) => {
         () => Animated.add(new Animated.Value(filterSummaryHeight), filterDropdownHeight),
         [filterDropdownHeight]
     );
+    const filterOverlayStaticHeight = filterSummaryHeight + (showFilters ? 40 : 0);
+    const listTopPadding = orderSection === 'available'
+        ? filterOverlayStaticHeight + 16
+        : 12;
+    const baseBottomPadding = tabBarHeight + 60 + (insets?.bottom || 0);
+    const sheetPeekPadding = activeSheetOrder?.status === ORDER_STATUS.STARTED && sheetSnap === 'peek' && !sheetModalVisible ? 90 : 0;
+    const listBottomPadding = baseBottomPadding + sheetPeekPadding;
     const activeFilterCount = useMemo(() => {
         return ['urgency', 'service', 'area', 'pricing'].reduce((count, key) => (filters[key] && filters[key] !== 'all' ? count + 1 : count), 0);
     }, [filters]);
 
-    const availableServices = useMemo(() => {
-        const codes = serviceTypes.map(s => s.code);
-        const dynamic = [...myOrders, ...availableOrders].map(o => o.service_type);
-        return [...new Set([...codes, ...dynamic])].filter(Boolean).sort();
-    }, [serviceTypes, myOrders, availableOrders]);
+    const poolMeta = useMemo(
+        () => (availableOrdersMeta.length ? availableOrdersMeta : availableOrders),
+        [availableOrdersMeta, availableOrders]
+    );
+    const metaMatchesFilters = useCallback((row, currentFilters, ignoreKey) => {
+        if (ignoreKey !== 'urgency' && currentFilters.urgency !== 'all' && row.urgency !== currentFilters.urgency) return false;
+        if (ignoreKey !== 'service' && currentFilters.service !== 'all' && row.service_type !== currentFilters.service) return false;
+        if (ignoreKey !== 'area' && currentFilters.area !== 'all' && row.area !== currentFilters.area) return false;
+        if (ignoreKey !== 'pricing' && currentFilters.pricing !== 'all' && row.pricing_type !== currentFilters.pricing) return false;
+        return true;
+    }, []);
+    const getMetaCount = useCallback((key, value) => {
+        const base = poolMeta.filter(row => metaMatchesFilters(row, filters, key));
+        if (!value || value === 'all') return base.length;
+        const rowKey = key === 'service' ? 'service_type' : key === 'pricing' ? 'pricing_type' : key;
+        return base.filter(row => row[rowKey] === value).length;
+    }, [poolMeta, filters, metaMatchesFilters]);
 
-    const availableAreas = useMemo(() => [...new Set([...myOrders, ...availableOrders].map(o => o.area))].filter(Boolean).sort(), [myOrders, availableOrders]);
+    const availableServices = useMemo(() => {
+        return [...new Set(poolMeta.map(o => o.service_type))].filter(Boolean).sort();
+    }, [poolMeta]);
+
+    const availableAreas = useMemo(() => {
+        return [...new Set(poolMeta.map(o => o.area))].filter(Boolean).sort();
+    }, [poolMeta]);
+
+    const ensureSelectedOption = useCallback((options, value) => {
+        if (!value || value === 'all') return options;
+        return options.includes(value) ? options : [...options, value];
+    }, []);
+
+    const urgencyOptions = useMemo(() => {
+        const base = ['emergency', 'urgent', 'planned'];
+        const active = base.filter(opt => poolMeta.some(row => row.urgency === opt));
+        const options = ['all', ...active];
+        return ensureSelectedOption(options, filters.urgency);
+    }, [poolMeta, filters.urgency, ensureSelectedOption]);
+
+    const serviceOptions = useMemo(() => {
+        const options = ['all', ...availableServices];
+        return ensureSelectedOption(options, filters.service);
+    }, [availableServices, filters.service, ensureSelectedOption]);
+
+    const areaOptions = useMemo(() => {
+        const options = ['all', ...availableAreas];
+        return ensureSelectedOption(options, filters.area);
+    }, [availableAreas, filters.area, ensureSelectedOption]);
 
     // Build translated labels for service types in filter dropdown
     const getServiceFilterLabel = (serviceCode) => {
@@ -930,12 +1323,33 @@ const DashboardContent = ({ navigation }) => {
     };
 
     const serviceOptionLabels = useMemo(() => {
-        const labels = { all: t('filterAll') };
-        availableServices.forEach(svc => {
-            labels[svc] = getServiceFilterLabel(svc);
+        const labels = {};
+        serviceOptions.forEach(svc => {
+            const baseLabel = svc === 'all' ? t('filterAll') : getServiceFilterLabel(svc);
+            labels[svc] = `${baseLabel} (${getMetaCount('service', svc)})`;
         });
         return labels;
-    }, [availableServices, language]);
+    }, [serviceOptions, language, getMetaCount]);
+
+    const urgencyOptionLabels = useMemo(() => {
+        const labels = {};
+        urgencyOptions.forEach(opt => {
+            const baseLabel = opt === 'all'
+                ? t('filterAll')
+                : t(`urgency${opt.charAt(0).toUpperCase() + opt.slice(1)}`);
+            labels[opt] = `${baseLabel} (${getMetaCount('urgency', opt)})`;
+        });
+        return labels;
+    }, [urgencyOptions, getMetaCount, language]);
+
+    const areaOptionLabels = useMemo(() => {
+        const labels = {};
+        areaOptions.forEach(opt => {
+            const baseLabel = opt === 'all' ? t('filterAll') : opt;
+            labels[opt] = `${baseLabel} (${getMetaCount('area', opt)})`;
+        });
+        return labels;
+    }, [areaOptions, getMetaCount, language]);
 
 
     const handleClaim = async (orderId) => {
@@ -948,19 +1362,28 @@ const DashboardContent = ({ navigation }) => {
 
             // Show warning if balance would go negative after commission
             if (projectedBalance < 0 && financials?.prepaidBalance > 0) {
-                showToast?.(`Warning: After completing this job, your balance may go negative. Remember to top up!`, 'warning');
+                showToast?.(safeT('warningBalanceMayGoNegative', 'After completion, your balance may go negative. Please top up in advance.'), 'warning');
             }
         }
 
         setActionLoading(true);
-        const result = await ordersService.claimOrder(orderId);
-        if (result.success) {
-            showToast?.(result.message, 'success');
-            setActiveSheetOrder(order ? { ...order, status: ORDER_STATUS.CLAIMED } : { id: orderId, status: ORDER_STATUS.CLAIMED });
-            setSheetSnap('full');
-            await loadData();
-        } else showToast?.(result.message, 'error');
-        setActionLoading(false);
+        try {
+            const result = await ordersService.claimOrder(orderId);
+            if (result.success) {
+                showToast?.(localizeSuccessMessage(result.message, 'toastOrderClaimed', 'Order claimed!'), 'success');
+                if (Array.isArray(result.warnings) && result.warnings.includes('TIME_CONFLICT')) {
+                    showToast?.(safeT('warningTimeConflict', 'Potential time conflict with another planned order'), 'warning');
+                }
+                setSelectedPoolOrderId(null);
+                setActiveSheetOrder(order ? { ...order, status: ORDER_STATUS.CLAIMED } : { id: orderId, status: ORDER_STATUS.CLAIMED });
+                setSheetSnap('full');
+                await loadData(false);
+            } else {
+                showToast?.(normalizeActionMessage(result.message, result.blockers), 'error');
+            }
+        } finally {
+            setActionLoading(false);
+        }
     };
 
     const handleStart = async (orderId) => {
@@ -980,16 +1403,16 @@ const DashboardContent = ({ navigation }) => {
         try {
             const res = await fn(...args);
             if (res.success) {
-                showToast?.(res.message, 'success');
+                showToast?.(actionSuccessMessage(fn, res.message), 'success');
                 setModalState({ type: null, order: null });
                 if (res.order && res.order.id === activeSheetOrder?.id) {
                     setActiveSheetOrder(res.order);
                 }
-                await loadData();
+                await loadData(false);
             }
-            else showToast?.(res.message, 'error');
+            else showToast?.(normalizeActionMessage(res.message, res.blockers), 'error');
             return res;
-        } catch (e) { showToast?.('Action failed', 'error'); }
+        } catch (e) { showToast?.(safeT('errorActionFailed', 'Action failed'), 'error'); }
         finally { setActionLoading(false); }
     };
 
@@ -1011,14 +1434,40 @@ const DashboardContent = ({ navigation }) => {
         showToast?.(t('toastCopied') || 'Copied', 'success');
     };
 
+    const handlePoolPageChange = async (nextPage) => {
+        if (nextPage < 1 || nextPage > totalPages) return;
+        setActionLoading(true);
+        try {
+            const res = await ordersService.getAvailableOrders(nextPage, PAGE_LIMIT, filters);
+            setAvailableOrders(res.data);
+            setTotalPool(res.count);
+            setPagePool(nextPage);
+            setSelectedPoolOrderId(null);
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
 
     const handleOpenOrderSheet = (order) => {
         if (!order) return;
-        setActiveSheetOrder(order);
+        const normalized = order.status ? order : { ...order, status: ORDER_STATUS.PLACED };
+        if ([ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED].includes(normalized.status)) {
+            setSelectedPoolOrderId(normalized.id);
+            return;
+        }
+        setActiveSheetOrder(normalized);
         setSheetSnap('full');
     };
 
     const handleCloseOrderSheet = () => {
+        if (activeSheetOrder && [ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED].includes(activeSheetOrder.status)) {
+            setActiveSheetOrder(null);
+            setSheetSnap('peek');
+            return;
+        }
         setSheetSnap('peek');
     };
 
@@ -1045,13 +1494,14 @@ const DashboardContent = ({ navigation }) => {
                     onLogout={handleLogout}
                     onLanguageToggle={cycleLanguage}
                     onThemeToggle={toggleTheme}
-                    onRefresh={() => loadData(true)}
+                    onRefresh={() => loadData(false)}
+                    topInset={insets?.top || 0}
                 />
                 {activeTab === 'orders' && (
                     <View style={styles.headerExtras}>
                         <SectionToggle
                             sections={[
-                                { key: 'available', label: t('sectionAvailable'), count: availableOrders.length },
+                                { key: 'available', label: t('sectionAvailable'), count: totalPool },
                                 { key: 'myJobs', label: t('sectionMyJobs'), count: activeJobsCount }
                             ]}
                             activeSection={orderSection}
@@ -1087,9 +1537,9 @@ const DashboardContent = ({ navigation }) => {
                     <Animated.View style={[styles.filterPanel, { height: filterDropdownHeight, opacity: filterAnim }]}>
                         <View style={styles.filterPanelInner}>
                             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScrollContent} style={styles.filterScroll}>
-                                <Dropdown label={t('filterUrgency')} value={filters.urgency} options={['all', 'emergency', 'urgent', 'planned']} optionLabels={{ all: t('filterAll'), emergency: t('urgencyEmergency'), urgent: t('urgencyUrgent'), planned: t('urgencyPlanned') }} onChange={v => setFilters({ ...filters, urgency: v })} />
-                                <Dropdown label={t('filterService')} value={filters.service} options={['all', ...availableServices]} optionLabels={serviceOptionLabels} onChange={v => setFilters({ ...filters, service: v })} />
-                                <Dropdown label={t('filterArea')} value={filters.area} options={['all', ...availableAreas]} optionLabels={{ all: t('filterAll') }} onChange={v => setFilters({ ...filters, area: v })} />
+                                <Dropdown label={t('filterUrgency')} value={filters.urgency} options={urgencyOptions} optionLabels={urgencyOptionLabels} onChange={v => setFilters({ ...filters, urgency: v })} />
+                                <Dropdown label={t('filterService')} value={filters.service} options={serviceOptions} optionLabels={serviceOptionLabels} onChange={v => setFilters({ ...filters, service: v })} />
+                                <Dropdown label={t('filterArea')} value={filters.area} options={areaOptions} optionLabels={areaOptionLabels} onChange={v => setFilters({ ...filters, area: v })} />
                             </ScrollView>
                             {(filters.urgency !== 'all' || filters.service !== 'all' || filters.area !== 'all' || filters.pricing !== 'all') && (
                                 <TouchableOpacity
@@ -1109,9 +1559,7 @@ const DashboardContent = ({ navigation }) => {
                     <ScrollView
                         contentContainerStyle={[
                             styles.list,
-                            orderSection === 'available'
-                                ? (showFilters ? styles.listWithFiltersOpen : styles.listWithFiltersClosed)
-                                : null
+                            { paddingTop: listTopPadding, paddingBottom: listBottomPadding }
                         ]}
                         showsVerticalScrollIndicator={false}
                     >
@@ -1137,6 +1585,7 @@ const DashboardContent = ({ navigation }) => {
                     earnings={earnings}
                     orderHistory={orderHistory}
                     balanceTransactions={balanceTransactions}
+                    districts={districts}
                     refreshing={refreshing}
                     onRefresh={onRefresh}
                 />
@@ -1148,26 +1597,92 @@ const DashboardContent = ({ navigation }) => {
                     keyExtractor={item => item.id}
                     contentContainerStyle={[
                         styles.list,
-                        orderSection === 'available'
-                            ? (showFilters ? styles.listWithFiltersOpen : styles.listWithFiltersClosed)
-                            : null
+                        { paddingTop: listTopPadding, paddingBottom: listBottomPadding }
                     ]}
                     columnWrapperStyle={deviceUtils.getGridColumns() > 1 ? styles.colWrapper : null} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}
+                    ListHeaderComponent={
+                        orderSection === 'myJobs' ? (
+                            <View style={[styles.limitsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                                <Text style={[styles.limitsTitle, { color: theme.textPrimary }]}>
+                                    {safeT('myJobsLimitsTitle', 'Current limits')}
+                                </Text>
+                                <View style={styles.limitsRow}>
+                                    <View style={[styles.limitBadge, { backgroundColor: `${theme.accentIndigo}14`, borderColor: `${theme.accentIndigo}55` }]}>
+                                        <Text style={[styles.limitBadgeLabel, { color: theme.textMuted }]}>
+                                            {safeT('myJobsLimitActive', 'Active jobs')}
+                                        </Text>
+                                        <Text style={[styles.limitBadgeValue, { color: theme.textPrimary }]}>
+                                            {activeJobsCount}/{maxActiveJobs}
+                                        </Text>
+                                    </View>
+                                    <View style={[styles.limitBadge, { backgroundColor: `${theme.accentWarning}14`, borderColor: `${theme.accentWarning}60` }]}>
+                                        <Text style={[styles.limitBadgeLabel, { color: theme.textMuted }]}>
+                                            {safeT('myJobsLimitImmediate', 'Immediate')}
+                                        </Text>
+                                        <Text style={[styles.limitBadgeValue, { color: theme.textPrimary }]}>
+                                            {immediateOrdersCount}/{maxImmediateOrders}
+                                        </Text>
+                                    </View>
+                                </View>
+                                <View style={styles.limitsRow}>
+                                    <View style={[styles.limitBadge, { backgroundColor: `${theme.accentSuccess}12`, borderColor: `${theme.accentSuccess}55` }]}>
+                                        <Text style={[styles.limitBadgeLabel, { color: theme.textMuted }]}>
+                                            {safeT('myJobsLimitPending', 'Awaiting confirmation')}
+                                        </Text>
+                                        <Text style={[styles.limitBadgeValue, { color: theme.textPrimary }]}>
+                                            {pendingOrdersCount}/{maxPendingOrders}
+                                        </Text>
+                                    </View>
+                                    <View style={[styles.limitBadge, { backgroundColor: `${theme.accentDanger}10`, borderColor: `${theme.accentDanger}45` }]}>
+                                        <Text style={[styles.limitBadgeLabel, { color: theme.textMuted }]}>
+                                            {safeT('myJobsLimitStarted', 'In progress')}
+                                        </Text>
+                                        <Text style={[styles.limitBadgeValue, { color: theme.textPrimary }]}>
+                                            {startedOrdersCount}/1
+                                        </Text>
+                                    </View>
+                                </View>
+                            </View>
+                        ) : null
+                    }
                     renderItem={({ item }) => (
                         <OrderCard
                             order={item}
                             isPool={orderSection === 'available'}
-                            userVerified={user?.is_verified}
-                            userBalanceBlocked={financials?.balanceBlocked}
+                            isSelected={orderSection === 'available' && selectedPoolOrderId === item.id}
+                            canClaim={Boolean(user?.is_verified && !financials?.balanceBlocked)}
                             actionLoading={actionLoading}
                             onClaim={handleClaim}
-            onStart={(id) => handleStart(id)}
+                            onStart={(id) => handleStart(id)}
                             onCopyAddress={handleCopyAddress}
                             onComplete={(o) => setModalState({ type: 'complete', order: o })}
                             onRefuse={(o) => setModalState({ type: 'refuse', order: o })}
-                            onOpen={orderSection === 'myJobs' ? handleOpenOrderSheet : null}
+                            onOpen={handleOpenOrderSheet}
                         />
                     )}
+                    ListFooterComponent={
+                        orderSection === 'available' && totalPages > 1 ? (
+                            <View style={[styles.paginationBar, { borderColor: theme.borderPrimary }]}>
+                                <TouchableOpacity
+                                    style={[styles.paginationBtn, { borderColor: theme.borderPrimary, opacity: pagePool > 1 ? 1 : 0.4 }]}
+                                    disabled={pagePool <= 1 || actionLoading}
+                                    onPress={() => handlePoolPageChange(pagePool - 1)}
+                                >
+                                    <ChevronLeft size={16} color={theme.textSecondary} />
+                                </TouchableOpacity>
+                                <Text style={[styles.paginationInfo, { color: theme.textMuted }]}>
+                                    {pagePool} / {totalPages}
+                                </Text>
+                                <TouchableOpacity
+                                    style={[styles.paginationBtn, { borderColor: theme.borderPrimary, opacity: pagePool < totalPages ? 1 : 0.4 }]}
+                                    disabled={pagePool >= totalPages || actionLoading}
+                                    onPress={() => handlePoolPageChange(pagePool + 1)}
+                                >
+                                    <ChevronRight size={16} color={theme.textSecondary} />
+                                </TouchableOpacity>
+                            </View>
+                        ) : <View style={{ height: 24 }} />
+                    }
                     ListEmptyComponent={
                         <View style={styles.center}>
                             <Inbox size={48} color={theme.textMuted} />
@@ -1218,7 +1733,11 @@ const DashboardContent = ({ navigation }) => {
                                 />
                                 <Pressable style={styles.claimHandle} onPress={() => setSheetSnap(sheetSnap === 'half' ? 'full' : 'half')} />
                                 <View style={styles.sheetContent}>
-                                    <View style={[styles.sheetBody, { paddingBottom: sheetBodyPaddingBottom }]}>
+                                    <ScrollView
+                                        style={styles.sheetBody}
+                                        contentContainerStyle={[styles.sheetBodyContent, { paddingBottom: sheetBodyPaddingBottom }]}
+                                        showsVerticalScrollIndicator={false}
+                                    >
                                     <View style={styles.sheetHeaderBlock}>
                                         <View style={styles.claimHeaderRow}>
                                             <View style={styles.claimHeaderText}>
@@ -1254,8 +1773,24 @@ const DashboardContent = ({ navigation }) => {
                                                 <Text style={[styles.sheetValueBase, styles.sheetValuePrimary, { color: theme.accentSuccess }]}>
                                                     {activeSheetOrder.final_price ?? activeSheetOrder.initial_price ?? activeSheetOrder.callout_fee ?? safeT('priceOpen', 'Open')}
                                                 </Text>
+                                                <Text style={[styles.sheetMetaInline, { color: theme.textMuted }]}>
+                                                    {activeSheetPricingLabel}
+                                                </Text>
                                             </View>
                                         </View>
+                                        {activeSheetPlannedText ? (
+                                            <View style={[styles.sheetInfoCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                                                <View style={styles.sheetInfoMain}>
+                                                    <Clock size={16} color={theme.textMuted} />
+                                                    <View style={styles.sheetInfoText}>
+                                                        <Text style={[styles.sheetInfoLabel, { color: theme.textMuted }]}>{safeT('urgencyPlanned', 'Planned')}</Text>
+                                                        <Text style={[styles.sheetValueBase, styles.sheetValueSecondary, { color: theme.textPrimary }]} numberOfLines={1}>
+                                                            {activeSheetPlannedText}
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                            </View>
+                                        ) : null}
                                         {sheetCanSeeDetails ? (
                                             <View style={styles.sheetDetailsBlock}>
                                                 {sheetAddress ? (
@@ -1380,6 +1915,7 @@ const DashboardContent = ({ navigation }) => {
                                             </View>
                                         )}
                                     </View>
+                                    </ScrollView>
                                 </View>
                                 <View style={[styles.sheetFooter, { backgroundColor: theme.bgSecondary, borderTopColor: theme.borderPrimary, paddingBottom: sheetBottomInset }]}>
                                     <View style={styles.sheetFooterActions}>
@@ -1387,7 +1923,7 @@ const DashboardContent = ({ navigation }) => {
                                             <TouchableOpacity
                                                 style={[styles.primarySheetButton, { backgroundColor: theme.accentIndigo, shadowColor: theme.accentIndigo, shadowOpacity: 0.35 }]}
                                                 disabled={actionLoading}
-                                                onPress={() => handleAction(ordersService.startJob, activeSheetOrder.id, user.id)}
+                                                onPress={() => handleStart(activeSheetOrder.id)}
                                             >
                                                 {actionLoading ? (
                                                     <ActivityIndicator color="#fff" />
@@ -1416,13 +1952,12 @@ const DashboardContent = ({ navigation }) => {
                                         )}
                                     </View>
                                 </View>
-                            </View>
                             </Pressable>
                         </Animated.View>
                     </View>
                 </Modal>
             )}
-            {activeTab === 'orders' && activeSheetOrder && sheetSnap === 'peek' && !sheetModalVisible && (
+            {activeTab === 'orders' && activeSheetOrder?.status === ORDER_STATUS.STARTED && sheetSnap === 'peek' && !sheetModalVisible && (
                 <Pressable
                     style={[styles.sheetPeek, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary, bottom: sheetBottomInset + 20 }]}
                     onPress={() => setSheetSnap('full')}
@@ -1503,7 +2038,7 @@ const DashboardContent = ({ navigation }) => {
                             <View style={styles.modalActions}>
                                 <TouchableOpacity style={[styles.modalButton, { backgroundColor: theme.borderSecondary }]} onPress={() => { setModalState({ type: null, order: null }); setRefuseData({}); }}><Text style={[styles.modalButtonText, { color: theme.textSecondary }]}>{t('actionBack')}</Text></TouchableOpacity>
                                 <TouchableOpacity style={[styles.modalButton, { backgroundColor: theme.accentDanger, flex: 1 }]} disabled={!refuseData.reason} onPress={async () => {
-                                    if (!refuseData.reason) { showToast?.('Please select a reason', 'error'); return; }
+                                    if (!refuseData.reason) { showToast?.(safeT('errorSelectReason', 'Please select a reason'), 'error'); return; }
                                     const res = await handleAction(ordersService.refuseJob, modalState.order.id, user.id, refuseData.reason, refuseData.notes);
                                     if (res?.success) {
                                         setActiveSheetOrder(null);
@@ -1527,7 +2062,7 @@ export default function MasterDashboard(props) {
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
-    header: { paddingTop: Platform.OS === 'ios' ? 50 : 40, paddingBottom: 8, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between' },
+    header: { paddingTop: 0, paddingBottom: 8, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between' },
     headerShell: { borderBottomWidth: 1, paddingBottom: 4, zIndex: 1 },
     headerExtras: { gap: 4, paddingBottom: 2 },
     filterOverlay: { position: 'absolute', left: 12, right: 12, borderRadius: 14, borderWidth: 1, overflow: 'hidden', zIndex: 3 },
@@ -1564,7 +2099,7 @@ const styles = StyleSheet.create({
     dropdownItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 14 },
     dropdownItemText: { fontSize: 13, fontWeight: '500' },
     checkIconWrapper: { width: 20, alignItems: 'center', marginRight: 6 },
-    list: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 100 },
+    list: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 0 },
     listWithFiltersOpen: { paddingTop: 64 },
     listWithFiltersClosed: { paddingTop: 24 },
     colWrapper: { justifyContent: 'space-between' },
@@ -1587,9 +2122,14 @@ const styles = StyleSheet.create({
     cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
     urgencyBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, borderWidth: 1 },
     urgencyText: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase' },
+    pricingBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, borderWidth: 1, maxWidth: '40%' },
+    pricingText: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase' },
     locationContainer: { flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1 },
     locationText: { fontSize: 12, flex: 1 },
     description: { fontSize: 13, marginBottom: 8, lineHeight: 18 },
+    plannedRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, borderRadius: 10, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 7 },
+    plannedLabel: { fontSize: 11, fontWeight: '600' },
+    plannedText: { fontSize: 14, flex: 1, lineHeight: 20, fontWeight: '600' },
     inlineHintRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
     inlineHintLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
     inlineHintValue: { fontSize: 13, flex: 1, lineHeight: 18 },
@@ -1660,9 +2200,31 @@ const styles = StyleSheet.create({
     earningItem: { flexDirection: 'row', justifyContent: 'space-between', padding: 14 },
     earningService: { fontSize: 13, fontWeight: '600' },
     historySection: { gap: 10 },
+    historyFilterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
+    historyFilterChip: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1 },
+    historySortRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
+    historySortChip: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1 },
+    limitsCard: { borderWidth: 1, borderRadius: 14, padding: 10, marginBottom: 12, gap: 8 },
+    limitsTitle: { fontSize: 12, fontWeight: '700' },
+    limitsRow: { flexDirection: 'row', gap: 8 },
+    limitBadge: { flex: 1, borderWidth: 1, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 10, gap: 2 },
+    limitBadgeLabel: { fontSize: 10, fontWeight: '600' },
+    limitBadgeValue: { fontSize: 14, fontWeight: '700' },
+    historyTable: { borderWidth: 1, borderRadius: 12, overflow: 'hidden' },
+    historyRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12, borderTopWidth: 1 },
+    historyHeaderRow: { borderTopWidth: 0 },
+    historyGroupHeader: { paddingVertical: 8, paddingHorizontal: 12, borderTopWidth: 1 },
+    historyGroupHeaderText: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
+    historyCell: { fontSize: 11 },
+    historyCellType: { flex: 1.6, fontWeight: '700' },
+    historyCellDetails: { flex: 1.6 },
+    historyCellAmount: { flex: 0.8, alignItems: 'flex-start' },
     historyItem: { flexDirection: 'row', justifyContent: 'space-between', padding: 14, borderRadius: 10, borderWidth: 1 },
     statusBadgeSmall: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginTop: 4 },
     emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
+    paginationBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 12, paddingHorizontal: 16, borderTopWidth: 1, marginTop: 8 },
+    paginationBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 999, borderWidth: 1 },
+    paginationInfo: { fontSize: 11, fontWeight: '600' },
     profileSection: { gap: 16 },
     profileCard: { padding: 16, borderRadius: 12, borderWidth: 1 },
     // Profile header row with name and verified badge
@@ -1706,7 +2268,8 @@ const styles = StyleSheet.create({
     claimCloseBtn: { position: 'absolute', right: 0, top: 0, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
     claimCloseText: { fontSize: 18, fontWeight: '700' },
     sheetContent: { flex: 1, position: 'relative', justifyContent: 'flex-start' },
-    sheetBody: { flex: 1, gap: 6 },
+    sheetBody: { flex: 1 },
+    sheetBodyContent: { gap: 6 },
     sheetHeaderBlock: { marginTop: 16, marginBottom: 20 },
     claimTitle: { fontSize: 22, fontWeight: '700', textAlign: 'center' },
     claimSubtitle: { fontSize: 13, textAlign: 'center', marginBottom: 16, lineHeight: 18 },
@@ -1726,6 +2289,7 @@ const styles = StyleSheet.create({
     sheetValuePrimary: { fontWeight: '400' },
     sheetValueSecondary: { fontWeight: '400' },
     sheetValuePhone: { fontWeight: '400' },
+    sheetMetaInline: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
     sheetMetaRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
     sheetMetaCard: { flex: 1, borderRadius: 14, padding: 10, gap: 6, borderWidth: 1 },
     sheetMetaLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 },

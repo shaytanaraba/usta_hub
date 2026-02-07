@@ -80,6 +80,7 @@ master-kg/
 ## 1.5 Known Issues / Notes
 
 - **Web build NetworkError (fetch failed)**: If the web build logs `TypeError: NetworkError when attempting to fetch resource` for orders/profile, this is usually **environment or connectivity** (Supabase URL not reachable, CORS, backend down, or wrong `EXPO_PUBLIC_SUPABASE_URL/ANON_KEY`). Confirm the Supabase URL is reachable from the browser and that CORS allows the web origin.
+- **Session stability across browsers**: Some browsers (Safari private mode, locked-down Chromium profiles, embedded webviews) can throw on `localStorage` access. v5.4.1 adds a safe in-memory fallback for Supabase web storage and a 10s loading fallback screen with Retry/Reset to prevent infinite loading screens.
 - **Admin password reset audit log mismatch**: `PATCH_ADMIN_PASSWORD_RESET.sql` writes to `profile_audit_log(action_type, changes)` which do not exist in the current schema. The consolidated setup (`COMPLETE_SETUP_V3.sql`) logs to the existing columns (`change_type`, `new_value`, `reason`) so the RPC works. If you need the patch file to be literal, add those columns or update the patch.
 - **Admin confirm payment requires `payment_confirmed_by`**: The DB trigger blocks `status = confirmed` if `payment_method` or `payment_confirmed_by` is missing. `confirmPaymentAdmin` now sets `payment_confirmed_by` (current admin) and `payment_confirmed_at` to avoid the error.
 - **Admin final price override**: Use RPC `admin_override_final_price(order_id, final_price, reason)` for completed/confirmed orders. It recalculates commission, updates master earnings, adjusts balance, and logs the change.
@@ -554,6 +555,32 @@ npx expo start --clear
 3. Create users in Auth dashboard
 4. Run `version_5/SEED_DATA.sql`
 5. Run `SELECT setup_test_data();`
+6. Configure Auth + CORS for web (see "Supabase Auth Configuration" below)
+
+### Supabase Auth Configuration (Web/Session Stability)
+This section covers the Supabase settings needed to support the session reliability fixes in v5.4.1 and avoid stuck loading screens on web.
+
+1. **Set Site URL + Redirect URLs**
+   - In **Authentication → URL Configuration**, set **Site URL** to your production web app root (e.g. `https://app.yourdomain.com`).
+   - Add **Additional Redirect URLs** for:
+     - Local dev (e.g. `http://localhost:19006`, `http://localhost:19000`)
+     - Any Telegram WebApp domain if you embed the app there.
+
+2. **Allow Web Origins (CORS)**
+   - In **Settings → API**, add your web app origins to **CORS Allowed Origins**.
+   - Include both production and dev URLs to prevent `NetworkError (fetch failed)` on web.
+
+3. **Sessions: avoid forced global sign-out**
+   - If you have **single-session enforcement** enabled (newer Supabase setting), disable it to allow multiple devices to stay logged in with the same account.
+   - Avoid custom Auth hooks or edge functions that revoke *all* sessions on login. The app already uses `scope: 'local'` on logout so it does not invalidate other sessions.
+
+4. **JWT/session TTL**
+   - Keep a reasonable JWT expiry (e.g. 1 hour). Very short expiries can cause frequent refresh calls and UX hiccups.
+   - The app handles refresh automatically; avoid setting unusually short refresh token lifetimes unless required.
+
+5. **App environment variables**
+   - Ensure `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` are set in `.env` for web builds.
+   - Misconfigured values are the most common cause of web-only session failures.
 
 ### Test Accounts
 | Role | Email | After running SEED_DATA |
@@ -569,6 +596,39 @@ npx expo start --clear
 ---
 
 # 5. Version History & Changelog
+
+## v5.4.2 - Master Dashboard Notifications, Limits, and Stability (February 7, 2026)
+
+### Master Order UX
+- **Card clarity**: Claimed/active order cards now show pricing scheme (`Fixed Price` / `Open`) and improved planned-time visibility on the card.
+- **Limits visibility in My Jobs**: Added a limits summary panel showing current usage vs limits for:
+  - Active jobs
+  - Immediate jobs
+  - Awaiting confirmation
+  - In-progress (`started`) slot (`1`)
+
+### Notifications & Error Handling
+- **Toast layer above modals**: Toasts now render via a transparent `Modal` so notifications remain visible even when the active-order bottom sheet modal is open.
+- **Toast UX cleanup**: Replaced broken glyph icons and ambiguous close visuals with clear iconography and one close action.
+- **Master-specific message mapping**: Added friendly, localized messages for common RPC/DB outcomes (one-started-order guard, planned-too-early start, due-soon lock, limit blockers, unavailable orders).
+
+### Performance & Console Stability
+- **Web lag reduction**: Resolved repeated React Native Web runtime errors by preventing string short-circuit rendering from creating text nodes inside `<View>` in order cards.
+- **Log noise reduction**: Removed noisy logs from hot paths in `orders.js` (`getAvailableOrders`, `canClaimOrder`, `startJob`) to reduce console spam in web development.
+
+## v5.4.1 - Session Resilience + Loading Recovery (February 6, 2026)
+
+### Auth & Session Resilience
+- **Safe web storage fallback**: `supabase.js` now uses a guarded `localStorage` wrapper that falls back to in-memory storage if the browser blocks or throws on `localStorage` (common in private mode or locked-down environments).
+- **Non-destructive refresh**: `AuthContext.refreshSession` now only clears user/session on *auth-invalid* errors (expired/invalid token). Transient network errors no longer force a logout, which reduces "random stops working" behavior.
+- **Cross-context consistency**: Dashboards now use `AuthContext` as a fallback if `getCurrentUser()` fails temporarily, preventing data wipes during brief auth/network blips.
+
+### Loading UX Recovery
+- **Universal loading timeout**: App-level loading now shows a 10s Recovery screen with **Retry** and **Reset app data** on *all* platforms, not just Telegram.
+- **Soft refresh on Master**: Master dashboard refresh and post-action reloads use in-place refresh without a full-screen loading overlay to reduce disruptive reloads.
+
+### Rationale
+- **Better than previous behavior**: The old path treated *any* refresh error as a logout and relied on `localStorage` without fallback. The new flow keeps users authenticated through transient errors and avoids infinite loading screens on browsers with restricted storage.
 
 ## v5.3.3 - Login Screen UX + Reliability (February 5, 2026)
 

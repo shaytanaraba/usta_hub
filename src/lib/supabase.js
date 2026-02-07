@@ -23,39 +23,74 @@ if (!process.env.EXPO_PUBLIC_SUPABASE_URL) {
 const isWeb = Platform.OS === 'web' || (typeof window !== 'undefined' && typeof localStorage !== 'undefined');
 debug('[Supabase] Platform:', Platform.OS, 'isWeb:', isWeb);
 
-// Create a localStorage wrapper that matches Supabase's expected interface
-const webStorage = {
-    getItem: async (key) => {
-        try {
-            const value = localStorage.getItem(key);
-            debug('[Supabase] webStorage.getItem:', key, value ? 'found' : 'null');
-            return value;
-        } catch (e) {
-            console.error('[Supabase] webStorage.getItem error:', e);
-            return null;
+const memoryStorage = new Map();
+const createWebStorage = () => {
+    let webStorageHealthy = true;
+
+    const getFromMemory = (key) => (memoryStorage.has(key) ? memoryStorage.get(key) : null);
+
+    const markUnhealthy = (error) => {
+        if (!webStorageHealthy) return;
+        webStorageHealthy = false;
+        debugWarn('[Supabase] localStorage unavailable, falling back to memory store', error);
+    };
+
+    try {
+        if (typeof localStorage === 'undefined') {
+            webStorageHealthy = false;
+        } else {
+            const testKey = '__supabase_storage_test__';
+            localStorage.setItem(testKey, '1');
+            localStorage.removeItem(testKey);
         }
-    },
-    setItem: async (key, value) => {
-        try {
-            localStorage.setItem(key, value);
-            debug('[Supabase] webStorage.setItem:', key);
-        } catch (e) {
-            console.error('[Supabase] webStorage.setItem error:', e);
-        }
-    },
-    removeItem: async (key) => {
-        try {
-            localStorage.removeItem(key);
-            debug('[Supabase] webStorage.removeItem:', key);
-        } catch (e) {
-            console.error('[Supabase] webStorage.removeItem error:', e);
-        }
-    },
+    } catch (e) {
+        markUnhealthy(e);
+    }
+
+    return {
+        getItem: async (key) => {
+            if (!webStorageHealthy) return getFromMemory(key);
+            try {
+                const value = localStorage.getItem(key);
+                debug('[Supabase] webStorage.getItem:', key, value ? 'found' : 'null');
+                return value;
+            } catch (e) {
+                markUnhealthy(e);
+                return getFromMemory(key);
+            }
+        },
+        setItem: async (key, value) => {
+            if (!webStorageHealthy) {
+                memoryStorage.set(key, value);
+                return;
+            }
+            try {
+                localStorage.setItem(key, value);
+                debug('[Supabase] webStorage.setItem:', key);
+            } catch (e) {
+                markUnhealthy(e);
+                memoryStorage.set(key, value);
+            }
+        },
+        removeItem: async (key) => {
+            if (!webStorageHealthy) {
+                memoryStorage.delete(key);
+                return;
+            }
+            try {
+                localStorage.removeItem(key);
+                debug('[Supabase] webStorage.removeItem:', key);
+            } catch (e) {
+                markUnhealthy(e);
+                memoryStorage.delete(key);
+            }
+        },
+    };
 };
 
 // Use appropriate storage based on platform
-const storage = isWeb ? webStorage : AsyncStorage;
-debug('[Supabase] Using storage:', isWeb ? 'localStorage (web)' : 'AsyncStorage (native)');
+const storage = isWeb ? createWebStorage() : AsyncStorage;
+debug('[Supabase] Using storage:', isWeb ? 'web storage (localStorage with fallback)' : 'AsyncStorage (native)');
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     auth: {

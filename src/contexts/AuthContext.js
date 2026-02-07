@@ -20,6 +20,26 @@ const REFRESH_MIN_INTERVAL_MS = 30 * 1000; // 30 seconds
 
 const isWeb = Platform.OS === 'web' && typeof window !== 'undefined' && typeof localStorage !== 'undefined';
 const memoryStorage = new Map();
+const isAuthInvalidError = (error) => {
+  const message = error?.message?.toLowerCase?.() || '';
+  const status = error?.status;
+  return status === 401
+    || message.includes('jwt expired')
+    || message.includes('invalid jwt')
+    || message.includes('invalid token')
+    || message.includes('auth session missing')
+    || message.includes('token has expired')
+    || message.includes('refresh token');
+};
+const isTransientError = (error) => {
+  const message = error?.message?.toLowerCase?.() || '';
+  return message.includes('network request failed')
+    || message.includes('failed to fetch')
+    || message.includes('timeout')
+    || message.includes('temporarily unavailable')
+    || message.includes('econnreset')
+    || message.includes('eai_again');
+};
 const clearSupabaseWebStorage = async () => {
   if (!isWeb) return;
   try {
@@ -83,7 +103,17 @@ export function AuthProvider({ children }) {
     refreshInFlight.current = (async () => {
       try {
         lastRefreshRef.current = now;
-        const { data: { session: activeSession } } = await supabase.auth.getSession();
+        const { data: { session: activeSession }, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) {
+          if (isAuthInvalidError(sessionError)) {
+            try { await supabase.auth.signOut({ scope: 'local' }); } catch (e) {}
+            setSession(null);
+            setUser(null);
+            return null;
+          }
+          console.warn('[Auth] getSession error', sessionError);
+        }
+
         setSession(activeSession || null);
 
         if (!activeSession?.user) {
@@ -104,10 +134,27 @@ export function AuthProvider({ children }) {
           }
         }
 
-        setUser(currentUser);
-        return currentUser;
+        if (currentUser) {
+          setUser(currentUser);
+          return currentUser;
+        }
+
+        // Keep existing user on transient failures to avoid random logouts.
+        if (user) return user;
+
+        setUser(null);
+        return null;
       } catch (error) {
         console.error('[Auth] refreshSession failed', error);
+        if (isAuthInvalidError(error)) {
+          try { await supabase.auth.signOut({ scope: 'local' }); } catch (e) {}
+          setSession(null);
+          setUser(null);
+          return null;
+        }
+        if (isTransientError(error)) {
+          return user;
+        }
         setSession(null);
         setUser(null);
         return null;

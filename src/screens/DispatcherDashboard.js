@@ -117,7 +117,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     const { showToast } = useToast();
     const { translations, language, cycleLanguage, setLanguage, t } = useLocalization();
     const TRANSLATIONS = translations;
-    const { logout } = useAuth();
+    const { logout, user: authUser } = useAuth();
     const { canGoBack, canGoForward, goBack, goForward } = useNavHistory();
 
     // User & Data
@@ -198,6 +198,9 @@ export default function DispatcherDashboard({ navigation, route }) {
         loadDispatchers();
         loadPlatformSettings(); // Fetch platform settings for callout fee default
     }, []);
+    useEffect(() => {
+        if (!authUser) setUser(null);
+    }, [authUser]);
 
     // Reload service types and districts when language changes
     useEffect(() => {
@@ -234,10 +237,11 @@ export default function DispatcherDashboard({ navigation, route }) {
     const loadData = async () => {
         if (!refreshing) setLoading(true);
         try {
-            const currentUser = await authService.getCurrentUser();
-            setUser(currentUser);
-            if (currentUser) {
-                const allOrders = await ordersService.getDispatcherOrders(currentUser.id);
+            const currentUser = await authService.getCurrentUser({ retries: 1, retryDelayMs: 350 });
+            if (currentUser) setUser(currentUser);
+            const effectiveUser = currentUser || authUser;
+            if (effectiveUser) {
+                const allOrders = await ordersService.getDispatcherOrders(effectiveUser.id);
                 setOrders(allOrders);
             } else {
                 setOrders([]);

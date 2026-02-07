@@ -21,14 +21,12 @@ import DispatcherDashboard from './src/screens/DispatcherDashboard';
 import AdminDashboard from './src/screens/AdminDashboard';
 
 const Stack = createNativeStackNavigator();
-const TELEGRAM_LOADING_TIMEOUT_MS = 10000;
+const LOADING_TIMEOUT_MS = 10000;
 
 const getTelegramWebApp = () => {
   if (typeof window === 'undefined') return null;
   return window.Telegram?.WebApp || null;
 };
-
-const isTelegramWebApp = () => Boolean(getTelegramWebApp());
 
 // Loading screen component
 function LoadingScreen() {
@@ -39,13 +37,13 @@ function LoadingScreen() {
   );
 }
 
-function TelegramLoadingFallback({ onRetry, onReset }) {
+function LoadingFallback({ onRetry, onReset }) {
   return (
     <LinearGradient colors={['#0f172a', '#1e293b']} style={styles.loadingContainer}>
       <View style={styles.fallbackCard}>
         <Text style={styles.fallbackTitle}>Still loading...</Text>
         <Text style={styles.fallbackText}>
-          If the mini app is stuck, try retrying or reset app data.
+          If the app is stuck, try retrying or reset app data.
         </Text>
         <TouchableOpacity style={styles.fallbackButton} onPress={onRetry}>
           <Text style={styles.fallbackButtonText}>Retry</Text>
@@ -62,7 +60,6 @@ function AppNavigator() {
   const { user, session, loading, refreshSession, resetAppData } = useAuth();
   const { navRef, onStateChange, resetHistory } = useNavHistory();
   const [loadingTimeout, setLoadingTimeout] = useState(false);
-  const [telegramActive, setTelegramActive] = useState(isTelegramWebApp());
 
   const syncRoute = () => {
     if (!navRef.isReady()) return;
@@ -87,29 +84,13 @@ function AppNavigator() {
   }, [user]);
 
   useEffect(() => {
-    if (telegramActive) return;
-    let mounted = true;
-    const interval = setInterval(() => {
-      if (!mounted) return;
-      if (isTelegramWebApp()) {
-        setTelegramActive(true);
-        clearInterval(interval);
-      }
-    }, 300);
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-    };
-  }, [telegramActive]);
-
-  useEffect(() => {
-    if (!telegramActive || !loading) {
+    if (!loading) {
       setLoadingTimeout(false);
       return;
     }
-    const timer = setTimeout(() => setLoadingTimeout(true), TELEGRAM_LOADING_TIMEOUT_MS);
+    const timer = setTimeout(() => setLoadingTimeout(true), LOADING_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [loading, telegramActive]);
+  }, [loading]);
 
   const handleRetry = async () => {
     setLoadingTimeout(false);
@@ -121,8 +102,8 @@ function AppNavigator() {
   };
 
   if (loading) {
-    if (telegramActive && loadingTimeout) {
-      return <TelegramLoadingFallback onRetry={handleRetry} onReset={handleReset} />;
+    if (loadingTimeout) {
+      return <LoadingFallback onRetry={handleRetry} onReset={handleReset} />;
     }
     return <LoadingScreen />;
   }

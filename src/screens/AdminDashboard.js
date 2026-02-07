@@ -800,7 +800,7 @@ export default function AdminDashboard({ navigation }) {
     const { showToast } = useToast();
     const { translations, language, cycleLanguage, t } = useLocalization();
     const TRANSLATIONS = translations[language] || translations['en'] || {};
-    const { logout } = useAuth();
+    const { logout, user: authUser } = useAuth();
     const analyticsLocale = useMemo(() => (language === 'ru' ? 'ru-RU' : language === 'kg' ? 'ky-KG' : 'en-US'), [language]);
     const isWeb = Platform.OS === 'web';
     const getLocalizedName = useCallback((item, fallback = '') => {
@@ -2264,6 +2264,9 @@ export default function AdminDashboard({ navigation }) {
     useEffect(() => {
         loadAllData();
     }, []);
+    useEffect(() => {
+        if (!authUser) setUser(null);
+    }, [authUser]);
 
     useEffect(() => {
         loadServiceTypes();
@@ -2333,8 +2336,14 @@ export default function AdminDashboard({ navigation }) {
         if (!skipLoadingScreen) setLoading(true);
         // Load current user first
         try {
-            const currentUser = await authService.getCurrentUser();
-            setUser(currentUser);
+            const currentUser = await authService.getCurrentUser({ retries: 1, retryDelayMs: 350 });
+            if (currentUser) {
+                setUser(currentUser);
+            } else if (authUser) {
+                setUser(authUser);
+            } else {
+                setUser(null);
+            }
         } catch (e) {
             console.error('Failed to load current user', e);
         }

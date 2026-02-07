@@ -66,16 +66,10 @@ class OrdersService {
    * Returns orders with STAGED visibility - no full_address before claim
    */
   getAvailableOrders = async (page = 1, limit = 10, filters = {}) => {
-    console.log(`${LOG_PREFIX} Fetching available orders (page ${page}, limit ${limit}, filters: ${JSON.stringify(filters)})...`);
-
     try {
-      const from = (page - 1) * limit;
-      const to = from + limit - 1;
-
-      let query = supabase
-        .from('orders')
-        .select(`
+      const baseSelect = `
           id,
+          status,
           service_type,
           urgency,
           problem_description,
@@ -87,34 +81,98 @@ class OrdersService {
           preferred_date,
           preferred_time,
           created_at
-        `, { count: 'exact' })
-        .in('status', [ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED]);
+        `;
+      const hasUrgencyFilter = filters.urgency && filters.urgency !== 'all';
+      const applyFilters = (query, opts = {}) => {
+        query = query.in('status', [ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED]);
+        if (!opts.ignoreUrgency && hasUrgencyFilter) {
+          query = query.eq('urgency', filters.urgency);
+        }
+        if (opts.forceUrgency) {
+          query = query.eq('urgency', opts.forceUrgency);
+        }
+        if (filters.service && filters.service !== 'all') {
+          query = query.eq('service_type', filters.service);
+        }
+        if (filters.area && filters.area !== 'all') {
+          query = query.eq('area', filters.area);
+        }
+        if (filters.pricing && filters.pricing !== 'all') {
+          query = query.eq('pricing_type', filters.pricing);
+        }
+        return query;
+      };
 
-      // Apply Filters
-      if (filters.urgency && filters.urgency !== 'all') {
-        query = query.eq('urgency', filters.urgency);
-      }
-      if (filters.service && filters.service !== 'all') {
-        query = query.eq('service_type', filters.service);
-      }
-      if (filters.area && filters.area !== 'all') {
-        query = query.eq('area', filters.area);
-      }
-      if (filters.pricing && filters.pricing !== 'all') {
-        query = query.eq('pricing_type', filters.pricing);
+      const countQuery = applyFilters(
+        supabase.from('orders').select('id', { count: 'exact', head: true }),
+        { ignoreUrgency: !hasUrgencyFilter }
+      );
+      const { count: totalCount, error: countError } = await countQuery;
+      if (countError) throw countError;
+
+      // If urgency is filtered (urgent/planned/emergency), use normal paging.
+      if (hasUrgencyFilter && filters.urgency !== 'all') {
+        const from = (page - 1) * limit;
+        const to = from + limit - 1;
+        const { data, error } = await applyFilters(
+          supabase.from('orders').select(baseSelect),
+          { ignoreUrgency: false }
+        )
+          .order('created_at', { ascending: false })
+          .range(from, to);
+
+        if (error) throw error;
+        return { data, count: totalCount || 0 };
       }
 
-      const { data, error, count } = await query
-        .order('created_at', { ascending: false })
-        .range(from, to);
+      // Prioritize emergency orders across pages when urgency is "all".
+      const emergencyCountQuery = applyFilters(
+        supabase.from('orders').select('id', { count: 'exact', head: true }),
+        { ignoreUrgency: true, forceUrgency: 'emergency' }
+      );
+      const { count: emergencyCount, error: emergencyCountError } = await emergencyCountQuery;
+      if (emergencyCountError) throw emergencyCountError;
 
-      if (error) {
-        console.error(`${LOG_PREFIX} getAvailableOrders error:`, error);
-        throw error;
+      const emergencyPages = emergencyCount ? Math.ceil(emergencyCount / limit) : 0;
+      const emergencyOffset = (page - 1) * limit;
+      const emergencyLimit = page <= emergencyPages ? limit : 0;
+
+      let emergencyOrders = [];
+      if (emergencyLimit > 0) {
+        const emergencyRangeTo = emergencyOffset + emergencyLimit - 1;
+        const { data, error } = await applyFilters(
+          supabase.from('orders').select(baseSelect),
+          { ignoreUrgency: true, forceUrgency: 'emergency' }
+        )
+          .order('created_at', { ascending: false })
+          .range(emergencyOffset, emergencyRangeTo);
+        if (error) throw error;
+        emergencyOrders = data || [];
       }
 
-      console.log(`${LOG_PREFIX} Found ${data.length} available orders (Total: ${count})`);
-      return { data, count };
+      const remainingSlots = page <= emergencyPages ? Math.max(0, limit - emergencyOrders.length) : limit;
+      const nonEmergencyOffset = Math.max(0, (page - 1) * limit - (emergencyCount || 0));
+      const nonEmergencyRangeTo = nonEmergencyOffset + remainingSlots - 1;
+
+      let nonEmergencyOrders = [];
+      if (remainingSlots > 0) {
+        const { data, error } = await applyFilters(
+          supabase.from('orders').select(baseSelect),
+          { ignoreUrgency: true }
+        )
+          .neq('urgency', 'emergency')
+          .order('created_at', { ascending: false })
+          .range(nonEmergencyOffset, nonEmergencyRangeTo);
+        if (error) throw error;
+        nonEmergencyOrders = data || [];
+      }
+
+      const data = page <= emergencyPages
+        ? [...emergencyOrders, ...nonEmergencyOrders]
+        : nonEmergencyOrders;
+
+      console.log(`${LOG_PREFIX} Found ${data.length} available orders (Total: ${totalCount || 0})`);
+      return { data, count: totalCount || 0 };
     } catch (error) {
       console.error(`${LOG_PREFIX} getAvailableOrders failed:`, error);
       return { data: [], count: 0 };
@@ -135,7 +193,7 @@ class OrdersService {
             area,
             pricing_type
           `)
-        .eq('status', ORDER_STATUS.PLACED);
+        .in('status', [ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED]);
 
       if (error) throw error;
       return data || [];
@@ -162,7 +220,6 @@ class OrdersService {
         return { can_claim: false, blockers: ['RPC_ERROR'] };
       }
 
-      console.log(`${LOG_PREFIX} Claim check result:`, data);
       return data; // { can_claim, blockers, warnings, balance, threshold, immediate_count, pending_count }
     } catch (error) {
       console.error(`${LOG_PREFIX} canClaimOrder failed:`, error);
@@ -185,6 +242,7 @@ class OrdersService {
       IMMEDIATE_LIMIT_REACHED: 'You have reached your immediate orders limit',
       TOO_MANY_PENDING: 'Too many orders pending confirmation',
       MAX_JOBS_REACHED: 'You have reached your maximum active jobs limit',
+      PLANNED_JOB_DUE_SOON: 'You have a planned order starting soon. Finish or start it before claiming new orders.',
       ORDER_NO_LONGER_AVAILABLE: 'Order is no longer available'
     };
 
@@ -240,8 +298,6 @@ class OrdersService {
    * Start job (master) - Transition: claimed → started
    */
   startJob = async (orderId, masterId) => {
-    console.log(`${LOG_PREFIX} Starting job: ${orderId}`);
-
       try {
         const { data, error } = await callWithRetry(() => supabase
           .from('orders')
@@ -259,14 +315,11 @@ class OrdersService {
           .single());
 
       if (error) {
-        console.error(`${LOG_PREFIX} startJob error:`, error);
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Job started successfully`);
       return { success: true, message: 'Job started!', order: data };
     } catch (error) {
-      console.error(`${LOG_PREFIX} startJob failed:`, error);
       return { success: false, message: error.message };
     }
   }
