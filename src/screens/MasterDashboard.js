@@ -49,10 +49,12 @@ const formatPlannedDateTime = (preferredDate, preferredTime, language = 'en') =>
     const timePart = preferredTime || '00:00:00';
     const parsed = new Date(`${preferredDate}T${timePart}`);
     if (Number.isNaN(parsed.getTime())) return `${preferredDate} ${preferredTime || ''}`.trim();
-    const options = preferredTime
-        ? { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }
-        : { day: '2-digit', month: 'short' };
-    return parsed.toLocaleString(locale, options);
+    if (preferredTime) {
+        const dateText = parsed.toLocaleDateString(locale, { day: '2-digit', month: 'short' });
+        const timeText = parsed.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
+        return `${dateText} ${timeText}`;
+    }
+    return parsed.toLocaleDateString(locale, { day: '2-digit', month: 'short' });
 };
 
 // ============================================
@@ -223,17 +225,19 @@ const OrderCard = ({ order, isPool, isSelected, canClaim, actionLoading, onClaim
                         {displayPriceText}
                     </Text>
                 </View>
-                <View style={styles.cardMeta}>
+                    <View style={styles.cardMeta}>
                     <View style={[styles.urgencyBadge, { backgroundColor: isPool ? urgencyStyle.bg : `${getStatusColor()}15`, borderColor: isPool ? urgencyStyle.text : getStatusColor() }]}>
                         <Text style={[styles.urgencyText, { color: isPool ? urgencyStyle.text : getStatusColor() }]}>
                             {isPool ? t(`urgency${order.urgency.charAt(0).toUpperCase() + order.urgency.slice(1)}`) : statusLabel}
                         </Text>
                     </View>
-                    <View style={[styles.pricingBadge, { backgroundColor: `${theme.accentIndigo}14`, borderColor: theme.accentIndigo }]}>
-                        <Text style={[styles.pricingText, { color: theme.accentIndigo }]} numberOfLines={1}>
-                            {pricingSchemeLabel}
-                        </Text>
-                    </View>
+                    {!isPool ? (
+                        <View style={[styles.pricingBadge, { backgroundColor: `${theme.accentIndigo}14`, borderColor: theme.accentIndigo }]}>
+                            <Text style={[styles.pricingText, { color: theme.accentIndigo }]} numberOfLines={1}>
+                                {pricingSchemeLabel}
+                            </Text>
+                        </View>
+                    ) : null}
                     <View style={styles.locationContainer}>
                         <MapPin size={10} color={theme.textMuted} />
                         <Text style={[styles.locationText, { color: theme.textMuted }]} numberOfLines={1}>{getLocationDisplay()}</Text>
@@ -1607,7 +1611,7 @@ const DashboardContent = ({ navigation }) => {
                                     {safeT('myJobsLimitsTitle', 'Current limits')}
                                 </Text>
                                 <View style={styles.limitsRow}>
-                                    <View style={[styles.limitBadge, { backgroundColor: `${theme.accentIndigo}14`, borderColor: `${theme.accentIndigo}55` }]}>
+                                    <View style={[styles.limitBadge, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
                                         <Text style={[styles.limitBadgeLabel, { color: theme.textMuted }]}>
                                             {safeT('myJobsLimitActive', 'Active jobs')}
                                         </Text>
@@ -1615,30 +1619,12 @@ const DashboardContent = ({ navigation }) => {
                                             {activeJobsCount}/{maxActiveJobs}
                                         </Text>
                                     </View>
-                                    <View style={[styles.limitBadge, { backgroundColor: `${theme.accentWarning}14`, borderColor: `${theme.accentWarning}60` }]}>
-                                        <Text style={[styles.limitBadgeLabel, { color: theme.textMuted }]}>
-                                            {safeT('myJobsLimitImmediate', 'Immediate')}
-                                        </Text>
-                                        <Text style={[styles.limitBadgeValue, { color: theme.textPrimary }]}>
-                                            {immediateOrdersCount}/{maxImmediateOrders}
-                                        </Text>
-                                    </View>
-                                </View>
-                                <View style={styles.limitsRow}>
-                                    <View style={[styles.limitBadge, { backgroundColor: `${theme.accentSuccess}12`, borderColor: `${theme.accentSuccess}55` }]}>
+                                    <View style={[styles.limitBadge, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
                                         <Text style={[styles.limitBadgeLabel, { color: theme.textMuted }]}>
                                             {safeT('myJobsLimitPending', 'Awaiting confirmation')}
                                         </Text>
                                         <Text style={[styles.limitBadgeValue, { color: theme.textPrimary }]}>
                                             {pendingOrdersCount}/{maxPendingOrders}
-                                        </Text>
-                                    </View>
-                                    <View style={[styles.limitBadge, { backgroundColor: `${theme.accentDanger}10`, borderColor: `${theme.accentDanger}45` }]}>
-                                        <Text style={[styles.limitBadgeLabel, { color: theme.textMuted }]}>
-                                            {safeT('myJobsLimitStarted', 'In progress')}
-                                        </Text>
-                                        <Text style={[styles.limitBadgeValue, { color: theme.textPrimary }]}>
-                                            {startedOrdersCount}/1
                                         </Text>
                                     </View>
                                 </View>
@@ -2204,10 +2190,10 @@ const styles = StyleSheet.create({
     historyFilterChip: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1 },
     historySortRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
     historySortChip: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1 },
-    limitsCard: { borderWidth: 1, borderRadius: 14, padding: 10, marginBottom: 12, gap: 8 },
+    limitsCard: { borderWidth: 1, borderRadius: 14, padding: 10, marginBottom: 12, gap: 6 },
     limitsTitle: { fontSize: 12, fontWeight: '700' },
     limitsRow: { flexDirection: 'row', gap: 8 },
-    limitBadge: { flex: 1, borderWidth: 1, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 10, gap: 2 },
+    limitBadge: { flex: 1, borderWidth: 1, borderRadius: 10, paddingVertical: 6, paddingHorizontal: 10, gap: 2 },
     limitBadgeLabel: { fontSize: 10, fontWeight: '600' },
     limitBadgeValue: { fontSize: 14, fontWeight: '700' },
     historyTable: { borderWidth: 1, borderRadius: 12, overflow: 'hidden' },

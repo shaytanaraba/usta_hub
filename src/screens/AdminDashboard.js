@@ -2434,6 +2434,19 @@ export default function AdminDashboard({ navigation }) {
         } catch (e) { }
     };
 
+    const confirmDestructive = useCallback((title, message, onConfirm) => {
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            const ok = window.confirm(`${title}\n\n${message}`);
+            if (ok) onConfirm?.();
+            return;
+        }
+
+        Alert.alert(title, message, [
+            { text: TRANSLATIONS.cancel || 'Cancel', style: 'cancel' },
+            { text: TRANSLATIONS.delete || 'Delete', style: 'destructive', onPress: () => onConfirm?.() },
+        ]);
+    }, [TRANSLATIONS.cancel, TRANSLATIONS.delete]);
+
     const loadServiceTypes = async () => {
         try {
             const data = ordersService.getAllServiceTypes
@@ -2535,19 +2548,26 @@ export default function AdminDashboard({ navigation }) {
     };
 
     const handleDeleteServiceType = async (id) => {
-        Alert.alert('Delete Type', 'Are you sure?', [
-            { text: 'Cancel' },
-            {
-                text: 'Delete',
-                style: 'destructive',
-                onPress: async () => {
-                    try {
-                        await ordersService.deleteServiceType(id);
-                        loadServiceTypes();
-                    } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
+        confirmDestructive(
+            TRANSLATIONS.deleteService || 'Delete Service',
+            TRANSLATIONS.confirmDeleteService || 'Are you sure?',
+            async () => {
+                try {
+                    setActionLoading(true);
+                    const result = await ordersService.deleteServiceType(id);
+                    if (!result?.success) throw new Error(result?.message || 'Failed to delete service type');
+                    if (serviceTypeModal?.visible && serviceTypeModal?.type?.id === id) {
+                        setServiceTypeModal({ visible: false, type: null });
+                    }
+                    await loadServiceTypes();
+                    showToast(TRANSLATIONS.toastDeleted || 'Deleted', 'success');
+                } catch (e) {
+                    showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (e?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                } finally {
+                    setActionLoading(false);
                 }
             }
-        ]);
+        );
     };
 
     const handleSaveDistrict = async (districtData) => {
@@ -2584,20 +2604,26 @@ export default function AdminDashboard({ navigation }) {
     };
 
     const handleDeleteDistrict = async (id) => {
-        Alert.alert(TRANSLATIONS.deleteDistrict || 'Delete District', TRANSLATIONS.confirmDeleteDistrict || 'Are you sure?', [
-            { text: TRANSLATIONS.cancel || 'Cancel', style: 'cancel' },
-            {
-                text: TRANSLATIONS.delete || 'Delete',
-                style: 'destructive',
-                onPress: async () => {
-                    try {
-                        await ordersService.deleteDistrict(id);
-                        loadManagedDistricts();
-                        loadDistricts();
-                    } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
+        confirmDestructive(
+            TRANSLATIONS.deleteDistrict || 'Delete District',
+            TRANSLATIONS.confirmDeleteDistrict || 'Are you sure?',
+            async () => {
+                try {
+                    setActionLoading(true);
+                    const result = await ordersService.deleteDistrict(id);
+                    if (!result?.success) throw new Error(result?.message || 'Failed to delete district');
+                    if (districtModal?.visible && districtModal?.district?.id === id) {
+                        setDistrictModal({ visible: false, district: null });
+                    }
+                    await Promise.all([loadManagedDistricts(), loadDistricts()]);
+                    showToast(TRANSLATIONS.toastDeleted || 'Deleted', 'success');
+                } catch (e) {
+                    showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (e?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                } finally {
+                    setActionLoading(false);
                 }
             }
-        ]);
+        );
     };
 
     const handleSaveCancellationReason = async (reasonData) => {
@@ -2632,19 +2658,26 @@ export default function AdminDashboard({ navigation }) {
     };
 
     const handleDeleteCancellationReason = async (id) => {
-        Alert.alert(TRANSLATIONS.deleteCancellationReason || 'Delete Reason', TRANSLATIONS.confirmDeleteCancellationReason || 'Are you sure?', [
-            { text: TRANSLATIONS.cancel || 'Cancel', style: 'cancel' },
-            {
-                text: TRANSLATIONS.delete || 'Delete',
-                style: 'destructive',
-                onPress: async () => {
-                    try {
-                        await ordersService.deleteCancellationReason(id);
-                        loadCancellationReasons();
-                    } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
+        confirmDestructive(
+            TRANSLATIONS.deleteCancellationReason || 'Delete Reason',
+            TRANSLATIONS.confirmDeleteCancellationReason || 'Are you sure?',
+            async () => {
+                try {
+                    setActionLoading(true);
+                    const result = await ordersService.deleteCancellationReason(id);
+                    if (!result?.success) throw new Error(result?.message || 'Failed to delete cancellation reason');
+                    if (cancellationReasonModal?.visible && cancellationReasonModal?.reason?.id === id) {
+                        setCancellationReasonModal({ visible: false, reason: null });
+                    }
+                    await loadCancellationReasons();
+                    showToast(TRANSLATIONS.toastDeleted || 'Deleted', 'success');
+                } catch (e) {
+                    showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (e?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                } finally {
+                    setActionLoading(false);
                 }
             }
-        ]);
+        );
     };
 
     // --- Ported Actions ---
