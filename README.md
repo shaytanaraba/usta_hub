@@ -67,6 +67,26 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
    - Open your Supabase SQL Editor
    - Refer to `PROJECT_DOCUMENTATION.md` for database setup instructions.
 
+### Admin Dashboard Optimization (2026-02-08)
+
+- DB patch: `data/PATCH_ADMIN_QUEUE_RPC_OPTIMIZATION.sql`
+- DB tests:
+  - `tests/db/admin/00_prereq_and_smoke.sql`
+  - `tests/db/admin/10_explain_admin_queue.sql`
+  - `tests/db/admin/20_analysis_snapshot.sql`
+- Full runbook and analysis notes:
+  - `docs/ADMIN_DASHBOARD_OPTIMIZATION.md`
+
+### Admin Post-Optimization Fixes (2026-02-08)
+
+- Fixed admin settings-side uncontrolled input warning in Service Type editor by enforcing stable string defaults.
+- Added Kyrgyz localization input (`name_kg`) to Cancellation Reasons editor and wired payload save/update.
+- Updated admin sidebar language indicator to flag-based display.
+- Added DB migration guidance for cancellation reasons Kyrgyz column and function return-shape update:
+  - `ALTER TABLE public.cancellation_reasons ADD COLUMN IF NOT EXISTS name_kg TEXT;`
+  - `DROP FUNCTION IF EXISTS public.get_active_cancellation_reasons(text);`
+  - recreate function with `name_kg` in `RETURNS TABLE(...)`.
+
 ### Running the App
 
 #### Option 1: Using Expo Go App (Recommended for Testing)
@@ -148,6 +168,53 @@ This enables browser `Back`/`Forward` for dashboard internal navigation.
 
 - `docs/MASTER_DASHBOARD_MAINTAINABILITY.md`
 - `tests/unit/README.md`
+
+## Dispatcher Dashboard Optimization (2026-02-08)
+
+- Added queue data loader hook: `src/screens/dispatcher/hooks/useDispatcherDataLoader.js`
+- Added optimistic action helpers: `src/screens/dispatcher/hooks/useDispatcherActions.js`
+- Added debounced search hook: `src/screens/dispatcher/hooks/useDebouncedValue.js`
+- Added perf logger hook: `src/screens/dispatcher/hooks/useDispatcherPerf.js`
+- Added metadata TTL cache utility: `src/screens/dispatcher/utils/metadataCache.js`
+- Added reducer-based UI state hook: `src/screens/dispatcher/hooks/useDispatcherUiState.js`
+- Added extracted dispatcher order action hook: `src/screens/dispatcher/hooks/useDispatcherOrderActions.js`
+- Added centralized dispatcher logger: `src/screens/dispatcher/utils/logger.js`
+- Extracted tabs:
+  - `src/screens/dispatcher/components/tabs/DispatcherCreateOrderTab.js`
+  - `src/screens/dispatcher/components/tabs/DispatcherSettingsTab.js`
+- Moved large dispatcher styles into:
+  - `src/screens/dispatcher/styles/dashboardStyles.js`
+- Updated dispatcher screen to use:
+  - server-side queue pagination/filtering
+  - action-side optimistic updates + background refresh
+  - tuned `FlatList` virtualization
+  - stale-load guards for queue/stats async flows
+
+### Dispatcher Logging Controls
+
+- `EXPO_PUBLIC_ENABLE_PERF_LOGS=1` enables perf traces.
+- `EXPO_PUBLIC_ENABLE_DISPATCHER_LOGS=1` enables dispatcher info-level logs.
+- `EXPO_PUBLIC_ENABLE_ORDERS_LOGS=1` enables verbose `OrdersService` console logs.
+
+### Dispatcher DB Optimization
+
+- Added patch:
+  - `data/PATCH_DISPATCHER_QUEUE_RPC_OPTIMIZATION.sql`
+- Adds:
+  - indexes for dispatcher queue scope/sort
+  - RPC `get_dispatcher_orders_page(...)`
+  - RPC `get_dispatcher_stats_summary(...)`
+
+### Dispatcher DB Tests
+
+- `tests/db/dispatcher/00_prereq_and_smoke.sql`
+- `tests/db/dispatcher/10_explain_dispatcher_queue.sql`
+- `tests/db/dispatcher/README.md`
+
+### Dispatcher Optimization Documentation
+
+- `docs/DISPATCHER_DASHBOARD_OPTIMIZATION.md`
+- `data/DISPATCHER_DB_OPTIMIZATION.md`
 
 ## Key Services
 

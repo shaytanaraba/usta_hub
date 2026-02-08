@@ -6,6 +6,12 @@
 import { supabase } from '../lib/supabase';
 
 const LOG_PREFIX = '[EarningsService]';
+const ENABLE_EARNINGS_LOGS = process?.env?.EXPO_PUBLIC_ENABLE_EARNINGS_LOGS === '1';
+const earningsLog = (...args) => {
+    if (ENABLE_EARNINGS_LOGS) {
+        console.log(...args);
+    }
+};
 
 class EarningsService {
     // ============================================
@@ -16,7 +22,7 @@ class EarningsService {
      * Get master's financial summary with balance system fields
      */
     async getMasterFinancialSummary(masterId) {
-        console.log(`${LOG_PREFIX} Fetching financial summary for master: ${masterId}`);
+        earningsLog(`${LOG_PREFIX} Fetching financial summary for master: ${masterId}`);
 
         try {
             const { data, error } = await supabase
@@ -58,7 +64,7 @@ class EarningsService {
                 phone: data.phone || ''
             };
 
-            console.log(`${LOG_PREFIX} Summary:`, summary);
+            earningsLog(`${LOG_PREFIX} Summary:`, summary);
             return summary;
         } catch (error) {
             console.error(`${LOG_PREFIX} getMasterFinancialSummary failed:`, error);
@@ -90,7 +96,7 @@ class EarningsService {
      * Get master's earnings history
      */
     async getMasterEarnings(masterId, limit = 50) {
-        console.log(`${LOG_PREFIX} Fetching earnings history for master: ${masterId}`);
+        earningsLog(`${LOG_PREFIX} Fetching earnings history for master: ${masterId}`);
 
         try {
             const { data, error } = await supabase
@@ -108,7 +114,7 @@ class EarningsService {
                 .limit(limit);
 
             if (error) throw error;
-            console.log(`${LOG_PREFIX} Found ${data.length} earnings records`);
+            earningsLog(`${LOG_PREFIX} Found ${data.length} earnings records`);
             return data;
         } catch (error) {
             console.error(`${LOG_PREFIX} getMasterEarnings failed:`, error);
@@ -120,7 +126,7 @@ class EarningsService {
      * Get pending earnings (commission not yet paid)
      */
     async getPendingEarnings(masterId) {
-        console.log(`${LOG_PREFIX} Fetching pending earnings for master: ${masterId}`);
+        earningsLog(`${LOG_PREFIX} Fetching pending earnings for master: ${masterId}`);
 
         try {
             const { data, error } = await supabase
@@ -146,7 +152,7 @@ class EarningsService {
      * Get commission collection status (all masters with outstanding balance)
      */
     async getCommissionCollectionStatus() {
-        console.log(`${LOG_PREFIX} Fetching commission collection status...`);
+        earningsLog(`${LOG_PREFIX} Fetching commission collection status...`);
 
         try {
             const { data, error } = await supabase
@@ -157,7 +163,7 @@ class EarningsService {
                 .order('total_commission_owed', { ascending: false });
 
             if (error) throw error;
-            console.log(`${LOG_PREFIX} Found ${data.length} masters with outstanding commission`);
+            earningsLog(`${LOG_PREFIX} Found ${data.length} masters with outstanding commission`);
             return data;
         } catch (error) {
             console.error(`${LOG_PREFIX} getCommissionCollectionStatus failed:`, error);
@@ -174,7 +180,7 @@ class EarningsService {
      * total_commission_owed to total_commission_paid without creating new earnings.
      */
     async recordCommissionPayment(masterId, paymentData, confirmerId) {
-        console.log(`${LOG_PREFIX} Recording commission payment (RPC) from master: ${masterId}`);
+        earningsLog(`${LOG_PREFIX} Recording commission payment (RPC) from master: ${masterId}`);
 
         try {
             const { amount, paymentMethod, paymentReference, notes } = paymentData;
@@ -197,7 +203,7 @@ class EarningsService {
                 throw error;
             }
 
-            console.log(`${LOG_PREFIX} Payment recorded successfully via RPC:`, data);
+            earningsLog(`${LOG_PREFIX} Payment recorded successfully via RPC:`, data);
 
             return {
                 success: true,
@@ -214,7 +220,7 @@ class EarningsService {
      * Get commission payment history for master
      */
     async getCommissionPayments(masterId) {
-        console.log(`${LOG_PREFIX} Fetching commission payments for master: ${masterId}`);
+        earningsLog(`${LOG_PREFIX} Fetching commission payments for master: ${masterId}`);
 
         try {
             const { data, error } = await supabase
@@ -240,7 +246,7 @@ class EarningsService {
      * @returns {Object} { totalOutstanding, totalCollected, mastersWithDebt: Array }
      */
     async getCommissionStats(dateFilter = { type: 'all' }) {
-        console.log(`${LOG_PREFIX} Fetching commission statistics with filter:`, dateFilter);
+        earningsLog(`${LOG_PREFIX} Fetching commission statistics with filter:`, dateFilter);
 
         try {
             // Commission is now deducted directly from balance transactions
@@ -293,7 +299,7 @@ class EarningsService {
                 mastersWithDebt: []
             };
 
-            console.log(`${LOG_PREFIX} Commission stats:`, stats);
+            earningsLog(`${LOG_PREFIX} Commission stats:`, stats);
             return stats;
         } catch (error) {
             console.error(`${LOG_PREFIX} getCommissionStats failed:`, error);
@@ -306,7 +312,7 @@ class EarningsService {
      * Used in My Account tab to show deposit/commission history
      */
     async getBalanceTransactions(masterId, limit = 30) {
-        console.log(`${LOG_PREFIX} Fetching balance transactions for master: ${masterId}`);
+        earningsLog(`${LOG_PREFIX} Fetching balance transactions for master: ${masterId}`);
         try {
             const { data, error } = await supabase
                 .from('balance_transactions')
@@ -373,7 +379,7 @@ class EarningsService {
      * @param {string} notes - Optional notes for the transaction
      */
     async addMasterBalance(masterId, amount, transactionType = 'top_up', notes = null) {
-        console.log(`${LOG_PREFIX} Adding balance to master ${masterId}: ${amount} (${transactionType})`);
+        earningsLog(`${LOG_PREFIX} Adding balance to master ${masterId}: ${amount} (${transactionType})`);
 
         try {
             const { data, error } = await supabase.rpc('add_master_balance', {
@@ -392,7 +398,7 @@ class EarningsService {
                 return { success: false, message: data.message || 'Failed to add balance' };
             }
 
-            console.log(`${LOG_PREFIX} Balance updated:`, data);
+            earningsLog(`${LOG_PREFIX} Balance updated:`, data);
             return {
                 success: true,
                 message: `Balance updated from ${data.balance_before} to ${data.balance_after}`,

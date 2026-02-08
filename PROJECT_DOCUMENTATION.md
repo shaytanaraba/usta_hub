@@ -112,7 +112,96 @@ master-kg/
 - Added app-side fallback:
   - `ordersService.getAvailableOrders` calls RPC first.
   - Falls back to legacy multi-query flow if RPC is missing/fails.
-- DB validation is now documented as SQL snippets inside optimization notes and patch files (no dedicated `tests/db` scripts kept in repo).
+- DB validation is documented via SQL runbooks and dedicated DB test scripts under `tests/db`.
+
+### Dispatcher Dashboard (frontend/app layer)
+- Added extracted hooks:
+  - `src/screens/dispatcher/hooks/useDispatcherDataLoader.js`
+  - `src/screens/dispatcher/hooks/useDispatcherActions.js`
+  - `src/screens/dispatcher/hooks/useDebouncedValue.js`
+  - `src/screens/dispatcher/hooks/useDispatcherPerf.js`
+  - `src/screens/dispatcher/hooks/useDispatcherUiState.js`
+  - `src/screens/dispatcher/hooks/useDispatcherOrderActions.js`
+- Added metadata TTL cache utility:
+  - `src/screens/dispatcher/utils/metadataCache.js`
+- Added centralized dispatcher logger utility:
+  - `src/screens/dispatcher/utils/logger.js`
+- Extracted tab components:
+  - `src/screens/dispatcher/components/tabs/DispatcherCreateOrderTab.js`
+  - `src/screens/dispatcher/components/tabs/DispatcherSettingsTab.js`
+- Moved large style map to:
+  - `src/screens/dispatcher/styles/dashboardStyles.js`
+- Queue now uses server-side filtering/pagination instead of full client-side scans.
+- Search-triggered reload is debounced (220ms).
+- Action handlers use optimistic state updates + scheduled background reload.
+- List rendering tuned with virtualization props (`initialNumToRender`, `maxToRenderPerBatch`, `windowSize`, etc.).
+- Added perf logs for queue/stats/metadata load timings.
+- Added stale-load protection (load-id guards) to prevent out-of-order async responses from overwriting current state.
+- `OrdersService` verbose logs are now env-gated with `EXPO_PUBLIC_ENABLE_ORDERS_LOGS=1`.
+
+### Dispatcher Queue (database/query layer)
+- Added patch `data/PATCH_DISPATCHER_QUEUE_RPC_OPTIMIZATION.sql`.
+- Added dispatcher-scope indexes:
+  - `idx_orders_dispatcher_scope_assigned_created`
+  - `idx_orders_dispatcher_scope_creator_created`
+  - `idx_orders_dispatcher_scope_status_created`
+  - `idx_orders_assigned_scope_status_created`
+  - `idx_orders_dispatcher_scope_urgency_service_created`
+  - `idx_orders_assigned_scope_urgency_service_created`
+- Added RPC:
+  - `public.get_dispatcher_orders_page(...)`
+  - returns `items`, `total_count`, `status_counts`, `attention_items`, `attention_count`
+- Added RPC:
+  - `public.get_dispatcher_stats_summary(...)`
+  - returns `current`, `previous`, `delta`, `series`, `range`
+- App-side fallback is preserved if RPCs are missing/unavailable.
+- DB tests and analysis scripts:
+  - `tests/db/dispatcher/00_prereq_and_smoke.sql`
+  - `tests/db/dispatcher/10_explain_dispatcher_queue.sql`
+  - `tests/db/dispatcher/README.md`
+- DB-only documentation:
+  - `data/DISPATCHER_DB_OPTIMIZATION.md`
+
+### Admin Dashboard (frontend/app layer)
+- Admin queue now uses server-side paging flow with `ordersService.getAdminOrdersPage(...)`.
+- Added in-flight request dedupe and short-lived response cache for identical queue requests.
+- Initial load is now staged:
+  - load only core references + active tab data first
+  - lazy-load other tab datasets when tab is opened
+- Orders tab now:
+  - requests queue pages from server with filters/sort/page params
+  - uses debounced search (`src/screens/admin/hooks/useDebouncedValue.js`)
+  - refreshes active tab only (not full dashboard-wide reload)
+- Added tab-level loading indicator for smoother UX during lazy tab loads.
+- Reduced log noise:
+  - `EarningsService` logs are now env-gated with `EXPO_PUBLIC_ENABLE_EARNINGS_LOGS=1`.
+- Removed duplicate `getPlatformSettings` implementation in `OrdersService`.
+- Fixed uncontrolled input warnings in admin Service Type sidebar by normalizing form defaults and forcing text input values to string.
+- Added Cancellation Reason `name_kg` editor field in admin settings and wired app-layer payload support.
+- Sidebar language chip now displays flags instead of text abbreviations.
+
+### Admin Queue (database/query layer)
+- Added patch:
+  - `data/PATCH_ADMIN_QUEUE_RPC_OPTIMIZATION.sql`
+- Added indexes:
+  - `idx_orders_admin_status_created_at`
+  - `idx_orders_admin_dispatcher_created_at`
+  - `idx_orders_admin_assigned_dispatcher_created_at`
+  - `idx_orders_admin_urgency_service_created_at`
+- Added RPC:
+  - `public.get_admin_orders_page(...)`
+  - returns `items`, `total_count`, `status_counts`, `attention_items`, `attention_count`
+- App-side fallback preserved if RPC is missing/unavailable.
+- Added DB scripts:
+  - `tests/db/admin/00_prereq_and_smoke.sql`
+  - `tests/db/admin/10_explain_admin_queue.sql`
+  - `tests/db/admin/20_analysis_snapshot.sql`
+- Runbook:
+  - `docs/ADMIN_DASHBOARD_OPTIMIZATION.md`
+- Additional schema alignment note:
+  - baseline setup may not include `cancellation_reasons.name_kg`
+  - apply migration in `data/DATABASE_DOCUMENTATION.md` (Cancellation Reasons KG section)
+  - when changing `get_active_cancellation_reasons(...)` return columns, drop and recreate function to avoid Postgres `42P13`.
 
 ## 1.7 Maintainability Refactor (2026-02-08)
 
@@ -651,6 +740,20 @@ This section covers the Supabase settings needed to support the session reliabil
 ---
 
 # 5. Version History & Changelog
+
+## v5.4.4 - Admin Localization/Data Alignment Fixes (February 8, 2026)
+
+### Admin UI Stability
+- Fixed Service Type sidebar controlled/uncontrolled input warning on web.
+- Normalized admin settings search icons and sidebar glyphs to stable icon components.
+- Sidebar language selector switched to flag display.
+
+### Cancellation Reasons Localization
+- Added `name_kg` flow in Admin settings editor (frontend payload + form fields).
+- Documented required DB migration to add `name_kg` in `cancellation_reasons`.
+- Documented function recreation path for:
+  - `public.get_active_cancellation_reasons(text)`
+  when return shape changes.
 
 ## v5.4.3 - Master Pool RPC + Performance Instrumentation (February 8, 2026)
 

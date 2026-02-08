@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Orders Service - v5 Schema
  * Implements complete state machine with dispatcher-mediated workflow
  */
@@ -7,6 +7,18 @@ import { supabase } from '../lib/supabase';
 import { normalizeKyrgyzPhone as normalizeKyrgyzPhoneUtil, validateKyrgyzPhone as validateKyrgyzPhoneUtil } from '../utils/phone';
 
 const LOG_PREFIX = '[OrdersService]';
+const ENABLE_ORDERS_LOGS = process?.env?.EXPO_PUBLIC_ENABLE_ORDERS_LOGS === '1';
+const ENABLE_PERF_LOGS = process?.env?.EXPO_PUBLIC_ENABLE_PERF_LOGS === '1';
+const serviceLog = (...args) => {
+  if (ENABLE_ORDERS_LOGS) {
+    console.log(...args);
+  }
+};
+const perfLog = (...args) => {
+  if (ENABLE_PERF_LOGS) {
+    console.log(...args);
+  }
+};
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const isTransientError = (error) => {
@@ -32,6 +44,9 @@ const callWithRetry = async (fn, retries = 1, delayMs = 300) => {
   return fn();
 };
 const POOL_RPC_NAME = 'get_available_orders_pool';
+const DISPATCHER_QUEUE_RPC_NAME = 'get_dispatcher_orders_page';
+const DISPATCHER_STATS_RPC_NAME = 'get_dispatcher_stats_summary';
+const ADMIN_QUEUE_RPC_NAME = 'get_admin_orders_page';
 const normalizePoolFilters = (filters = {}) => ({
   urgency: filters?.urgency && filters.urgency !== '' ? filters.urgency : 'all',
   service: filters?.service && filters.service !== '' ? filters.service : 'all',
@@ -58,6 +73,235 @@ export const ORDER_STATUS = {
   EXPIRED: 'expired',
 };
 
+const ACTIVE_DISPATCHER_STATUSES = [
+  ORDER_STATUS.PLACED,
+  ORDER_STATUS.REOPENED,
+  ORDER_STATUS.CLAIMED,
+  ORDER_STATUS.STARTED,
+];
+
+const mapDispatcherQueueStatusToStatuses = (status) => {
+  switch (String(status || 'Active')) {
+    case 'Payment':
+      return [ORDER_STATUS.COMPLETED];
+    case 'Confirmed':
+      return [ORDER_STATUS.CONFIRMED];
+    case 'Canceled':
+      return [ORDER_STATUS.CANCELED_BY_MASTER, ORDER_STATUS.CANCELED_BY_CLIENT];
+    case 'Active':
+    default:
+      return ACTIVE_DISPATCHER_STATUSES;
+  }
+};
+
+const normalizeDispatcherQueueOptions = (options = {}) => ({
+  page: Number.isInteger(options.page) && options.page > 0 ? options.page : 1,
+  limit: Number.isInteger(options.limit) && options.limit > 0 ? options.limit : 20,
+  status: String(options.status || 'Active'),
+  search: String(options.search || '').trim(),
+  urgency: options.urgency && options.urgency !== '' ? options.urgency : 'all',
+  serviceType: options.serviceType && options.serviceType !== '' ? options.serviceType : 'all',
+  sort: options.sort === 'oldest' ? 'oldest' : 'newest',
+});
+
+const ACTIVE_ADMIN_STATUSES = [
+  ORDER_STATUS.PLACED,
+  ORDER_STATUS.REOPENED,
+  ORDER_STATUS.CLAIMED,
+  ORDER_STATUS.STARTED,
+];
+
+const normalizeAdminQueueOptions = (options = {}) => ({
+  page: Number.isInteger(options.page) && options.page > 0 ? options.page : 1,
+  limit: Number.isInteger(options.limit) && options.limit > 0 ? options.limit : 20,
+  status: String(options.status || 'Active'),
+  search: String(options.search || '').trim(),
+  dispatcher: options.dispatcher && options.dispatcher !== '' ? String(options.dispatcher) : 'all',
+  urgency: options.urgency && options.urgency !== '' ? options.urgency : 'all',
+  serviceType: options.serviceType && options.serviceType !== '' ? options.serviceType : 'all',
+  sort: options.sort === 'oldest' ? 'oldest' : 'newest',
+});
+
+const mapAdminQueueStatusToStatuses = (status) => {
+  switch (String(status || 'Active')) {
+    case 'Payment':
+      return [ORDER_STATUS.COMPLETED];
+    case 'Confirmed':
+      return [ORDER_STATUS.CONFIRMED];
+    case 'Canceled':
+      return [ORDER_STATUS.CANCELED_BY_MASTER, ORDER_STATUS.CANCELED_BY_CLIENT];
+    case 'Active':
+    default:
+      return ACTIVE_ADMIN_STATUSES;
+  }
+};
+
+const computeAdminStatusCounts = (orders = []) => {
+  const counts = { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 };
+  for (const order of orders) {
+    const status = String(order?.status || '');
+    if (ACTIVE_ADMIN_STATUSES.includes(status)) counts.Active += 1;
+    else if (status === ORDER_STATUS.COMPLETED) counts.Payment += 1;
+    else if (status === ORDER_STATUS.CONFIRMED) counts.Confirmed += 1;
+    else if (status.includes('canceled')) counts.Canceled += 1;
+  }
+  return counts;
+};
+
+const computeAdminNeedsAttention = (orders = []) => {
+  const now = Date.now();
+  return (orders || [])
+    .filter((o) => {
+      const status = String(o?.status || '');
+      if (o?.is_disputed) return true;
+      if (status === ORDER_STATUS.COMPLETED) return true;
+      if (status === ORDER_STATUS.CANCELED_BY_CLIENT) return false;
+      if (status === ORDER_STATUS.CANCELED_BY_MASTER) return true;
+      if (status === ORDER_STATUS.PLACED) {
+        const createdAt = new Date(o?.created_at || 0).getTime();
+        return createdAt > 0 && (now - createdAt) > 15 * 60 * 1000;
+      }
+      if (status === ORDER_STATUS.CLAIMED) {
+        const updatedAt = new Date(o?.updated_at || 0).getTime();
+        return updatedAt > 0 && (now - updatedAt) > 30 * 60 * 1000;
+      }
+      return false;
+    })
+    .sort((a, b) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
+};
+
+const matchesAdminSearch = (order, searchText = '') => {
+  if (!searchText) return true;
+  const qRaw = String(searchText || '').trim().toLowerCase();
+  if (!qRaw) return true;
+  const q = qRaw.startsWith('#') ? qRaw.slice(1) : qRaw;
+  const qDigits = q.replace(/\D/g, '');
+  const id = String(order?.id || '').toLowerCase();
+  const idMatch = q.length <= 6 ? id.endsWith(q) : id.includes(q);
+  const clientName = String(order?.client?.full_name || '').toLowerCase();
+  const masterName = String(order?.master?.full_name || '').toLowerCase();
+  const fullAddress = String(order?.full_address || '').toLowerCase();
+  const phoneRaw = String(order?.client?.phone || order?.client_phone || '');
+  const phoneDigits = phoneRaw.replace(/\D/g, '');
+  const phoneMatch = qDigits ? phoneDigits.includes(qDigits) : phoneRaw.toLowerCase().includes(q);
+  return idMatch || clientName.includes(q) || masterName.includes(q) || fullAddress.includes(q) || phoneMatch;
+};
+
+const computeDispatcherStatusCounts = (orders = []) => {
+  const counts = { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 };
+  for (const order of orders) {
+    const status = String(order?.status || '');
+    if (ACTIVE_DISPATCHER_STATUSES.includes(status)) {
+      counts.Active += 1;
+    } else if (status === ORDER_STATUS.COMPLETED) {
+      counts.Payment += 1;
+    } else if (status === ORDER_STATUS.CONFIRMED) {
+      counts.Confirmed += 1;
+    } else if (status.includes('canceled')) {
+      counts.Canceled += 1;
+    }
+  }
+  return counts;
+};
+
+const computeDispatcherNeedsAttention = (orders = []) => {
+  const now = Date.now();
+  return (orders || [])
+    .filter((order) => {
+      const status = order?.status;
+      if (order?.is_disputed) return true;
+      if (status === ORDER_STATUS.COMPLETED) return true;
+      if (status === ORDER_STATUS.CANCELED_BY_CLIENT) return false;
+      if (status === ORDER_STATUS.CANCELED_BY_MASTER) return true;
+      if (status === ORDER_STATUS.PLACED) {
+        const createdAt = new Date(order?.created_at || 0).getTime();
+        return createdAt > 0 && (now - createdAt) > 15 * 60 * 1000;
+      }
+      if (status === ORDER_STATUS.CLAIMED) {
+        const updatedAt = new Date(order?.updated_at || 0).getTime();
+        return updatedAt > 0 && (now - updatedAt) > 30 * 60 * 1000;
+      }
+      return false;
+    })
+    .sort((a, b) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
+};
+
+const buildDispatcherStatsFromOrders = (dispatcherId, orders = [], days = 7) => {
+  const safeDays = Math.max(1, Number.isInteger(days) ? days : 7);
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (safeDays - 1));
+  const prevStart = new Date(start);
+  prevStart.setDate(prevStart.getDate() - safeDays);
+
+  const inCurrent = [];
+  const inPrevious = [];
+  for (const order of orders) {
+    const createdAt = order?.created_at ? new Date(order.created_at) : null;
+    if (!createdAt || Number.isNaN(createdAt.getTime())) continue;
+    if (createdAt >= start) inCurrent.push(order);
+    if (createdAt >= prevStart && createdAt < start) inPrevious.push(order);
+  }
+
+  const countBlock = (items) => {
+    const created = items.filter((o) => String(o?.dispatcher_id) === String(dispatcherId)).length;
+    const handled = items.filter((o) => String(o?.assigned_dispatcher_id || o?.dispatcher_id) === String(dispatcherId)).length;
+    const completed = items.filter((o) => [ORDER_STATUS.COMPLETED, ORDER_STATUS.CONFIRMED].includes(o?.status)).length;
+    const canceled = items.filter((o) => String(o?.status || '').includes('canceled')).length;
+    const completionRate = created ? Math.round((completed / created) * 100) : 0;
+    const cancelRate = created ? Math.round((canceled / created) * 100) : 0;
+    return { created, handled, completed, canceled, completionRate, cancelRate };
+  };
+
+  const current = countBlock(inCurrent);
+  const previous = countBlock(inPrevious);
+  const deltaPct = (c, p) => {
+    if (!p && !c) return 0;
+    if (!p) return 100;
+    return Math.round(((c - p) / p) * 100);
+  };
+
+  const createdSeries = new Array(safeDays).fill(0);
+  const handledSeries = new Array(safeDays).fill(0);
+  for (const order of inCurrent) {
+    const createdDate = order?.created_at ? new Date(order.created_at) : null;
+    if (createdDate && String(order?.dispatcher_id) === String(dispatcherId)) {
+      const day = new Date(createdDate);
+      day.setHours(0, 0, 0, 0);
+      const idx = Math.floor((day - start) / (24 * 60 * 60 * 1000));
+      if (idx >= 0 && idx < safeDays) createdSeries[idx] += 1;
+    }
+    const handledDateRaw = order?.updated_at || order?.created_at;
+    const handledDate = handledDateRaw ? new Date(handledDateRaw) : null;
+    if (handledDate && String(order?.assigned_dispatcher_id || order?.dispatcher_id) === String(dispatcherId)) {
+      const day = new Date(handledDate);
+      day.setHours(0, 0, 0, 0);
+      const idx = Math.floor((day - start) / (24 * 60 * 60 * 1000));
+      if (idx >= 0 && idx < safeDays) handledSeries[idx] += 1;
+    }
+  }
+
+  return {
+    current,
+    previous,
+    delta: {
+      created: deltaPct(current.created, previous.created),
+      handled: deltaPct(current.handled, previous.handled),
+      completed: deltaPct(current.completed, previous.completed),
+      canceled: deltaPct(current.canceled, previous.canceled),
+    },
+    series: {
+      created: createdSeries,
+      handled: handledSeries,
+    },
+    range: {
+      days: safeDays,
+      startDate: start.toISOString(),
+      endDate: new Date().toISOString(),
+    },
+  };
+};
+
 // Cancellation reasons enum
 export const CANCEL_REASONS = {
   SCOPE_MISMATCH: 'scope_mismatch',
@@ -70,6 +314,17 @@ export const CANCEL_REASONS = {
 };
 
 class OrdersService {
+  adminQueueCache = new Map();
+
+  adminQueueInflight = new Map();
+
+  adminQueueCacheTtlMs = 8000;
+
+  invalidateAdminQueueCache = () => {
+    this.adminQueueCache.clear();
+    this.adminQueueInflight.clear();
+  }
+
   // ============================================
   // MASTER FUNCTIONS
   // ============================================
@@ -183,7 +438,7 @@ class OrdersService {
         ? [...emergencyOrders, ...nonEmergencyOrders]
         : nonEmergencyOrders;
 
-      console.log(`${LOG_PREFIX} Found ${data.length} available orders (Total: ${totalCount || 0})`);
+      serviceLog(`${LOG_PREFIX} Found ${data.length} available orders (Total: ${totalCount || 0})`);
       return { data, count: totalCount || 0 };
     } catch (error) {
       console.error(`${LOG_PREFIX} getAvailableOrders failed:`, error);
@@ -221,7 +476,7 @@ class OrdersService {
 
       const items = Array.isArray(rpcData?.items) ? rpcData.items : [];
       const count = Number(rpcData?.total_count || 0);
-      console.log(`${LOG_PREFIX} Found ${items.length} available orders (Total: ${count})`);
+      serviceLog(`${LOG_PREFIX} Found ${items.length} available orders (Total: ${count})`);
       return { data: items, count };
     } catch (error) {
       console.warn(`${LOG_PREFIX} ${POOL_RPC_NAME} exception, using legacy flow:`, error?.message || error);
@@ -258,7 +513,7 @@ class OrdersService {
    * Returns detailed blockers/warnings
    */
   canClaimOrder = async (orderId) => {
-    console.log(`${LOG_PREFIX} Checking if can claim order: ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Checking if can claim order: ${orderId}`);
 
     try {
       const { data, error } = await supabase.rpc('check_master_can_claim', {
@@ -304,7 +559,7 @@ class OrdersService {
    * Claim order (master) - Uses unified RPC function with 8 validation checks
    */
   claimOrder = async (orderId) => {
-    console.log(`${LOG_PREFIX} Claiming order: ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Claiming order: ${orderId}`);
 
       try {
         const { data, error } = await callWithRetry(() => supabase.rpc('claim_order', {
@@ -331,7 +586,7 @@ class OrdersService {
         return { success: false, message };
       }
 
-      console.log(`${LOG_PREFIX} Order claimed successfully`);
+      serviceLog(`${LOG_PREFIX} Order claimed successfully`);
       return {
         success: true,
         message: 'Order claimed!',
@@ -345,7 +600,7 @@ class OrdersService {
   }
 
   /**
-   * Start job (master) - Transition: claimed → started
+   * Start job (master) - Transition: claimed в†’ started
    */
   startJob = async (orderId, masterId) => {
       try {
@@ -378,7 +633,7 @@ class OrdersService {
    * Complete job (master) - Submit final price and work details
    */
   completeJob = async (orderId, masterId, completionData) => {
-    console.log(`${LOG_PREFIX} Completing job: ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Completing job: ${orderId}`);
 
     try {
       const { finalPrice, workPerformed, hoursWorked, priceChangeReason } = completionData;
@@ -421,7 +676,7 @@ class OrdersService {
       // Check price deviation
       const deviation = await this.checkPriceDeviation(orderId);
 
-      console.log(`${LOG_PREFIX} Job completed. Deviation check:`, deviation);
+      serviceLog(`${LOG_PREFIX} Job completed. Deviation check:`, deviation);
 
       return {
         success: true,
@@ -440,7 +695,7 @@ class OrdersService {
    * Uses RPC function with SECURITY DEFINER to bypass RLS
    */
   refuseJob = async (orderId, masterId, reason, notes = null) => {
-    console.log(`${LOG_PREFIX} Refusing job: ${orderId}, reason: ${reason}`);
+    serviceLog(`${LOG_PREFIX} Refusing job: ${orderId}, reason: ${reason}`);
 
     try {
       if (!reason) {
@@ -464,7 +719,7 @@ class OrdersService {
         return { success: false, message: data.message };
       }
 
-      console.log(`${LOG_PREFIX} Job refused successfully`);
+      serviceLog(`${LOG_PREFIX} Job refused successfully`);
       return { success: true, message: 'Job canceled. Dispatcher notified.' };
     } catch (error) {
       console.error(`${LOG_PREFIX} refuseJob failed:`, error);
@@ -476,7 +731,7 @@ class OrdersService {
    * Get master's orders (claimed/started/completed)
    */
   getMasterOrders = async (masterId, page = 1, limit = 10) => {
-    console.log(`${LOG_PREFIX} Fetching master orders: ${masterId} (page ${page})...`);
+    serviceLog(`${LOG_PREFIX} Fetching master orders: ${masterId} (page ${page})...`);
 
     try {
       const from = (page - 1) * limit;
@@ -517,7 +772,7 @@ class OrdersService {
         return order;
       });
 
-      console.log(`${LOG_PREFIX} Found ${data.length} master orders (Total: ${count})`);
+      serviceLog(`${LOG_PREFIX} Found ${data.length} master orders (Total: ${count})`);
       return { data: sanitized, count };
     } catch (error) {
       console.error(`${LOG_PREFIX} getMasterOrders failed:`, error);
@@ -533,7 +788,7 @@ class OrdersService {
    * Create order (dispatcher)
    */
   createOrder = async (orderData, dispatcherId) => {
-    console.log(`${LOG_PREFIX} Creating order by dispatcher: ${dispatcherId}`);
+    serviceLog(`${LOG_PREFIX} Creating order by dispatcher: ${dispatcherId}`);
 
     try {
       const {
@@ -596,7 +851,7 @@ class OrdersService {
 
       if (error) throw error;
 
-      console.log(`${LOG_PREFIX} Order created: ${data.id}`);
+      serviceLog(`${LOG_PREFIX} Order created: ${data.id}`);
       return { success: true, message: 'Order created!', order: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} createOrder failed:`, error);
@@ -608,7 +863,7 @@ class OrdersService {
    * Get dispatcher's orders
    */
   getDispatcherOrders = async (dispatcherId, statusFilter = null) => {
-    console.log(`${LOG_PREFIX} Fetching dispatcher orders: ${dispatcherId}`);
+    serviceLog(`${LOG_PREFIX} Fetching dispatcher orders: ${dispatcherId}`);
 
     try {
       let query = supabase
@@ -630,7 +885,7 @@ class OrdersService {
       const { data, error } = await query;
       if (error) throw error;
 
-      console.log(`${LOG_PREFIX} Found ${data.length} dispatcher orders`);
+      serviceLog(`${LOG_PREFIX} Found ${data.length} dispatcher orders`);
       return data;
     } catch (error) {
       console.error(`${LOG_PREFIX} getDispatcherOrders failed:`, error);
@@ -639,53 +894,11 @@ class OrdersService {
   }
 
   /**
-   * Confirm payment (dispatcher) - Final closure
-   */
-  confirmPayment = async (orderId, dispatcherId, paymentData) => {
-    console.log(`${LOG_PREFIX} Confirming payment for order: ${orderId}`);
-
-    try {
-      const { paymentMethod, paymentProofUrl } = paymentData;
-
-      if (!paymentMethod) {
-        throw new Error('Payment method is required');
-      }
-
-      if (paymentMethod === 'transfer' && !paymentProofUrl) {
-        throw new Error('Proof required for bank transfers');
-      }
-
-      const { data, error } = await supabase
-        .from('orders')
-        .update({
-          status: ORDER_STATUS.CONFIRMED,
-          confirmed_at: new Date().toISOString(),
-          payment_method: paymentMethod,
-          payment_proof_url: paymentProofUrl || null,
-          payment_confirmed_by: dispatcherId
-        })
-        .eq('id', orderId)
-        .eq('dispatcher_id', dispatcherId)
-        .eq('status', ORDER_STATUS.COMPLETED)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      console.log(`${LOG_PREFIX} Payment confirmed for order: ${orderId}`);
-      return { success: true, message: 'Payment confirmed!', order: data };
-    } catch (error) {
-      console.error(`${LOG_PREFIX} confirmPayment failed:`, error);
-      return { success: false, message: error.message };
-    }
-  }
-
-  /**
    * Update order inline (dispatcher edit)
    * Updates editable fields and creates audit log entry
    */
   updateOrderInline = async (orderId, updates) => {
-    console.log(`${LOG_PREFIX} Updating order inline: ${orderId}`, updates);
+    serviceLog(`${LOG_PREFIX} Updating order inline: ${orderId}`, updates);
 
     try {
       // Get current order for audit log (before update)
@@ -699,8 +912,8 @@ class OrdersService {
 
       // Prepare the update payload - only include non-client fields
       // Handle callout_fee: convert string to number, empty/NaN to null
-      console.log(`${LOG_PREFIX} Raw callout_fee value:`, updates.callout_fee, 'type:', typeof updates.callout_fee);
-      console.log(`${LOG_PREFIX} Raw initial_price value:`, updates.initial_price, 'type:', typeof updates.initial_price);
+      serviceLog(`${LOG_PREFIX} Raw callout_fee value:`, updates.callout_fee, 'type:', typeof updates.callout_fee);
+      serviceLog(`${LOG_PREFIX} Raw initial_price value:`, updates.initial_price, 'type:', typeof updates.initial_price);
 
       const feeValue = updates.callout_fee !== '' && updates.callout_fee !== null && updates.callout_fee !== undefined
         ? parseFloat(updates.callout_fee)
@@ -730,7 +943,7 @@ class OrdersService {
         updated_at: new Date().toISOString()
       };
 
-      console.log(`${LOG_PREFIX} Final updatePayload:`, JSON.stringify(updatePayload));
+      serviceLog(`${LOG_PREFIX} Final updatePayload:`, JSON.stringify(updatePayload));
 
       // Use the database function which has SECURITY DEFINER
       // This bypasses RLS and allows dispatcher to update fee fields
@@ -739,7 +952,7 @@ class OrdersService {
         p_updates: updatePayload
       });
 
-      console.log(`${LOG_PREFIX} RPC result:`, rpcResult);
+      serviceLog(`${LOG_PREFIX} RPC result:`, rpcResult);
 
       if (rpcError) {
         console.error(`${LOG_PREFIX} RPC error:`, rpcError);
@@ -777,7 +990,7 @@ class OrdersService {
         // Don't fail the whole operation if audit fails
       }
 
-      console.log(`${LOG_PREFIX} Order updated successfully: ${orderId}`);
+      serviceLog(`${LOG_PREFIX} Order updated successfully: ${orderId}`);
       return { success: true, message: 'Order updated', order: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} updateOrderInline failed:`, error);
@@ -789,7 +1002,7 @@ class OrdersService {
    * Transfer order to another dispatcher (current handler only)
    */
   transferOrderToDispatcher = async (orderId, currentDispatcherId, targetDispatcherId, callerRole = null) => {
-    console.log(`${LOG_PREFIX} Transfer order ${orderId} to dispatcher ${targetDispatcherId}`);
+    serviceLog(`${LOG_PREFIX} Transfer order ${orderId} to dispatcher ${targetDispatcherId}`);
     try {
       if (!orderId || !currentDispatcherId || !targetDispatcherId) {
         throw new Error('Missing transfer parameters');
@@ -816,28 +1029,28 @@ class OrdersService {
    * Allowed from: placed, claimed, started, reopened
    */
   cancelByClient = async (orderId, dispatcherId, reason, callerRole = null) => {
-    console.log(`${LOG_PREFIX} cancelByClient called - orderId: ${orderId}, dispatcherId: ${dispatcherId}, reason: ${reason}`);
+    serviceLog(`${LOG_PREFIX} cancelByClient called - orderId: ${orderId}, dispatcherId: ${dispatcherId}, reason: ${reason}`);
 
     try {
       // First check current status
-      console.log(`${LOG_PREFIX} Fetching order status...`);
+      serviceLog(`${LOG_PREFIX} Fetching order status...`);
       const { data: orderCheck, error: checkError } = await supabase
         .from('orders')
         .select('status, dispatcher_id')
         .eq('id', orderId)
         .single();
 
-      console.log(`${LOG_PREFIX} Order check result:`, orderCheck, 'error:', checkError);
+      serviceLog(`${LOG_PREFIX} Order check result:`, orderCheck, 'error:', checkError);
 
       if (checkError || !orderCheck) {
-        console.log(`${LOG_PREFIX} Order not found or error`);
+        serviceLog(`${LOG_PREFIX} Order not found or error`);
         return { success: false, message: 'Order not found' };
       }
 
-      console.log(`${LOG_PREFIX} Order status: ${orderCheck.status}, Order dispatcher: ${orderCheck.dispatcher_id}, Current dispatcher: ${dispatcherId}`);
+      serviceLog(`${LOG_PREFIX} Order status: ${orderCheck.status}, Order dispatcher: ${orderCheck.dispatcher_id}, Current dispatcher: ${dispatcherId}`);
 
       if (callerRole !== 'admin' && orderCheck.dispatcher_id !== dispatcherId) {
-        console.log(`${LOG_PREFIX} Dispatcher mismatch - not authorized`);
+        serviceLog(`${LOG_PREFIX} Dispatcher mismatch - not authorized`);
         return { success: false, message: 'Not authorized to cancel this order' };
       }
 
@@ -851,15 +1064,15 @@ class OrdersService {
         ORDER_STATUS.REOPENED,
         ORDER_STATUS.EXPIRED
       ];
-      console.log(`${LOG_PREFIX} Allowed statuses:`, allowedStatuses);
-      console.log(`${LOG_PREFIX} Current status '${orderCheck.status}' in allowed?`, allowedStatuses.includes(orderCheck.status));
+      serviceLog(`${LOG_PREFIX} Allowed statuses:`, allowedStatuses);
+      serviceLog(`${LOG_PREFIX} Current status '${orderCheck.status}' in allowed?`, allowedStatuses.includes(orderCheck.status));
 
       if (!allowedStatuses.includes(orderCheck.status)) {
-        console.log(`${LOG_PREFIX} Status not in allowed list`);
+        serviceLog(`${LOG_PREFIX} Status not in allowed list`);
         return { success: false, message: `Cannot cancel order with status: ${orderCheck.status}` };
       }
 
-      console.log(`${LOG_PREFIX} Proceeding with cancellation...`);
+      serviceLog(`${LOG_PREFIX} Proceeding with cancellation...`);
       const { data, error } = await supabase
         .from('orders')
         .update({
@@ -871,10 +1084,10 @@ class OrdersService {
         .select()
         .single();
 
-      console.log(`${LOG_PREFIX} Cancel update result:`, data, 'error:', error);
+      serviceLog(`${LOG_PREFIX} Cancel update result:`, data, 'error:', error);
 
       if (error) throw error;
-      console.log(`${LOG_PREFIX} Order canceled successfully!`);
+      serviceLog(`${LOG_PREFIX} Order canceled successfully!`);
       return { success: true, message: 'Order canceled', order: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} cancelByClient failed:`, error);
@@ -886,7 +1099,7 @@ class OrdersService {
    * Reopen order (dispatcher) - Return canceled order to pool
    */
   reopenOrder = async (orderId, dispatcherId, callerRole = null) => {
-    console.log(`${LOG_PREFIX} Reopening order: ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Reopening order: ${orderId}`);
 
     try {
       if (callerRole === 'admin') {
@@ -931,7 +1144,7 @@ class OrdersService {
    * Unassign master (dispatcher) - Cancel then reopen to return to pool
    */
   unassignMaster = async (orderId, dispatcherId, reason = 'dispatcher_unassign', callerRole = null) => {
-    console.log(`${LOG_PREFIX} Unassigning master from order: ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Unassigning master from order: ${orderId}`);
 
     try {
       if (callerRole === 'admin') {
@@ -980,33 +1193,6 @@ class OrdersService {
   // ============================================
   // ADMIN FUNCTIONS
   // ============================================
-
-  /**
-   * Get all orders (admin only)
-   */
-  getAllOrders = async () => {
-    console.log(`${LOG_PREFIX} Fetching all orders (admin)...`);
-
-    try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          client:client_id(full_name, phone),
-          master:master_id(full_name, phone),
-          dispatcher:dispatcher_id(full_name),
-          assigned_dispatcher:assigned_dispatcher_id(full_name)
-        `)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      console.log(`${LOG_PREFIX} Found ${data.length} total orders`);
-      return data;
-    } catch (error) {
-      console.error(`${LOG_PREFIX} getAllOrders failed:`, error);
-      return [];
-    }
-  }
 
   // (Admin) Order history is implemented near the end of this file to use RPCs.
 
@@ -1102,7 +1288,7 @@ class OrdersService {
    * Get platform statistics
    */
   getPlatformStats = async () => {
-    console.log(`${LOG_PREFIX} Fetching platform stats...`);
+    serviceLog(`${LOG_PREFIX} Fetching platform stats...`);
 
     try {
       const { data: orders, error } = await supabase
@@ -1129,51 +1315,6 @@ class OrdersService {
     }
   }
 
-  /**
-   * Get platform settings (base price, commission)
-   */
-  getPlatformSettings = async () => {
-    console.log(`${LOG_PREFIX} Fetching platform settings...`);
-    try {
-      const { data, error } = await supabase
-        .from('platform_settings')
-        .select('*')
-        .single();
-
-      if (error) throw error;
-      return data;
-    } catch (error) {
-      console.error(`${LOG_PREFIX} getPlatformSettings failed:`, error);
-      return { base_price: 500, commission_rate: 0.20 }; // Fallback defaults from SQL
-    }
-  }
-
-  /**
-   * Update platform settings
-   */
-  updatePlatformSettings = async (settings) => {
-    console.log(`${LOG_PREFIX} Updating platform settings:`, settings);
-    try {
-      // Ensure we are updating the single row, assuming ID 1 or single row enforcement
-      // better to use update without where if it's a single row table, but Supabase requires a WHERE clause usually.
-      // Let's assume there is only one row or we grab the ID first.
-
-      // efficient way: update all rows (since logic implies global singleton) or just id=1
-      const { data, error } = await supabase
-        .from('platform_settings')
-        .update(settings)
-        .eq('id', 1) // Assuming singleton row has ID 1
-        .select()
-        .single();
-
-      if (error) throw error;
-      return { success: true, settings: data };
-    } catch (error) {
-      console.error(`${LOG_PREFIX} updatePlatformSettings failed:`, error);
-      return { success: false, message: error.message };
-    }
-  }
-
   // ============================================
   // DISPATCHER DASHBOARD ENHANCEMENTS
   // ============================================
@@ -1182,7 +1323,7 @@ class OrdersService {
    * Get active districts for forms
    */
   getDistricts = async () => {
-    console.log(`${LOG_PREFIX} Fetching active districts...`);
+    serviceLog(`${LOG_PREFIX} Fetching active districts...`);
     try {
       const { data, error } = await supabase
         .from('districts')
@@ -1191,7 +1332,7 @@ class OrdersService {
         .order('sort_order', { ascending: true });
 
       if (error) throw error;
-      console.log(`${LOG_PREFIX} Found ${data?.length || 0} districts`);
+      serviceLog(`${LOG_PREFIX} Found ${data?.length || 0} districts`);
       return data || [];
     } catch (error) {
       console.error(`${LOG_PREFIX} getDistricts failed:`, error);
@@ -1203,7 +1344,7 @@ class OrdersService {
    * Get all districts (admin management)
    */
   getAllDistricts = async () => {
-    console.log(`${LOG_PREFIX} Fetching all districts...`);
+    serviceLog(`${LOG_PREFIX} Fetching all districts...`);
     try {
       const { data, error } = await supabase
         .from('districts')
@@ -1211,7 +1352,7 @@ class OrdersService {
         .order('sort_order', { ascending: true });
 
       if (error) throw error;
-      console.log(`${LOG_PREFIX} Found ${data?.length || 0} districts`);
+      serviceLog(`${LOG_PREFIX} Found ${data?.length || 0} districts`);
       return data || [];
     } catch (error) {
       console.error(`${LOG_PREFIX} getAllDistricts failed:`, error);
@@ -1319,7 +1460,7 @@ class OrdersService {
    * Client phone is used to look up existing registered clients
    */
   createOrderExtended = async (orderData, dispatcherId) => {
-    console.log(`${LOG_PREFIX} Creating order (extended):`, orderData);
+    serviceLog(`${LOG_PREFIX} Creating order (extended):`, orderData);
 
     try {
       if (!orderData.clientPhone) {
@@ -1342,7 +1483,7 @@ class OrdersService {
         throw new Error('Client name is required');
       }
 
-      console.log(`${LOG_PREFIX} Order data - clientId: ${existingClientId}, clientName: ${clientName}, clientPhone: ${normalizedPhone}`);
+      serviceLog(`${LOG_PREFIX} Order data - clientId: ${existingClientId}, clientName: ${clientName}, clientPhone: ${normalizedPhone}`);
 
       const parsedInitial = orderData.initialPrice !== null && orderData.initialPrice !== undefined
         ? parseFloat(orderData.initialPrice)
@@ -1378,7 +1519,7 @@ class OrdersService {
         dispatcher_note: orderData.dispatcherNote || null,
       };
 
-      console.log(`${LOG_PREFIX} Insert payload:`, JSON.stringify(insertPayload, null, 2));
+      serviceLog(`${LOG_PREFIX} Insert payload:`, JSON.stringify(insertPayload, null, 2));
 
       const { data, error } = await supabase
         .from('orders')
@@ -1394,7 +1535,7 @@ class OrdersService {
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Order created successfully:`, data.id);
+      serviceLog(`${LOG_PREFIX} Order created successfully:`, data.id);
       return { success: true, orderId: data.id, order: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} createOrderExtended failed:`, error);
@@ -1406,7 +1547,7 @@ class OrdersService {
  * Get available masters for assignment (uses RPC function)
  */
   getAvailableMasters = async () => {
-    console.log(`${LOG_PREFIX} Fetching available masters for assignment...`);
+    serviceLog(`${LOG_PREFIX} Fetching available masters for assignment...`);
 
     try {
       const { data, error } = await supabase.rpc('get_available_masters');
@@ -1416,7 +1557,7 @@ class OrdersService {
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Found ${data?.length || 0} available masters`);
+      serviceLog(`${LOG_PREFIX} Found ${data?.length || 0} available masters`);
       return data || [];
     } catch (error) {
       console.error(`${LOG_PREFIX} getAvailableMasters failed:`, error);
@@ -1428,7 +1569,7 @@ class OrdersService {
    * Force assign master to order (dispatcher/admin only)
    */
   forceAssignMaster = async (orderId, masterId, reason = 'Dispatcher assignment') => {
-    console.log(`${LOG_PREFIX} Force assigning master ${masterId} to order ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Force assigning master ${masterId} to order ${orderId}`);
 
     try {
       const { data, error } = await supabase.rpc('force_assign_master', {
@@ -1448,7 +1589,7 @@ class OrdersService {
         return { success: false, message: data?.message, error: errorCode };
       }
 
-      console.log(`${LOG_PREFIX} Master assigned successfully:`, data);
+      serviceLog(`${LOG_PREFIX} Master assigned successfully:`, data);
       return { success: true, message: 'Master assigned!', ...data };
     } catch (error) {
       console.error(`${LOG_PREFIX} forceAssignMaster failed:`, error);
@@ -1466,7 +1607,7 @@ class OrdersService {
    * Confirm payment (admin) - Transition: completed -> confirmed
    */
   confirmPaymentAdmin = async (orderId, paymentMethod = 'cash', paymentProofUrl = null) => {
-    console.log(`${LOG_PREFIX} Admin confirming payment for order: ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Admin confirming payment for order: ${orderId}`);
 
     try {
       const { data: authData, error: authError } = await supabase.auth.getUser();
@@ -1497,7 +1638,7 @@ class OrdersService {
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Admin payment confirmed for order:`, data?.id);
+      serviceLog(`${LOG_PREFIX} Admin payment confirmed for order:`, data?.id);
       return { success: true, message: 'Payment confirmed!', order: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} confirmPaymentAdmin failed:`, error);
@@ -1509,7 +1650,7 @@ class OrdersService {
    * Admin override final price (updates commission + ledger)
    */
   overrideFinalPriceAdmin = async (orderId, finalPrice, reason = 'admin_price_override') => {
-    console.log(`${LOG_PREFIX} Admin overriding final price for order: ${orderId}`, finalPrice);
+    serviceLog(`${LOG_PREFIX} Admin overriding final price for order: ${orderId}`, finalPrice);
 
     try {
       const { data, error } = await supabase.rpc('admin_override_final_price', {
@@ -1538,47 +1679,15 @@ class OrdersService {
   // with proper fee handling and debug logging
 
   /**
-   * Confirm payment (dispatcher) - Transition: completed → confirmed
+   * Confirm payment (dispatcher) - Transition: completed в†’ confirmed
    * Called after client pays the master for completed work
    */
-  confirmPayment = async (orderId, dispatcherId, paymentDetails) => {
-    console.log(`${LOG_PREFIX} Confirming payment for order: ${orderId}`);
-
-    try {
-      const { paymentMethod, paymentProofUrl } = paymentDetails;
-
-      const { data, error } = await supabase
-        .from('orders')
-        .update({
-          status: ORDER_STATUS.CONFIRMED,
-          confirmed_at: new Date().toISOString(),
-          payment_method: paymentMethod || 'cash',
-          payment_proof_url: paymentProofUrl || null,
-        })
-        .eq('id', orderId)
-        .eq('status', ORDER_STATUS.COMPLETED)
-        .select()
-        .single();
-
-      if (error) {
-        console.error(`${LOG_PREFIX} confirmPayment error:`, error);
-        throw error;
-      }
-
-      console.log(`${LOG_PREFIX} Payment confirmed for order:`, data.id);
-      return { success: true, message: 'Payment confirmed!', order: data };
-    } catch (error) {
-      console.error(`${LOG_PREFIX} confirmPayment failed:`, error);
-      return { success: false, message: error.message };
-    }
-  }
-
   /**
    * Get all dispatcher orders with advanced filtering
    * Enhanced version for the new dashboard
    */
   getDispatcherOrdersAdvanced = async (dispatcherId, options = {}) => {
-    console.log(`${LOG_PREFIX} Fetching dispatcher orders with advanced filters:`, options);
+    serviceLog(`${LOG_PREFIX} Fetching dispatcher orders with advanced filters:`, options);
 
     try {
       const { statusFilter, search, urgency, serviceType, sortOrder = 'desc' } = options;
@@ -1629,11 +1738,254 @@ class OrdersService {
         );
       }
 
-      console.log(`${LOG_PREFIX} Found ${results.length} orders with filters`);
+      serviceLog(`${LOG_PREFIX} Found ${results.length} orders with filters`);
       return results;
     } catch (error) {
       console.error(`${LOG_PREFIX} getDispatcherOrdersAdvanced failed:`, error);
       return [];
+    }
+  }
+
+  /**
+   * Get dispatcher queue page with server-side filtering, sorting and counts.
+   * Falls back to client-side flow when RPC is missing.
+   */
+  getDispatcherOrdersPage = async (dispatcherId, options = {}) => {
+    const opts = normalizeDispatcherQueueOptions(options);
+    const perfStart = Date.now();
+    perfLog(`[OrdersService][PERF] dispatcher_queue_start`, { dispatcherId, opts });
+
+    try {
+      const { data: rpcData, error: rpcError } = await callWithRetry(() => supabase.rpc(DISPATCHER_QUEUE_RPC_NAME, {
+        p_dispatcher_id: dispatcherId,
+        p_page: opts.page,
+        p_limit: opts.limit,
+        p_status: opts.status,
+        p_search: opts.search || '',
+        p_urgency: opts.urgency,
+        p_service: opts.serviceType,
+        p_sort: opts.sort,
+      }));
+
+      if (rpcError) {
+        if (isMissingRpcFunction(rpcError, DISPATCHER_QUEUE_RPC_NAME)) {
+          console.warn(`${LOG_PREFIX} ${DISPATCHER_QUEUE_RPC_NAME} missing, falling back`);
+        } else {
+          console.warn(`${LOG_PREFIX} ${DISPATCHER_QUEUE_RPC_NAME} failed, falling back:`, rpcError?.message || rpcError);
+        }
+        throw rpcError;
+      }
+
+      const items = Array.isArray(rpcData?.items) ? rpcData.items : [];
+      const totalCount = Number(rpcData?.total_count || 0);
+      const statusCounts = rpcData?.status_counts || { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 };
+      const attentionItems = Array.isArray(rpcData?.attention_items) ? rpcData.attention_items : [];
+      const attentionCount = Number(rpcData?.attention_count || attentionItems.length || 0);
+      perfLog(`[OrdersService][PERF] dispatcher_queue_done`, { ms: Date.now() - perfStart, rows: items.length, totalCount });
+      return { data: items, count: totalCount, statusCounts, attentionItems, attentionCount, source: 'rpc' };
+    } catch (rpcFallbackError) {
+      try {
+        const allOrders = await this.getDispatcherOrders(dispatcherId);
+        const statusFilter = mapDispatcherQueueStatusToStatuses(opts.status);
+        const filtered = await this.getDispatcherOrdersAdvanced(dispatcherId, {
+          statusFilter,
+          search: opts.search,
+          urgency: opts.urgency,
+          serviceType: opts.serviceType,
+          sortOrder: opts.sort === 'oldest' ? 'asc' : 'desc',
+        });
+        const offset = (opts.page - 1) * opts.limit;
+        const paged = filtered.slice(offset, offset + opts.limit);
+        const attentionItems = computeDispatcherNeedsAttention(allOrders).slice(0, 20);
+        const statusCounts = computeDispatcherStatusCounts(allOrders);
+        perfLog(`[OrdersService][PERF] dispatcher_queue_done`, {
+          ms: Date.now() - perfStart,
+          rows: paged.length,
+          totalCount: filtered.length,
+          source: 'fallback',
+        });
+        return {
+          data: paged,
+          count: filtered.length,
+          statusCounts,
+          attentionItems,
+          attentionCount: attentionItems.length,
+          source: 'fallback',
+        };
+      } catch (error) {
+        console.error(`${LOG_PREFIX} getDispatcherOrdersPage fallback failed:`, error);
+        return {
+          data: [],
+          count: 0,
+          statusCounts: { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 },
+          attentionItems: [],
+          attentionCount: 0,
+          source: 'error',
+        };
+      }
+    }
+  }
+
+  /**
+   * Get aggregated dispatcher stats for the stats tab.
+   * Falls back to client-side aggregation when RPC is missing.
+   */
+  getDispatcherStatsSummary = async (dispatcherId, days = 7) => {
+    const safeDays = Math.max(1, Number.isInteger(days) ? days : 7);
+    const perfStart = Date.now();
+    perfLog(`[OrdersService][PERF] dispatcher_stats_start`, { dispatcherId, days: safeDays });
+    try {
+      const { data: rpcData, error: rpcError } = await callWithRetry(() => supabase.rpc(DISPATCHER_STATS_RPC_NAME, {
+        p_dispatcher_id: dispatcherId,
+        p_days: safeDays,
+      }));
+
+      if (rpcError) {
+        if (isMissingRpcFunction(rpcError, DISPATCHER_STATS_RPC_NAME)) {
+          console.warn(`${LOG_PREFIX} ${DISPATCHER_STATS_RPC_NAME} missing, falling back`);
+        } else {
+          console.warn(`${LOG_PREFIX} ${DISPATCHER_STATS_RPC_NAME} failed, falling back:`, rpcError?.message || rpcError);
+        }
+        throw rpcError;
+      }
+
+      perfLog(`[OrdersService][PERF] dispatcher_stats_done`, { ms: Date.now() - perfStart, source: 'rpc' });
+      return rpcData || buildDispatcherStatsFromOrders(dispatcherId, [], safeDays);
+    } catch (rpcFallbackError) {
+      try {
+        const allOrders = await this.getDispatcherOrders(dispatcherId);
+        const summary = buildDispatcherStatsFromOrders(dispatcherId, allOrders, safeDays);
+        perfLog(`[OrdersService][PERF] dispatcher_stats_done`, { ms: Date.now() - perfStart, source: 'fallback' });
+        return summary;
+      } catch (error) {
+        console.error(`${LOG_PREFIX} getDispatcherStatsSummary failed:`, error);
+        return buildDispatcherStatsFromOrders(dispatcherId, [], safeDays);
+      }
+    }
+  }
+
+  /**
+   * Get admin queue page with server-side filtering and counts.
+   * Falls back to client-side flow when RPC is missing.
+   */
+  getAdminOrdersPage = async (options = {}) => {
+    const opts = normalizeAdminQueueOptions(options);
+    const cacheKey = JSON.stringify(opts);
+    const now = Date.now();
+    const cached = this.adminQueueCache.get(cacheKey);
+    if (cached && (now - cached.ts) < this.adminQueueCacheTtlMs) {
+      return cached.payload;
+    }
+
+    const inFlight = this.adminQueueInflight.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const task = (async () => {
+      const perfStart = Date.now();
+      perfLog(`[OrdersService][PERF] admin_queue_start`, { opts });
+      try {
+        const { data: rpcData, error: rpcError } = await callWithRetry(() => supabase.rpc(ADMIN_QUEUE_RPC_NAME, {
+          p_page: opts.page,
+          p_limit: opts.limit,
+          p_status: opts.status,
+          p_search: opts.search || '',
+          p_dispatcher: opts.dispatcher,
+          p_urgency: opts.urgency,
+          p_service: opts.serviceType,
+          p_sort: opts.sort,
+        }));
+
+        if (rpcError) {
+          if (isMissingRpcFunction(rpcError, ADMIN_QUEUE_RPC_NAME)) {
+            console.warn(`${LOG_PREFIX} ${ADMIN_QUEUE_RPC_NAME} missing, falling back`);
+          } else {
+            console.warn(`${LOG_PREFIX} ${ADMIN_QUEUE_RPC_NAME} failed, falling back:`, rpcError?.message || rpcError);
+          }
+          throw rpcError;
+        }
+
+        const payload = {
+          data: Array.isArray(rpcData?.items) ? rpcData.items : [],
+          count: Number(rpcData?.total_count || 0),
+          statusCounts: rpcData?.status_counts || { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 },
+          attentionItems: Array.isArray(rpcData?.attention_items) ? rpcData.attention_items : [],
+          attentionCount: Number(rpcData?.attention_count || 0),
+          source: 'rpc',
+        };
+        perfLog(`[OrdersService][PERF] admin_queue_done`, {
+          ms: Date.now() - perfStart,
+          rows: payload.data.length,
+          totalCount: payload.count,
+          source: payload.source,
+        });
+        this.adminQueueCache.set(cacheKey, { ts: Date.now(), payload });
+        return payload;
+      } catch (rpcFallbackError) {
+        try {
+          const allOrders = await this.getAllOrders();
+          const statusFilter = mapAdminQueueStatusToStatuses(opts.status);
+          let filtered = (allOrders || []).filter((order) => statusFilter.includes(order?.status));
+
+          if (opts.dispatcher === 'unassigned') {
+            filtered = filtered.filter((o) => !(o?.dispatcher_id || o?.assigned_dispatcher_id));
+          } else if (opts.dispatcher !== 'all') {
+            filtered = filtered.filter((o) => String(o?.dispatcher_id || o?.assigned_dispatcher_id) === String(opts.dispatcher));
+          }
+
+          if (opts.urgency !== 'all') {
+            filtered = filtered.filter((o) => o?.urgency === opts.urgency);
+          }
+          if (opts.serviceType !== 'all') {
+            filtered = filtered.filter((o) => o?.service_type === opts.serviceType);
+          }
+
+          filtered = filtered.filter((o) => matchesAdminSearch(o, opts.search));
+          filtered.sort((a, b) => {
+            const aTs = new Date(a?.created_at || 0).getTime();
+            const bTs = new Date(b?.created_at || 0).getTime();
+            return opts.sort === 'oldest' ? (aTs - bTs) : (bTs - aTs);
+          });
+
+          const offset = (opts.page - 1) * opts.limit;
+          const paged = filtered.slice(offset, offset + opts.limit);
+          const attentionItems = computeAdminNeedsAttention(allOrders).slice(0, 30);
+          const payload = {
+            data: paged,
+            count: filtered.length,
+            statusCounts: computeAdminStatusCounts(allOrders),
+            attentionItems,
+            attentionCount: attentionItems.length,
+            source: 'fallback',
+          };
+          perfLog(`[OrdersService][PERF] admin_queue_done`, {
+            ms: Date.now() - perfStart,
+            rows: payload.data.length,
+            totalCount: payload.count,
+            source: payload.source,
+          });
+          this.adminQueueCache.set(cacheKey, { ts: Date.now(), payload });
+          return payload;
+        } catch (error) {
+          console.error(`${LOG_PREFIX} getAdminOrdersPage fallback failed:`, error);
+          return {
+            data: [],
+            count: 0,
+            statusCounts: { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 },
+            attentionItems: [],
+            attentionCount: 0,
+            source: 'error',
+          };
+        }
+      }
+    })();
+
+    this.adminQueueInflight.set(cacheKey, task);
+    try {
+      return await task;
+    } finally {
+      this.adminQueueInflight.delete(cacheKey);
     }
   }
 
@@ -1646,7 +1998,7 @@ class OrdersService {
    * @param {Object} dateFilter - { type: 'all'|'today'|'week'|'month'|'custom', start?, end? }
    */
   getEnhancedPlatformStats = async (dateFilter = { type: 'all' }) => {
-    console.log(`${LOG_PREFIX} Fetching enhanced platform stats with filter:`, dateFilter);
+    serviceLog(`${LOG_PREFIX} Fetching enhanced platform stats with filter:`, dateFilter);
 
     try {
       // Build date range query
@@ -1741,7 +2093,7 @@ class OrdersService {
         .map(([status, count]) => ({ status, count }))
         .filter(item => item.count > 0); // Only non-zero statuses
 
-      console.log(`${LOG_PREFIX} Enhanced stats calculated:`, stats);
+      serviceLog(`${LOG_PREFIX} Enhanced stats calculated:`, stats);
       return stats;
     } catch (error) {
       console.error(`${LOG_PREFIX} getEnhancedPlatformStats failed:`, error);
@@ -1764,7 +2116,7 @@ class OrdersService {
    * @param {Object} dateFilter - Optional date filter
    */
   getOrdersByStatus = async (statuses = [], dateFilter = { type: 'all' }) => {
-    console.log(`${LOG_PREFIX} Fetching orders by statuses:`, statuses);
+    serviceLog(`${LOG_PREFIX} Fetching orders by statuses:`, statuses);
 
     try {
       let query = supabase
@@ -1813,7 +2165,7 @@ class OrdersService {
       const { data, error } = await query.order('created_at', { ascending: false });
       if (error) throw error;
 
-      console.log(`${LOG_PREFIX} Found ${data.length} orders matching statuses`);
+      serviceLog(`${LOG_PREFIX} Found ${data.length} orders matching statuses`);
       return data;
     } catch (error) {
       console.error(`${LOG_PREFIX} getOrdersByStatus failed:`, error);
@@ -1826,7 +2178,7 @@ class OrdersService {
   
    */
   updateOrder = async (orderId, updates) => {
-    console.log(`${LOG_PREFIX} Updating order (admin): ${orderId}`, updates);
+    serviceLog(`${LOG_PREFIX} Updating order (admin): ${orderId}`, updates);
 
     try {
       const { data, error } = await supabase
@@ -1838,7 +2190,7 @@ class OrdersService {
 
       if (error) throw error;
 
-      console.log(`${LOG_PREFIX} Order updated successfully`);
+      serviceLog(`${LOG_PREFIX} Order updated successfully`);
       return { success: true, message: 'Order updated!', order: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} updateOrder failed:`, error);
@@ -1847,7 +2199,7 @@ class OrdersService {
   }
 
   deleteOrder = async (orderId) => {
-    console.log(`${LOG_PREFIX} Deleting order (admin): ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Deleting order (admin): ${orderId}`);
 
     try {
       const { error } = await supabase
@@ -1857,7 +2209,7 @@ class OrdersService {
 
       if (error) throw error;
 
-      console.log(`${LOG_PREFIX} Order deleted successfully`);
+      serviceLog(`${LOG_PREFIX} Order deleted successfully`);
       return { success: true, message: 'Order deleted!' };
     } catch (error) {
       console.error(`${LOG_PREFIX} deleteOrder failed:`, error);
@@ -1869,7 +2221,7 @@ class OrdersService {
    * Get all orders for Admin
    */
   getAllOrders = async () => {
-    console.log(`${LOG_PREFIX} Fetching ALL orders for Admin`);
+    serviceLog(`${LOG_PREFIX} Fetching ALL orders for Admin`);
     try {
       const { data, error } = await supabase
         .from('orders')
@@ -1895,7 +2247,7 @@ class OrdersService {
    * Transitions order from 'completed' to 'confirmed'
    */
   confirmPayment = async (orderId, dispatcherId, paymentDetails) => {
-    console.log(`${LOG_PREFIX} Confirming payment for order: ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Confirming payment for order: ${orderId}`);
 
     try {
       const { paymentMethod, paymentProofUrl } = paymentDetails;
@@ -1922,7 +2274,7 @@ class OrdersService {
         return { success: false, message: 'Order not in completed status or not found' };
       }
 
-      console.log(`${LOG_PREFIX} Payment confirmed successfully for order ${orderId}`);
+      serviceLog(`${LOG_PREFIX} Payment confirmed successfully for order ${orderId}`);
       return { success: true, message: 'Payment confirmed!', data };
     } catch (error) {
       console.error(`${LOG_PREFIX} confirmPayment failed:`, error);
@@ -1939,7 +2291,7 @@ class OrdersService {
    * Returns admin-configurable service types for dropdowns
    */
   getServiceTypes = async () => {
-    console.log(`${LOG_PREFIX} Fetching active service types...`);
+    serviceLog(`${LOG_PREFIX} Fetching active service types...`);
     try {
       const { data, error } = await supabase
         .from('service_types')
@@ -1960,7 +2312,7 @@ class OrdersService {
    * @param {string} applicableTo - 'master', 'client', or 'both'
    */
   getCancellationReasons = async (applicableTo = 'master') => {
-    console.log(`${LOG_PREFIX} Fetching cancellation reasons for: ${applicableTo}`);
+    serviceLog(`${LOG_PREFIX} Fetching cancellation reasons for: ${applicableTo}`);
     try {
       const { data, error } = await supabase
         .from('cancellation_reasons')
@@ -1981,7 +2333,7 @@ class OrdersService {
    * Get all cancellation reasons (admin management)
    */
   getAllCancellationReasons = async () => {
-    console.log(`${LOG_PREFIX} Fetching all cancellation reasons...`);
+    serviceLog(`${LOG_PREFIX} Fetching all cancellation reasons...`);
     try {
       const { data, error } = await supabase
         .from('cancellation_reasons')
@@ -2056,7 +2408,7 @@ class OrdersService {
    * even if the master_id was later cleared.
    */
   getMasterOrderHistory = async (masterId, limit = 100) => {
-    console.log(`${LOG_PREFIX} Fetching complete order history for master: ${masterId}`);
+    serviceLog(`${LOG_PREFIX} Fetching complete order history for master: ${masterId}`);
     try {
       const { data, error } = await supabase.rpc('get_master_order_history_admin', {
         master_uuid: masterId,
@@ -2080,7 +2432,7 @@ class OrdersService {
    * Includes orders created or handled by this dispatcher.
    */
   getDispatcherOrderHistory = async (dispatcherId, limit = 100) => {
-    console.log(`${LOG_PREFIX} Fetching complete order history for dispatcher: ${dispatcherId}`);
+    serviceLog(`${LOG_PREFIX} Fetching complete order history for dispatcher: ${dispatcherId}`);
     try {
       const { data, error } = await supabase.rpc('get_dispatcher_order_history_admin', {
         dispatcher_uuid: dispatcherId,
@@ -2109,7 +2461,7 @@ class OrdersService {
    * Returns the singleton settings row from platform_settings table
    */
   getPlatformSettings = async () => {
-    console.log(`${LOG_PREFIX} Fetching platform settings...`);
+    serviceLog(`${LOG_PREFIX} Fetching platform settings...`);
     try {
       const { data, error } = await supabase
         .from('platform_settings')
@@ -2151,7 +2503,7 @@ class OrdersService {
    * Uses reopen_order RPC function from COMPLETE_SETUP_V2.sql
    */
   reopenOrderAdmin = async (orderId, reason = 'Reopened by admin') => {
-    console.log(`${LOG_PREFIX} Admin reopening order: ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Admin reopening order: ${orderId}`);
 
     try {
       const { data, error } = await supabase.rpc('reopen_order_admin', {
@@ -2168,7 +2520,7 @@ class OrdersService {
         return { success: false, message: data.message || data.error };
       }
 
-      console.log(`${LOG_PREFIX} Order reopened successfully:`, data);
+      serviceLog(`${LOG_PREFIX} Order reopened successfully:`, data);
       return { success: true, message: 'Order reopened', orderId: data.order_id, previousStatus: data.previous_status };
     } catch (error) {
       console.error(`${LOG_PREFIX} reopenOrderAdmin failed:`, error);
@@ -2181,7 +2533,7 @@ class OrdersService {
    * Uses expire_old_orders RPC function from COMPLETE_SETUP_V2.sql
    */
   expireOldOrders = async () => {
-    console.log(`${LOG_PREFIX} Triggering order expiry...`);
+    serviceLog(`${LOG_PREFIX} Triggering order expiry...`);
 
     try {
       const { data, error } = await supabase.rpc('expire_old_orders');
@@ -2191,7 +2543,7 @@ class OrdersService {
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Expired ${data} orders`);
+      serviceLog(`${LOG_PREFIX} Expired ${data} orders`);
       return { success: true, message: `Expired ${data} orders`, expiredCount: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} expireOldOrders failed:`, error);
@@ -2204,7 +2556,7 @@ class OrdersService {
    * Uses force_assign_master RPC function from COMPLETE_SETUP_V2.sql
    */
   forceAssignMasterAdmin = async (orderId, masterId, reason = 'Admin assignment') => {
-    console.log(`${LOG_PREFIX} Admin force assigning master ${masterId} to order ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Admin force assigning master ${masterId} to order ${orderId}`);
 
     try {
       const { data, error } = await supabase.rpc('force_assign_master', {
@@ -2222,7 +2574,7 @@ class OrdersService {
         return { success: false, message: data.error || 'Assignment failed' };
       }
 
-      console.log(`${LOG_PREFIX} Master force assigned:`, data);
+      serviceLog(`${LOG_PREFIX} Master force assigned:`, data);
       return { success: true, message: `Assigned to ${data.master_name}`, orderId: data.order_id, masterName: data.master_name };
     } catch (error) {
       console.error(`${LOG_PREFIX} forceAssignMasterAdmin failed:`, error);
@@ -2234,7 +2586,7 @@ class OrdersService {
    * Unassign master (admin) - Cancel then reopen to return to pool
    */
   unassignMasterAdmin = async (orderId, reason = 'admin_unassign') => {
-    console.log(`${LOG_PREFIX} Admin unassigning master from order: ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Admin unassigning master from order: ${orderId}`);
 
     try {
       const { data: canceled, error: cancelError } = await supabase
@@ -2278,7 +2630,7 @@ class OrdersService {
    * Cancel order (admin)
    */
   cancelOrderAdmin = async (orderId, reason = 'admin_cancel') => {
-    console.log(`${LOG_PREFIX} Admin canceling order: ${orderId}`);
+    serviceLog(`${LOG_PREFIX} Admin canceling order: ${orderId}`);
 
     try {
       const { data, error } = await supabase.rpc('cancel_order_admin', {
@@ -2302,7 +2654,7 @@ class OrdersService {
    * Uses verify_payment_proof RPC function from COMPLETE_SETUP_V2.sql
    */
   verifyPaymentProof = async (orderId, isValid, notes = null) => {
-    console.log(`${LOG_PREFIX} Verifying payment proof for order ${orderId}: ${isValid}`);
+    serviceLog(`${LOG_PREFIX} Verifying payment proof for order ${orderId}: ${isValid}`);
 
     try {
       const { data, error } = await supabase.rpc('verify_payment_proof', {
@@ -2320,7 +2672,7 @@ class OrdersService {
         return { success: false, message: data.error || 'Verification failed' };
       }
 
-      console.log(`${LOG_PREFIX} Payment proof verified:`, data);
+      serviceLog(`${LOG_PREFIX} Payment proof verified:`, data);
       return { success: true, message: isValid ? 'Payment proof verified' : 'Payment proof rejected', verified: data.verified };
     } catch (error) {
       console.error(`${LOG_PREFIX} verifyPaymentProof failed:`, error);
@@ -2333,7 +2685,7 @@ class OrdersService {
    * Uses get_order_volume_by_area RPC function from COMPLETE_SETUP_V2.sql
    */
   getOrderVolumeByArea = async (startDate = null, endDate = null) => {
-    console.log(`${LOG_PREFIX} Fetching order volume by area...`);
+    serviceLog(`${LOG_PREFIX} Fetching order volume by area...`);
 
     try {
       const params = {};
@@ -2347,7 +2699,7 @@ class OrdersService {
         throw error;
       }
 
-      console.log(`${LOG_PREFIX} Order volume data:`, data?.length || 0, 'records');
+      serviceLog(`${LOG_PREFIX} Order volume data:`, data?.length || 0, 'records');
       return data || [];
     } catch (error) {
       console.error(`${LOG_PREFIX} getOrderVolumeByArea failed:`, error);
@@ -2359,7 +2711,7 @@ class OrdersService {
    * Update platform settings (admin only)
    */
   updatePlatformSettings = async (settings) => {
-    console.log(`${LOG_PREFIX} Updating platform settings:`, settings);
+    serviceLog(`${LOG_PREFIX} Updating platform settings:`, settings);
 
     try {
       const { data, error } = await supabase
@@ -2371,7 +2723,7 @@ class OrdersService {
 
       if (error) throw error;
 
-      console.log(`${LOG_PREFIX} Settings updated successfully`);
+      serviceLog(`${LOG_PREFIX} Settings updated successfully`);
       return { success: true, message: 'Settings updated', settings: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} updatePlatformSettings failed:`, error);
@@ -2381,3 +2733,5 @@ class OrdersService {
 }
 const ordersService = new OrdersService();
 export default ordersService;
+
+

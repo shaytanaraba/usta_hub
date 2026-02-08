@@ -79,6 +79,18 @@ export function NavigationHistoryProvider({ children }) {
     navRef.navigate(target.name, target.params);
   }, [navRef, state.entries, state.index]);
 
+  const pushRoute = useCallback((name, params = null) => {
+    if (!navRef.isReady() || !name) return;
+    const nextEntry = { name, params };
+    const current = navRef.getCurrentRoute();
+    const currentEntry = current ? { name: current.name, params: current.params || null } : null;
+    if (isSameEntry(currentEntry, nextEntry)) return;
+
+    ignoreNextRef.current = true;
+    dispatch({ type: 'PUSH_ROUTE', payload: nextEntry });
+    navRef.navigate(name, params || undefined);
+  }, [navRef]);
+
   const resetHistory = useCallback((entry) => {
     ignoreNextRef.current = true;
     dispatch({ type: 'RESET', payload: entry });
@@ -91,8 +103,9 @@ export function NavigationHistoryProvider({ children }) {
     canGoForward: state.index >= 0 && state.index < state.entries.length - 1,
     goBack,
     goForward,
+    pushRoute,
     resetHistory,
-  }), [goBack, goForward, navRef, onStateChange, resetHistory, state.entries.length, state.index]);
+  }), [goBack, goForward, navRef, onStateChange, pushRoute, resetHistory, state.entries.length, state.index]);
 
   return (
     <NavigationHistoryContext.Provider value={value}>

@@ -138,6 +138,9 @@ export default function App() {
       'It looks like you might be using shared value',
       'Source map error',
       'Source Map URL',
+      'props.pointerEvents is deprecated. Use style.pointerEvents',
+      "'shadow*' style props are deprecated. Use \"boxShadow\".",
+      'installHook.js.map',
     ];
 
     LogBox.ignoreLogs(ignoredLogs);

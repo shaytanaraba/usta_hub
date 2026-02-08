@@ -6,7 +6,7 @@
 import { supabase } from '../lib/supabase';
 
 const LOG_PREFIX = '[AuthService]';
-const isDebug = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
+const isDebug = process?.env?.EXPO_PUBLIC_ENABLE_AUTH_LOGS === '1';
 const debug = (...args) => {
   if (isDebug) console.log(...args);
 };

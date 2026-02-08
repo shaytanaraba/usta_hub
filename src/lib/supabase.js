@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
-const isDebug = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
+const isDebug = process?.env?.EXPO_PUBLIC_ENABLE_SUPABASE_LOGS === '1';
 const debug = (...args) => {
     if (isDebug) console.log(...args);
 };

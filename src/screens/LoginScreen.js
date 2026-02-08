@@ -516,11 +516,9 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
     overflow: 'hidden',
-    shadowColor: '#000000',
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: -5 },
-    elevation: 5,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0px -5px 18px rgba(0,0,0,0.10)' }
+      : { shadowColor: '#000000', shadowOpacity: 0.1, shadowRadius: 10, shadowOffset: { width: 0, height: -5 }, elevation: 5 }),
   },
   sheetHandleArea: {
     alignItems: 'center',
@@ -634,11 +632,9 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     alignItems: 'center',
     marginTop: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0px 2px 8px rgba(0,0,0,0.10)' }
+      : { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 }),
   },
   loginButtonText: {
     color: '#0f172a',

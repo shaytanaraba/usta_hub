@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { FlatList, Linking, RefreshControl, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { FlatList, Image, Linking, RefreshControl, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { AlertCircle, ChevronLeft, ChevronRight, ClipboardList, MessageCircle, Phone, Send, Settings, ShieldCheck, User, Wallet } from 'lucide-react-native';
 import { useLocalization } from '../../../contexts/LocalizationContext';
 import { useTheme } from '../../../contexts/ThemeContext';
@@ -334,12 +334,19 @@ const MyAccountTab = ({
                     >
                         <ChevronLeft size={18} color={theme.textPrimary} />
                     </TouchableOpacity>
-                    <Text style={[styles.accountHeaderTitle, { color: theme.textPrimary }]}>{accountTitle}</Text>
+                    <View style={styles.accountHeaderTitleWrap}>
+                        <Image source={require('../../../../assets/circle.png')} style={styles.accountBrandLogo} />
+                        <Text style={[styles.accountHeaderTitle, { color: theme.textPrimary }]}>{accountTitle}</Text>
+                    </View>
                 </View>
             )}
 
             {accountView === ACCOUNT_VIEWS.MENU && (
                 <>
+                    <View style={styles.accountBrandRow}>
+                        <Image source={require('../../../../assets/circle.png')} style={styles.accountBrandLogo} />
+                        <Text style={[styles.accountBrandTitle, { color: theme.textPrimary }]}>{safeT('myAccount', 'My Account')}</Text>
+                    </View>
                     {/* Balance Card */}
                     <View style={[styles.balanceCard, { backgroundColor: theme.bgCard, borderColor: financials?.balanceBlocked ? theme.accentDanger : theme.borderPrimary }]}>
                         <View style={styles.balanceHeader}><Wallet size={20} color={theme.accentIndigo} /><Text style={[styles.balanceLabel, { color: theme.textMuted }]}>{t('prepaidBalance')}</Text></View>
