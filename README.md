@@ -126,6 +126,29 @@ master-kg/
 └── assets/
 ```
 
+## Master Dashboard Refactor (2026-02-08)
+
+- Added master-domain constants in `src/screens/master/constants/domain.js`
+- Added payload mappers in `src/screens/master/mappers/orderMappers.js`
+- Added extracted processing logic in `src/screens/master/hooks/useMasterOrderProcessing.js`
+- Added web route-state sync hook in `src/screens/master/hooks/useMasterRouteState.js`
+- Added unit tests for extracted logic in `tests/unit`
+
+### Browser History Support (Web)
+
+`MasterDashboard` state now syncs to URL query params:
+
+- `tab` (`orders` or `account`)
+- `section` (`available` or `myJobs`)
+- `account` (`menu`, `history`, `profile`, `settings`)
+
+This enables browser `Back`/`Forward` for dashboard internal navigation.
+
+### Refactor Documentation
+
+- `docs/MASTER_DASHBOARD_MAINTAINABILITY.md`
+- `tests/unit/README.md`
+
 ## Key Services
 
 ### Storage Service (`src/services/storage.js`)

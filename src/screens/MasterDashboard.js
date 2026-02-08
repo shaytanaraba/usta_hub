@@ -9,8 +9,8 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-    View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl,
-    Modal, TextInput, ScrollView, ActivityIndicator, Platform, Dimensions, Pressable, Clipboard, Linking, Animated, Easing, PanResponder, InteractionManager,
+    View, Text, FlatList, TouchableOpacity, RefreshControl,
+    Modal, TextInput, ScrollView, ActivityIndicator, Platform, Dimensions, Pressable, Linking, Animated, Easing, PanResponder, InteractionManager,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -22,15 +22,30 @@ import {
     RotateCw, Wallet
 } from 'lucide-react-native';
 
-import authService from '../services/auth';
 import ordersService, { ORDER_STATUS } from '../services/orders';
-import earningsService from '../services/earnings';
 import { useToast } from '../contexts/ToastContext';
 import { useLocalization, LocalizationProvider } from '../contexts/LocalizationContext';
 import { useTheme, ThemeProvider } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import deviceUtils from '../utils/device';
 import { getOrderStatusLabel, getServiceLabel } from '../utils/orderHelpers';
+import { useMasterRouteState } from './master/hooks/useMasterRouteState';
+import { useMasterOrderProcessing } from './master/hooks/useMasterOrderProcessing';
+import { useMasterDataLoader } from './master/hooks/useMasterDataLoader';
+import { useMasterActions } from './master/hooks/useMasterActions';
+import {
+    ACCOUNT_VIEWS,
+    MASTER_TABS,
+    ORDER_SECTIONS,
+    TERMINAL_ORDER_STATUSES,
+} from './master/constants/domain';
+import { normalizeMasterOrder } from './master/mappers/orderMappers';
+import Dropdown from './master/components/Dropdown';
+import Header from './master/components/Header';
+import MyAccountTab from './master/components/MyAccountTab';
+import SectionToggle from './master/components/SectionToggle';
+import SkeletonOrderCard from './master/components/SkeletonOrderCard';
+import { styles } from './master/styles/dashboardStyles';
 
 const LOG_PREFIX = '[MasterDashboard]';
 const PAGE_LIMIT = 20;
@@ -88,96 +103,6 @@ const formatPlannedDateTime = (preferredDate, preferredTime, language = 'en') =>
         return `${dateText} ${timeText}`;
     }
     return parsed.toLocaleDateString(locale, { day: '2-digit', month: 'short' });
-};
-
-// ============================================
-// DROPDOWN COMPONENT
-// ============================================
-const Dropdown = ({ label, value, options, optionLabels = {}, onChange }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const { theme } = useTheme();
-    const isActive = value !== 'all';
-    const buttonRef = useRef(null);
-    const [position, setPosition] = useState({ top: 0, left: 0, width: 0 });
-
-    const toggleDropdown = () => {
-        if (!isOpen && buttonRef.current) {
-            buttonRef.current.measure((fx, fy, width, height, px, py) => {
-                setPosition({ top: py + height + 4, left: px, width: Math.max(width, 160) });
-                setIsOpen(true);
-            });
-        } else setIsOpen(false);
-    };
-
-    return (
-        <View style={styles.dropdownWrapper}>
-            <TouchableOpacity ref={buttonRef} style={[styles.dropdownButton, {
-                backgroundColor: isActive ? `${theme.accentIndigo}15` : theme.bgCard,
-                borderColor: isActive ? theme.accentIndigo : theme.borderPrimary,
-            }]} onPress={toggleDropdown}>
-                <Text style={[styles.dropdownLabel, { color: isActive ? theme.accentIndigo : theme.textSecondary }]}>
-                    {value === 'all' ? label : (optionLabels[value] || value)}
-                </Text>
-                <ChevronDown size={14} color={isActive ? theme.accentIndigo : theme.textMuted} />
-            </TouchableOpacity>
-            <Modal visible={isOpen} transparent animationType="fade" onRequestClose={() => setIsOpen(false)}>
-                <Pressable style={styles.dropdownOverlay} onPress={() => setIsOpen(false)}>
-                    <View style={[styles.dropdownMenu, { top: position.top, left: position.left, width: position.width, backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
-                        <ScrollView style={{ maxHeight: 250 }}>
-                            {options.map((opt) => (
-                                <TouchableOpacity key={opt} style={[styles.dropdownItem, value === opt && { backgroundColor: `${theme.accentIndigo}15` }]}
-                                    onPress={() => { onChange(opt); setIsOpen(false); }}>
-                                    <View style={styles.checkIconWrapper}>
-                                        {value === opt && <Check size={14} color={theme.accentIndigo} />}
-                                    </View>
-                                    <Text style={[styles.dropdownItemText, { color: value === opt ? theme.accentIndigo : theme.textPrimary }]}>
-                                        {optionLabels[opt] || opt}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
-                        </ScrollView>
-                    </View>
-                </Pressable>
-            </Modal>
-        </View>
-    );
-};
-
-// ============================================
-// HEADER COMPONENT
-// ============================================
-const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, onRefresh, topInset = 0 }) => {
-    const { language } = useLocalization();
-    const { theme, isDark } = useTheme();
-    const getFlagEmoji = () => ({ ru: '🇷🇺', kg: '🇰🇬' }[language] || '🇬🇧');
-    const headerTopPadding = Math.max(8, topInset || 0);
-
-    return (
-        <View style={[styles.header, { paddingTop: headerTopPadding }]}>
-            <View style={styles.headerLeft}>
-                {user ? (
-                    <>
-                        {/* User name and balance mini badge */}
-                        <Text style={[styles.userName, { color: theme.textPrimary }]} numberOfLines={1}>{user.full_name || 'Master'}</Text>
-                        {financials && (
-                            <View style={[styles.balanceMini, { backgroundColor: financials.balanceBlocked ? `${theme.accentDanger}15` : `${theme.accentIndigo}15` }]}>
-                                <Wallet size={12} color={financials.balanceBlocked ? theme.accentDanger : theme.accentIndigo} />
-                                <Text style={{ color: financials.balanceBlocked ? theme.accentDanger : theme.accentIndigo, fontSize: 11, fontWeight: '600' }}>
-                                    {financials.prepaidBalance?.toFixed(0) || 0}
-                                </Text>
-                            </View>
-                        )}
-                    </>
-                ) : <View style={[styles.skeletonName, { backgroundColor: theme.borderSecondary }]} />}
-            </View>
-            <View style={styles.headerRight}>
-                <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onRefresh}><RotateCw size={18} color={theme.accentIndigo} /></TouchableOpacity>
-                <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onLanguageToggle}><Text style={{ fontSize: 16 }}>{getFlagEmoji()}</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.headerButton, { backgroundColor: theme.bgCard }]} onPress={onThemeToggle}>{isDark ? <Sun size={18} color="#FFD700" /> : <Moon size={18} color={theme.accentIndigo} />}</TouchableOpacity>
-                <TouchableOpacity style={[styles.headerButton, { backgroundColor: `${theme.accentDanger}15` }]} onPress={onLogout}><LogOut size={18} color={theme.accentDanger} /></TouchableOpacity>
-            </View>
-        </View>
-    );
 };
 
 // ============================================
@@ -372,553 +297,6 @@ const OrderCardBase = ({ order, isPool, isSelected, canClaim, actionLoading, onC
 const OrderCard = React.memo(OrderCardBase);
 
 // ============================================
-// SKELETON ORDER CARD
-// ============================================
-const SkeletonOrderCard = ({ width }) => {
-    const { theme } = useTheme();
-    const pulse = useRef(new Animated.Value(0.55)).current;
-
-    useEffect(() => {
-        const animation = Animated.loop(
-            Animated.sequence([
-                Animated.timing(pulse, { toValue: 0.9, duration: 520, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
-                Animated.timing(pulse, { toValue: 0.55, duration: 520, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
-            ])
-        );
-        animation.start();
-        return () => animation.stop();
-    }, [pulse]);
-
-    return (
-        <Animated.View style={[styles.skeletonCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary, width, opacity: pulse }]}>
-            <View style={styles.skeletonHeader}>
-                <View style={styles.skeletonLineWide} />
-                <View style={styles.skeletonLineShort} />
-            </View>
-            <View style={styles.skeletonMeta}>
-                <View style={styles.skeletonBadge} />
-                <View style={styles.skeletonLineTiny} />
-            </View>
-            <View style={styles.skeletonDesc}>
-                <View style={styles.skeletonLineFull} />
-                <View style={styles.skeletonLineMid} />
-            </View>
-            <View style={styles.skeletonInfoBlock}>
-                <View style={styles.skeletonLineMid} />
-                <View style={styles.skeletonLineMid} />
-                <View style={styles.skeletonLineFull} />
-            </View>
-            <View style={styles.skeletonAction} />
-        </Animated.View>
-    );
-};
-
-// ============================================
-// SECTION TOGGLE COMPONENT
-// ============================================
-const SectionToggle = ({ sections, activeSection, onSectionChange }) => {
-    const { theme } = useTheme();
-    return (
-        <View style={[styles.sectionToggle, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
-            {sections.map(sec => (
-                <TouchableOpacity
-                    key={sec.key}
-                    style={[styles.sectionBtn, activeSection === sec.key && { backgroundColor: theme.bgCard }]}
-                    onPress={() => onSectionChange(sec.key)}
-                >
-                    <Text style={[styles.sectionBtnText, { color: activeSection === sec.key ? theme.accentIndigo : theme.textSecondary }]}>
-                        {sec.label} {sec.count !== undefined && `(${sec.count})`}
-                    </Text>
-                </TouchableOpacity>
-            ))}
-        </View>
-    );
-};
-
-// ============================================
-// MY ACCOUNT TAB
-// ============================================
-const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransactions = [], districts = [], refreshing, onRefresh }) => {
-    const { t, language, setLanguage } = useLocalization();
-    const { theme, isDark, toggleTheme } = useTheme();
-    const [accountView, setAccountView] = useState('menu');
-    const safeT = useCallback((key, fallback) => {
-        const value = t(key);
-        return value && value !== key ? value : fallback;
-    }, [t]);
-    const [historyFilter, setHistoryFilter] = useState('all'); // all | financial | orders
-    const [historySort, setHistorySort] = useState('desc'); // desc | asc
-    const languageOptions = [
-        { code: 'en', label: 'EN', flag: '🇬🇧' },
-        { code: 'ru', label: 'RU', flag: '🇷🇺' },
-        { code: 'kg', label: 'KG', flag: '🇰🇬' }
-    ];
-    const supportPhone = '+996500105415';
-    const supportWhatsApp = 'https://wa.me/996500105415';
-    const supportTelegram = 'https://t.me/konevor';
-    const openSupportLink = (url) => {
-        if (!url) return;
-        Linking.openURL(url);
-    };
-
-    const getStatusColor = (status) => ({ confirmed: theme.accentSuccess, completed: theme.statusCompleted, canceled_by_master: theme.accentDanger, canceled_by_client: theme.accentWarning }[status] || theme.textMuted);
-
-    const getStatusLabel = (status) => getOrderStatusLabel(status, t);
-
-    const accountTitle = {
-        history: t('sectionHistory'),
-        profile: t('sectionProfile'),
-        settings: t('sectionSettings') || 'Settings'
-    }[accountView];
-    const orderById = useMemo(() => new Map(orderHistory.map(o => [o.id, o])), [orderHistory]);
-    const uuidRegex = useMemo(() => /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g, []);
-    const contextSeparator = ' - ';
-    const districtLabelByCode = useMemo(() => {
-        const map = {};
-        districts.forEach((d) => {
-            if (!d?.code) return;
-            const localized = language === 'ru'
-                ? (d.name_ru || d.name_en)
-                : language === 'kg'
-                    ? (d.name_kg || d.name_en)
-                    : d.name_en;
-            map[String(d.code).toLowerCase()] = localized;
-        });
-        return map;
-    }, [districts, language]);
-    const getAreaLabel = useCallback((area) => {
-        if (!area) return '-';
-        const raw = String(area).trim();
-        const normalized = raw.toLowerCase();
-        if (districtLabelByCode[normalized]) {
-            return districtLabelByCode[normalized];
-        }
-        const parts = raw.split(/вЂ”|-/).map(p => p.trim()).filter(Boolean);
-        if (parts.length > 1) {
-            const tail = parts[parts.length - 1].toLowerCase();
-            if (districtLabelByCode[tail]) {
-                return `${parts.slice(0, -1).join(' вЂ” ')} вЂ” ${districtLabelByCode[tail]}`;
-            }
-        }
-        return raw;
-    }, [districtLabelByCode]);
-    const formatOrderContext = useCallback((serviceType, area) => {
-        const serviceLabel = getServiceLabel(serviceType, t);
-        const areaLabel = getAreaLabel(area);
-        return `${serviceLabel}${contextSeparator}${areaLabel}`;
-    }, [getAreaLabel, t]);
-    const historyRows = useMemo(() => {
-        if (accountView !== 'history') return [];
-        const combinedHistory = [
-            ...orderHistory.map(o => ({ ...o, type: 'order', date: new Date(o.created_at) })),
-            ...balanceTransactions.map(tx => ({ ...tx, type: 'transaction', date: new Date(tx.created_at) }))
-        ].sort((a, b) => historySort === 'desc' ? (b.date - a.date) : (a.date - b.date));
-        const filteredHistory = combinedHistory.filter(item => {
-            if (historyFilter === 'financial') return item.type === 'transaction';
-            if (historyFilter === 'orders') return item.type === 'order';
-            return true;
-        });
-        if (!filteredHistory.length) return [];
-        const locale = language === 'ru' ? 'ru-RU' : language === 'kg' ? 'ky-KG' : 'en-US';
-        const nowYear = new Date().getFullYear();
-        const formatDayKey = (dateObj) => {
-            const d = new Date(dateObj);
-            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        };
-        const formatDayLabel = (dateObj) => {
-            const d = new Date(dateObj);
-            const isCurrentYear = d.getFullYear() === nowYear;
-            return d.toLocaleDateString(locale, {
-                day: 'numeric',
-                month: 'short',
-                ...(isCurrentYear ? {} : { year: 'numeric' })
-            });
-        };
-        const grouped = filteredHistory.reduce((acc, item) => {
-            const key = formatDayKey(item.date);
-            if (!acc[key]) acc[key] = { key, label: formatDayLabel(item.date), items: [] };
-            acc[key].items.push(item);
-            return acc;
-        }, {});
-        const rows = [];
-        Object.values(grouped).forEach((group) => {
-            rows.push({ type: 'group', key: `g-${group.key}`, label: group.label });
-            group.items.forEach((item) => rows.push({ type: 'row', key: `${item.type}-${item.id}`, item }));
-        });
-        return rows;
-    }, [accountView, balanceTransactions, historyFilter, historySort, language, orderHistory]);
-    const formatAccountingAmount = (value) => {
-        const num = Number(value);
-        if (Number.isNaN(num)) return '-';
-        const abs = Math.abs(num).toFixed(0);
-        return num < 0 ? `(${abs})` : abs;
-    };
-    const getAmountColor = (value) => {
-        const num = Number(value);
-        if (Number.isNaN(num) || num === 0) return theme.textMuted;
-        return num < 0 ? theme.accentDanger : theme.accentSuccess;
-    };
-    const historyEmpty = historyRows.length === 0;
-    const renderTransactionRow = useCallback((item) => {
-        const isCommissionTx = String(item.transaction_type || '').includes('commission');
-        const noteText = String(item.notes || '').trim();
-        const uuidMatch = noteText.match(uuidRegex);
-        const relatedOrder = uuidMatch ? orderById.get(uuidMatch[0]) : null;
-        const txTypeLabel = {
-            top_up: safeT('transactionTopUp', 'Top up'),
-            adjustment: safeT('transactionAdjustment', 'Adjustment'),
-            refund: safeT('transactionRefund', 'Refund'),
-            waiver: safeT('transactionWaiver', 'Waiver'),
-            commission: safeT('transactionCommission', 'Commission'),
-            commission_deduct: safeT('transactionCommission', 'Commission'),
-            initial_deposit: safeT('transactionInitialDeposit', 'Initial deposit')
-        }[item.transaction_type] || (isCommissionTx
-            ? safeT('transactionCommission', 'Commission')
-            : (item.transaction_type || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
-        const contextLabel = isCommissionTx || relatedOrder
-            ? safeT('historyOrderTag', 'Order')
-            : safeT('historyTransactionTag', 'Transaction');
-        return (
-            <View style={[styles.historyRow, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
-                <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textPrimary }]} numberOfLines={1}>
-                    {txTypeLabel}
-                </Text>
-                <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]} numberOfLines={1}>
-                    {contextLabel}
-                </Text>
-                <View style={[styles.historyCell, styles.historyCellAmount]}>
-                    <Text style={{ color: getAmountColor(item.amount), fontWeight: '400', fontSize: 11 }}>
-                        {formatAccountingAmount(item.amount)}
-                    </Text>
-                </View>
-            </View>
-        );
-    }, [formatAccountingAmount, getAmountColor, orderById, safeT, theme, uuidRegex]);
-    const renderOrderRow = useCallback((o) => {
-        const orderArea = o.area || o.district || '-';
-        const orderContext = formatOrderContext(o.service_type, orderArea);
-        const orderEventLabel = {
-            completed: safeT('jobCompleted', 'Job completed'),
-            confirmed: safeT('jobConfirmed', 'Job confirmed'),
-            canceled_by_master: safeT('jobCanceled', 'Job canceled'),
-            canceled_by_client: safeT('jobCanceled', 'Job canceled'),
-            expired: safeT('jobExpired', 'Job expired'),
-        }[o.status] || getStatusLabel(o.status);
-        const isOrderNoAmount = ['canceled_by_master', 'canceled_by_client', 'expired'].includes(o.status);
-        return (
-            <View style={[styles.historyRow, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
-                <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textPrimary }]} numberOfLines={1}>
-                    {orderEventLabel}
-                </Text>
-                <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]} numberOfLines={1}>
-                    {orderContext}
-                </Text>
-                <View style={[styles.historyCell, styles.historyCellAmount]}>
-                    {isOrderNoAmount ? (
-                        <Text style={{ color: theme.textMuted, fontWeight: '400', fontSize: 11 }}>
-                            {safeT('historyNoAmount', 'вЂ”')}
-                        </Text>
-                    ) : (
-                        <Text style={{ color: theme.accentSuccess, fontWeight: '400', fontSize: 11 }}>
-                            {formatAccountingAmount(o.final_price ?? o.initial_price ?? o.callout_fee ?? 0)}
-                        </Text>
-                    )}
-                </View>
-            </View>
-        );
-    }, [formatAccountingAmount, formatOrderContext, getStatusLabel, safeT, theme]);
-    const renderHistoryItem = useCallback(({ item }) => {
-        if (item.type === 'group') {
-            return (
-                <View style={[styles.historyGroupHeader, { borderTopColor: theme.borderPrimary, backgroundColor: theme.bgCard }]}>
-                    <Text style={[styles.historyGroupHeaderText, { color: theme.textSecondary }]}>{item.label}</Text>
-                </View>
-            );
-        }
-        const row = item.item;
-        return row.type === 'transaction'
-            ? renderTransactionRow(row)
-            : renderOrderRow(row);
-    }, [renderOrderRow, renderTransactionRow, theme]);
-    const historyHeaderRow = useMemo(() => (
-        <View style={[styles.historyRow, styles.historyHeaderRow, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-            <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textMuted }]}>
-                {safeT('historyColType', 'Type')}
-            </Text>
-            <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]}>
-                {safeT('historyColDetails', 'Details')}
-            </Text>
-            <Text style={[styles.historyCell, styles.historyCellAmount, { color: theme.textMuted }]}>
-                {safeT('historyColAmount', 'Amount')}
-            </Text>
-        </View>
-    ), [safeT, theme]);
-
-    if (accountView === 'history') {
-        return (
-            <View style={styles.accountContainer}>
-                <View style={styles.accountHeaderRow}>
-                    <TouchableOpacity
-                        style={[styles.accountBackBtn, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}
-                        onPress={() => setAccountView('menu')}
-                    >
-                        <ChevronLeft size={18} color={theme.textPrimary} />
-                    </TouchableOpacity>
-                    <Text style={[styles.accountHeaderTitle, { color: theme.textPrimary }]}>{accountTitle}</Text>
-                </View>
-                <View style={[styles.historySection, { flex: 1 }]}>
-                    <View style={styles.historyFilterRow}>
-                        {[
-                            { key: 'all', label: safeT('filterAll', 'All') },
-                            { key: 'financial', label: safeT('historyFilterFinancial', 'Financial') },
-                            { key: 'orders', label: safeT('historyFilterOrders', 'Orders') },
-                        ].map((option) => {
-                            const isActive = historyFilter === option.key;
-                            return (
-                                <TouchableOpacity
-                                    key={option.key}
-                                    style={[
-                                        styles.historyFilterChip,
-                                        {
-                                            backgroundColor: isActive ? `${theme.accentIndigo}18` : theme.bgCard,
-                                            borderColor: isActive ? theme.accentIndigo : theme.borderPrimary,
-                                        },
-                                    ]}
-                                    onPress={() => setHistoryFilter(option.key)}
-                                >
-                                    <Text style={{ color: isActive ? theme.accentIndigo : theme.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>
-                                        {option.label}
-                                    </Text>
-                                </TouchableOpacity>
-                            );
-                        })}
-                    </View>
-                    <View style={styles.historySortRow}>
-                        {[
-                            { key: 'desc', label: safeT('filterNewestFirst', 'Newest First') },
-                            { key: 'asc', label: safeT('filterOldestFirst', 'Oldest First') },
-                        ].map((option) => {
-                            const isActive = historySort === option.key;
-                            return (
-                                <TouchableOpacity
-                                    key={option.key}
-                                    style={[
-                                        styles.historySortChip,
-                                        {
-                                            backgroundColor: isActive ? `${theme.accentIndigo}18` : theme.bgCard,
-                                            borderColor: isActive ? theme.accentIndigo : theme.borderPrimary,
-                                        },
-                                    ]}
-                                    onPress={() => setHistorySort(option.key)}
-                                >
-                                    <Text style={{ color: isActive ? theme.accentIndigo : theme.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>
-                                        {option.label}
-                                    </Text>
-                                </TouchableOpacity>
-                            );
-                        })}
-                    </View>
-                    {historyEmpty ? (
-                        <View style={styles.emptyState}>
-                            <ClipboardList size={40} color={theme.textMuted} />
-                            <Text style={{ color: theme.textMuted }}>{t('noOrderHistory')}</Text>
-                        </View>
-                    ) : (
-                        <FlatList
-                            data={historyRows}
-                            keyExtractor={(item) => item.key}
-                            renderItem={renderHistoryItem}
-                            ListHeaderComponent={historyHeaderRow}
-                            ListFooterComponent={<View style={{ height: 80 }} />}
-                            style={[styles.historyTable, { borderColor: theme.borderPrimary, flex: 1 }]}
-                            contentContainerStyle={{ paddingBottom: 12 }}
-                            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}
-                            initialNumToRender={18}
-                            maxToRenderPerBatch={24}
-                            windowSize={8}
-                            updateCellsBatchingPeriod={50}
-                            removeClippedSubviews={Platform.OS === 'android'}
-                        />
-                    )}
-                </View>
-            </View>
-        );
-    }
-
-    return (
-        <ScrollView style={styles.accountContainer} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}>
-            {accountView !== 'menu' && (
-                <View style={styles.accountHeaderRow}>
-                    <TouchableOpacity
-                        style={[styles.accountBackBtn, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}
-                        onPress={() => setAccountView('menu')}
-                    >
-                        <ChevronLeft size={18} color={theme.textPrimary} />
-                    </TouchableOpacity>
-                    <Text style={[styles.accountHeaderTitle, { color: theme.textPrimary }]}>{accountTitle}</Text>
-                </View>
-            )}
-
-            {accountView === 'menu' && (
-                <>
-                    {/* Balance Card */}
-                    <View style={[styles.balanceCard, { backgroundColor: theme.bgCard, borderColor: financials?.balanceBlocked ? theme.accentDanger : theme.borderPrimary }]}>
-                        <View style={styles.balanceHeader}><Wallet size={20} color={theme.accentIndigo} /><Text style={[styles.balanceLabel, { color: theme.textMuted }]}>{t('prepaidBalance')}</Text></View>
-                        <Text style={[styles.balanceValue, { color: financials?.balanceBlocked ? theme.accentDanger : theme.textPrimary }]}>{financials?.prepaidBalance?.toFixed(0) || 0}</Text>
-                        {financials?.balanceBlocked && <View style={[styles.blockedBadge, { backgroundColor: `${theme.accentDanger}20` }]}><AlertCircle size={12} color={theme.accentDanger} /><Text style={{ color: theme.accentDanger, fontSize: 11 }}>{t('balanceBlocked')}</Text></View>}
-                        <Text style={{ color: theme.textMuted, fontSize: 11, marginTop: 8 }}>{t('initialDeposit')}: {financials?.initialDeposit || 0} | {t('threshold')}: {financials?.balanceThreshold || 0}</Text>
-                    </View>
-
-                    <View style={styles.accountMenu}>
-                        <TouchableOpacity
-                            style={[styles.accountMenuItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}
-                            onPress={() => setAccountView('history')}
-                        >
-                            <View style={[styles.accountMenuIcon, { backgroundColor: `${theme.accentIndigo}15` }]}>
-                                <ClipboardList size={18} color={theme.accentIndigo} />
-                            </View>
-                            <Text style={[styles.accountMenuLabel, { color: theme.textPrimary }]}>{t('sectionHistory')}</Text>
-                            <ChevronRight size={16} color={theme.textMuted} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[styles.accountMenuItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}
-                            onPress={() => setAccountView('profile')}
-                        >
-                            <View style={[styles.accountMenuIcon, { backgroundColor: `${theme.accentSuccess}15` }]}>
-                                <User size={18} color={theme.accentSuccess} />
-                            </View>
-                            <Text style={[styles.accountMenuLabel, { color: theme.textPrimary }]}>{t('sectionProfile')}</Text>
-                            <ChevronRight size={16} color={theme.textMuted} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[styles.accountMenuItem, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}
-                            onPress={() => setAccountView('settings')}
-                        >
-                            <View style={[styles.accountMenuIcon, { backgroundColor: `${theme.accentWarning}15` }]}>
-                                <Settings size={18} color={theme.accentWarning} />
-                            </View>
-                            <Text style={[styles.accountMenuLabel, { color: theme.textPrimary }]}>{t('sectionSettings') || 'Settings'}</Text>
-                            <ChevronRight size={16} color={theme.textMuted} />
-                        </TouchableOpacity>
-                    </View>
-                </>
-            )}
-
-            {/* Profile Section */}
-            {accountView === 'profile' && (
-                <View style={styles.profileSection}>
-                    {/* User info card with verified status */}
-                    <View style={[styles.profileCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                        <View style={styles.profileHeaderRow}>
-                            <Text style={[styles.profileName, { color: theme.textPrimary }]}>{financials?.fullName || user?.full_name}</Text>
-                            {/* Verified badge - moved from header */}
-                            <View style={[styles.verifiedBadgeProfile, {
-                                backgroundColor: user?.is_verified ? `${theme.accentSuccess}20` : `${theme.accentDanger}20`,
-                                borderColor: user?.is_verified ? theme.accentSuccess : theme.accentDanger
-                            }]}>
-                                {user?.is_verified ? <ShieldCheck size={12} color={theme.accentSuccess} /> : <AlertCircle size={12} color={theme.accentDanger} />}
-                                <Text style={{ color: user?.is_verified ? theme.accentSuccess : theme.accentDanger, fontSize: 10, fontWeight: '600' }}>
-                                    {t(user?.is_verified ? 'verified' : 'unverified')}
-                                </Text>
-                            </View>
-                        </View>
-                        <Text style={{ color: theme.textMuted, marginTop: 4 }}>{financials?.email || user?.email}</Text>
-                        <Text style={{ color: theme.textSecondary }}>{financials?.phone || user?.phone}</Text>
-                    </View>
-
-                    {/* Professional info card */}
-                    <View style={[styles.profileCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                        <Text style={{ color: theme.textPrimary, fontWeight: '600', marginBottom: 8 }}>{t('professionalInfo')}</Text>
-                        <View style={styles.infoRow}><Text style={{ color: theme.textMuted }}>{t('serviceArea')}:</Text><Text style={{ color: theme.textPrimary }}>{financials?.serviceArea || '-'}</Text></View>
-                        <View style={styles.infoRow}><Text style={{ color: theme.textMuted }}>{t('license')}:</Text><Text style={{ color: theme.textPrimary }}>{financials?.licenseNumber || '-'}</Text></View>
-                        <View style={styles.infoRow}><Text style={{ color: theme.textMuted }}>{t('experience')}:</Text><Text style={{ color: theme.textPrimary }}>{financials?.experienceYears || 0} {t('years')}</Text></View>
-                        <View style={styles.infoRow}><Text style={{ color: theme.textMuted }}>{t('specializations')}:</Text><Text style={{ color: theme.textPrimary }}>{financials?.specializations?.join(', ') || '-'}</Text></View>
-                    </View>
-                </View>
-            )}
-            {accountView === 'settings' && (
-                <View style={styles.settingsSection}>
-                    <View style={[styles.settingsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                        <Text style={[styles.settingsTitle, { color: theme.textPrimary }]}>{t('settingsLanguage') || 'Language'}</Text>
-                        <View style={styles.settingsOptionsRow}>
-                            {languageOptions.map(option => (
-                                <TouchableOpacity
-                                    key={option.code}
-                                    style={[
-                                        styles.settingsOption,
-                                        {
-                                            backgroundColor: language === option.code ? `${theme.accentIndigo}15` : theme.bgSecondary,
-                                            borderColor: language === option.code ? theme.accentIndigo : theme.borderPrimary
-                                        }
-                                    ]}
-                                    onPress={() => setLanguage(option.code)}
-                                >
-                                    <Text style={{ fontSize: 16 }}>{option.flag}</Text>
-                                    <Text style={{ color: language === option.code ? theme.accentIndigo : theme.textSecondary, fontWeight: '700', fontSize: 11 }}>
-                                        {option.label}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
-                    </View>
-                    <View style={[styles.settingsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                        <View style={styles.settingsToggleRow}>
-                            <View>
-                                <Text style={[styles.settingsTitle, { color: theme.textPrimary }]}>{t('settingsTheme') || 'Theme'}</Text>
-                                <Text style={{ color: theme.textMuted, fontSize: 11 }}>{t('settingsThemeHint') || 'Adjust appearance'}</Text>
-                            </View>
-                            <TouchableOpacity
-                                style={[styles.settingsToggle, { backgroundColor: isDark ? theme.accentIndigo : theme.borderSecondary }]}
-                                onPress={toggleTheme}
-                            >
-                                <View style={[styles.settingsToggleThumb, { left: isDark ? 22 : 3 }]} />
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                    <View style={[styles.settingsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                        <Text style={[styles.settingsTitle, { color: theme.textPrimary }]}>{t('settingsSupport') || 'Support'}</Text>
-                        <View style={styles.settingsSupportList}>
-                            <TouchableOpacity
-                                style={[styles.settingsSupportRow, { borderColor: theme.borderPrimary, backgroundColor: theme.bgSecondary }]}
-                                onPress={() => openSupportLink(`tel:${supportPhone}`)}
-                            >
-                                <View style={styles.settingsSupportLeft}>
-                                    <Phone size={16} color={theme.textMuted} />
-                                    <Text style={[styles.settingsSupportLabel, { color: theme.textPrimary }]}>{t('settingsSupportPhone') || 'Call Support'}</Text>
-                                </View>
-                                <Text style={[styles.settingsSupportValue, { color: theme.textMuted }]}>{supportPhone}</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.settingsSupportRow, { borderColor: theme.borderPrimary, backgroundColor: theme.bgSecondary }]}
-                                onPress={() => openSupportLink(supportWhatsApp)}
-                            >
-                                <View style={styles.settingsSupportLeft}>
-                                    <MessageCircle size={16} color={theme.textMuted} />
-                                    <Text style={[styles.settingsSupportLabel, { color: theme.textPrimary }]}>{t('settingsSupportWhatsApp') || 'WhatsApp'}</Text>
-                                </View>
-                                <Text style={[styles.settingsSupportValue, { color: theme.textMuted }]}>+996 500 105 415</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.settingsSupportRow, { borderColor: theme.borderPrimary, backgroundColor: theme.bgSecondary }]}
-                                onPress={() => openSupportLink(supportTelegram)}
-                            >
-                                <View style={styles.settingsSupportLeft}>
-                                    <Send size={16} color={theme.textMuted} />
-                                    <Text style={[styles.settingsSupportLabel, { color: theme.textPrimary }]}>{t('settingsSupportTelegram') || 'Telegram'}</Text>
-                                </View>
-                                <Text style={[styles.settingsSupportValue, { color: theme.textMuted }]}>@konevor</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
-            )}
-
-            <View style={{ height: 100 }} />
-        </ScrollView>
-    );
-};
-
-// ============================================
 // MAIN DASHBOARD CONTENT
 // ============================================
 const DashboardContent = ({ navigation }) => {
@@ -948,7 +326,7 @@ const DashboardContent = ({ navigation }) => {
     }, [safeT]);
     const normalizeActionMessage = useCallback((rawMessage, blockers = []) => {
         if (Array.isArray(blockers) && blockers.length) {
-            return blockers.map(code => `• ${blockerLabel(code)}`).join('\n');
+            return blockers.map(code => `- ${blockerLabel(code)}`).join('\n');
         }
 
         const message = String(rawMessage || '');
@@ -989,10 +367,16 @@ const DashboardContent = ({ navigation }) => {
         if (fn === ordersService.refuseJob) return localizeSuccessMessage(rawMessage, 'toastJobRefused', 'Job canceled');
         return localizeSuccessMessage(rawMessage, 'toastUpdated', 'Updated');
     }, [localizeSuccessMessage]);
+    const {
+        activeTab,
+        setActiveTab,
+        orderSection,
+        setOrderSection,
+        accountView,
+        setAccountView,
+    } = useMasterRouteState();
 
     const [user, setUser] = useState(null);
-    const [activeTab, setActiveTab] = useState('orders');
-    const [orderSection, setOrderSection] = useState('available');
     const [availableOrders, setAvailableOrders] = useState([]);
     const [availableOrdersMeta, setAvailableOrdersMeta] = useState([]);
     const [myOrders, setMyOrders] = useState([]);
@@ -1010,7 +394,6 @@ const DashboardContent = ({ navigation }) => {
     const [totalPool, setTotalPool] = useState(0);
     const [refreshing, setRefreshing] = useState(false);
     const [loading, setLoading] = useState(true);
-    const [actionLoading, setActionLoading] = useState(false);
     const [filters, setFilters] = useState({ urgency: 'all', service: 'all', area: 'all', pricing: 'all' });
     const [showFilters, setShowFilters] = useState(true);
     const [modalState, setModalState] = useState({ type: null, order: null });
@@ -1037,7 +420,6 @@ const DashboardContent = ({ navigation }) => {
         lastFilterKey: '',
     });
     const filterDebounceRef = useRef(null);
-    const headerRefreshInFlightRef = useRef(false);
 
     const { logout, user: authUser } = useAuth();
     const logPerf = useCallback((event, data = {}) => {
@@ -1102,7 +484,7 @@ const DashboardContent = ({ navigation }) => {
         }).start();
     }, [showFilters, filterAnim]);
     useEffect(() => {
-        if (orderSection !== 'available') {
+        if (orderSection !== ORDER_SECTIONS.AVAILABLE) {
             if (selectedPoolOrderId) setSelectedPoolOrderId(null);
             return;
         }
@@ -1112,7 +494,7 @@ const DashboardContent = ({ navigation }) => {
     }, [orderSection, availableOrders, selectedPoolOrderId]);
 
     useEffect(() => {
-        if (activeTab !== 'orders') return;
+        if (activeTab !== MASTER_TABS.ORDERS) return;
         if (activeSheetOrder) return;
         const active = myOrders.find(o => o.status === ORDER_STATUS.STARTED);
         if (active) {
@@ -1159,7 +541,7 @@ const DashboardContent = ({ navigation }) => {
         const updated = myOrders.find(o => o.id === activeSheetOrder.id);
         if (!updated) return;
         if (updated.status !== activeSheetOrder.status) {
-            if (['completed', 'confirmed', 'canceled_by_master', 'canceled_by_client', 'expired'].includes(updated.status)) {
+            if (TERMINAL_ORDER_STATUSES.includes(updated.status)) {
                 setActiveSheetOrder(null);
                 setSheetSnap('peek');
                 return;
@@ -1178,148 +560,44 @@ const DashboardContent = ({ navigation }) => {
         if (hasNewDetails) setActiveSheetOrder(updated);
     }, [myOrders, activeSheetOrder]);
 
-    const loadCriticalData = useCallback(async (options = {}) => {
-        const { reset = true, reason = 'manual', meta = {}, forceUserReload = false } = options;
-        const loadId = perfRef.current.criticalLoadSeq + 1;
-        perfRef.current.criticalLoadSeq = loadId;
-        const start = perfNow();
-        if (reset) setLoading(true);
-        logPerf('load_start', { loadId, reset, scope: 'critical', reason, filters, ...meta });
-        try {
-            let resolvedUser = null;
-            const cachedUser = authUser || user;
-            const shouldFetchCurrentUser = forceUserReload || !cachedUser?.id;
-            if (shouldFetchCurrentUser) {
-                resolvedUser = await timedCall(
-                    'auth.getCurrentUser',
-                    () => authService.getCurrentUser({ retries: 1, retryDelayMs: 350 }),
-                    { loadId }
-                );
-            } else {
-                logPerf('user_resolve', { loadId, source: authUser?.id ? 'authUser' : 'localUser', skippedAuthFetch: true, reason });
-            }
-            if (resolvedUser) setUser(resolvedUser);
-            else if (authUser && (!user || user.id !== authUser.id)) setUser(authUser);
-            const effectiveUser = resolvedUser || cachedUser;
-            if (effectiveUser) {
-                const [poolRes, jobsRes, fin, poolMeta] = await Promise.all([
-                    timedCall('orders.getAvailableOrders', () => ordersService.getAvailableOrders(1, PAGE_LIMIT, filters), { loadId }),
-                    timedCall('orders.getMasterOrders', () => ordersService.getMasterOrders(effectiveUser.id, 1, 100), { loadId }),
-                    timedCall('earnings.getMasterFinancialSummary', () => earningsService.getMasterFinancialSummary(effectiveUser.id), { loadId }),
-                    timedCall('orders.getAvailableOrdersMeta', () => ordersService.getAvailableOrdersMeta(), { loadId }),
-                ]);
-                if (perfRef.current.criticalLoadSeq !== loadId) return;
-                const safePoolMeta = poolMeta || [];
-                const filteredMetaCount = safePoolMeta.length
-                    ? safePoolMeta.filter(row => {
-                        if (filters.urgency !== 'all' && row.urgency !== filters.urgency) return false;
-                        if (filters.service !== 'all' && row.service_type !== filters.service) return false;
-                        if (filters.area !== 'all' && row.area !== filters.area) return false;
-                        if (filters.pricing !== 'all' && row.pricing_type !== filters.pricing) return false;
-                        return true;
-                    }).length
-                    : 0;
-                const resolvedPoolCount = typeof poolRes.count === 'number' ? poolRes.count : filteredMetaCount;
-                const safePoolCount = poolRes.data.length > 0 && resolvedPoolCount === 0
-                    ? (filteredMetaCount || poolRes.data.length)
-                    : resolvedPoolCount;
-                setAvailableOrders(poolRes.data);
-                setTotalPool(safePoolCount);
-                setMyOrders(jobsRes.data);
-                setFinancials(fin);
-                const shouldKeepMeta = safePoolMeta.length === 0 && (typeof poolRes.count === 'number' ? poolRes.count > 0 : poolRes.data.length > 0);
-                setAvailableOrdersMeta(prev => (shouldKeepMeta ? prev : safePoolMeta));
-            }
-        } catch (e) {
-            console.error(e);
-            logPerf('load_error', { loadId, scope: 'critical', error: e?.message });
-        } finally {
-            if (perfRef.current.criticalLoadSeq !== loadId) return;
-            const ms = roundMs(perfNow() - start);
-            logPerf('load_done', {
-                loadId,
-                ms,
-                reset,
-                scope: 'critical',
-                targetMs: PERF_TARGETS_MS.initialLoad,
-                withinTarget: ms <= PERF_TARGETS_MS.initialLoad,
-                reason,
-                ...meta,
-            });
-            if (reset && !perfRef.current.firstDataLogged) {
-                perfRef.current.firstDataLogged = true;
-                const firstMs = roundMs(perfNow() - perfRef.current.mountTs);
-                logPerf('first_data_ready', {
-                    ms: firstMs,
-                    targetMs: PERF_TARGETS_MS.initialLoad,
-                    withinTarget: firstMs <= PERF_TARGETS_MS.initialLoad,
-                });
-            }
-            setLoading(false);
-        }
-    }, [authUser, filters, logPerf, timedCall, user]);
-
-    const loadAccountData = useCallback(async (options = {}) => {
-        const { reason = 'manual', forceLookups = false } = options;
-        const loadId = perfRef.current.accountLoadSeq + 1;
-        perfRef.current.accountLoadSeq = loadId;
-        const start = perfNow();
-        logPerf('load_start', { loadId, reset: false, scope: 'account', reason });
-        try {
-            const effectiveUser = authUser || user;
-            if (!effectiveUser) return;
-            const cachedServiceTypes = forceLookups ? null : getCachedLookup('serviceTypes');
-            const cachedCancelReasons = forceLookups ? null : getCachedLookup('cancelReasons');
-            const cachedDistricts = forceLookups ? null : getCachedLookup('districts');
-
-            const svcTypesPromise = cachedServiceTypes
-                ? Promise.resolve(cachedServiceTypes)
-                : timedCall('orders.getServiceTypes', () => ordersService.getServiceTypes(), { loadId, scope: 'account' })
-                    .then((res) => { setCachedLookup('serviceTypes', res || []); return res || []; });
-            const cancelPromise = cachedCancelReasons
-                ? Promise.resolve(cachedCancelReasons)
-                : timedCall('orders.getCancellationReasons', () => ordersService.getCancellationReasons('master'), { loadId, scope: 'account' })
-                    .then((res) => { setCachedLookup('cancelReasons', res || []); return res || []; });
-            const districtsPromise = cachedDistricts
-                ? Promise.resolve(cachedDistricts)
-                : timedCall('orders.getDistricts', () => ordersService.getDistricts(), { loadId, scope: 'account' })
-                    .then((res) => { setCachedLookup('districts', res || []); return res || []; });
-
-            const [earn, hist, balTx, svcTypes, reasons, districtList] = await Promise.all([
-                timedCall('earnings.getMasterEarnings', () => earningsService.getMasterEarnings(effectiveUser.id), { loadId, scope: 'account' }),
-                timedCall('orders.getMasterOrderHistory', () => ordersService.getMasterOrderHistory(effectiveUser.id), { loadId, scope: 'account' }),
-                timedCall('earnings.getBalanceTransactions', () => earningsService.getBalanceTransactions(effectiveUser.id), { loadId, scope: 'account' }),
-                svcTypesPromise,
-                cancelPromise,
-                districtsPromise,
-            ]);
-            if (perfRef.current.accountLoadSeq !== loadId) return;
-            setEarnings(earn);
-            setOrderHistory(hist);
-            setBalanceTransactions(balTx);
-            setServiceTypes(svcTypes || []);
-            setCancelReasons(reasons || []);
-            setDistricts(districtList || []);
-            perfRef.current.accountLoaded = true;
-            perfRef.current.accountLoadedAt = Date.now();
-        } catch (e) {
-            console.error(e);
-            logPerf('load_error', { loadId, scope: 'account', error: e?.message });
-        } finally {
-            if (perfRef.current.accountLoadSeq !== loadId) return;
-            const ms = roundMs(perfNow() - start);
-            logPerf('load_done', {
-                loadId,
-                ms,
-                reset: false,
-                scope: 'account',
-                reason,
-            });
-        }
-    }, [authUser, logPerf, timedCall, user]);
-
+    const {
+        loadCriticalData,
+        loadAccountData,
+        reloadPool,
+        onRefresh,
+        onHeaderRefresh,
+    } = useMasterDataLoader({
+        authUser,
+        user,
+        filters,
+        activeTab,
+        setUser,
+        setLoading,
+        setRefreshing,
+        setPagePool,
+        setAvailableOrders,
+        setAvailableOrdersMeta,
+        setTotalPool,
+        setMyOrders,
+        setFinancials,
+        setEarnings,
+        setOrderHistory,
+        setBalanceTransactions,
+        setServiceTypes,
+        setCancelReasons,
+        setDistricts,
+        perfRef,
+        logPerf,
+        timedCall,
+        pageLimit: PAGE_LIMIT,
+        perfNow,
+        roundMs,
+        perfTargets: PERF_TARGETS_MS,
+        getCachedLookup,
+        setCachedLookup,
+    });
     useEffect(() => {
-        if (activeTab !== 'account') return;
+        if (activeTab !== MASTER_TABS.ACCOUNT) return;
         if (!perfRef.current.accountLoaded) {
             loadAccountData({ reason: 'account_tab' });
             return;
@@ -1327,84 +605,6 @@ const DashboardContent = ({ navigation }) => {
         const stale = perfRef.current.accountLoadedAt && (Date.now() - perfRef.current.accountLoadedAt > 10 * 60 * 1000);
         if (stale) loadAccountData({ reason: 'account_tab_stale' });
     }, [activeTab, loadAccountData]);
-
-    const reloadPool = async (meta = {}) => {
-        const loadId = perfRef.current.poolLoadSeq + 1;
-        perfRef.current.poolLoadSeq = loadId;
-        const start = perfNow();
-        logPerf('reload_pool_start', { filters, loadId, ...meta });
-        try {
-            setPagePool(1);
-            const [res, poolMeta] = await Promise.all([
-                timedCall('orders.getAvailableOrders', () => ordersService.getAvailableOrders(1, PAGE_LIMIT, filters), { flow: 'reloadPool', loadId }),
-                timedCall('orders.getAvailableOrdersMeta', () => ordersService.getAvailableOrdersMeta(), { flow: 'reloadPool', loadId }),
-            ]);
-            if (perfRef.current.poolLoadSeq !== loadId) return;
-            const safePoolMeta = poolMeta || [];
-            const filteredMetaCount = safePoolMeta.length
-                ? safePoolMeta.filter(row => {
-                    if (filters.urgency !== 'all' && row.urgency !== filters.urgency) return false;
-                    if (filters.service !== 'all' && row.service_type !== filters.service) return false;
-                    if (filters.area !== 'all' && row.area !== filters.area) return false;
-                    if (filters.pricing !== 'all' && row.pricing_type !== filters.pricing) return false;
-                    return true;
-                }).length
-                : 0;
-            const resolvedPoolCount = typeof res.count === 'number' ? res.count : filteredMetaCount;
-            const safePoolCount = res.data.length > 0 && resolvedPoolCount === 0
-                ? (filteredMetaCount || res.data.length)
-                : resolvedPoolCount;
-            setAvailableOrders(res.data);
-            setTotalPool(safePoolCount);
-            const shouldKeepMeta = safePoolMeta.length === 0 && (typeof res.count === 'number' ? res.count > 0 : res.data.length > 0);
-            setAvailableOrdersMeta(prev => (shouldKeepMeta ? prev : safePoolMeta));
-        } catch (e) {
-            console.error(e);
-            logPerf('reload_pool_error', { error: e?.message, loadId, ...meta });
-        } finally {
-            if (perfRef.current.poolLoadSeq !== loadId) return;
-            const ms = roundMs(perfNow() - start);
-            logPerf('reload_pool_done', {
-                ms,
-                targetMs: PERF_TARGETS_MS.reloadPool,
-                withinTarget: ms <= PERF_TARGETS_MS.reloadPool,
-                loadId,
-                ...meta,
-            });
-        }
-    };
-
-    const onRefresh = useCallback(async () => {
-        const start = perfNow();
-        setRefreshing(true);
-        if (activeTab === 'account') {
-            await Promise.all([
-                loadCriticalData({ reset: false, reason: 'pull_to_refresh' }),
-                loadAccountData({ reason: 'pull_to_refresh' }),
-            ]);
-        } else {
-            await loadCriticalData({ reset: false, reason: 'pull_to_refresh' });
-        }
-        setRefreshing(false);
-        const ms = roundMs(perfNow() - start);
-        logPerf('refresh_done', {
-            ms,
-            targetMs: PERF_TARGETS_MS.refresh,
-            withinTarget: ms <= PERF_TARGETS_MS.refresh,
-        });
-    }, [activeTab, loadAccountData, loadCriticalData, logPerf]);
-    const onHeaderRefresh = useCallback(async () => {
-        if (headerRefreshInFlightRef.current) {
-            logPerf('refresh_skip', { reason: 'header_refresh_inflight' });
-            return;
-        }
-        headerRefreshInFlightRef.current = true;
-        try {
-            await loadCriticalData({ reset: false, reason: 'header_refresh' });
-        } finally {
-            headerRefreshInFlightRef.current = false;
-        }
-    }, [loadCriticalData, logPerf]);
 
     const handleLogout = async () => {
         try {
@@ -1416,66 +616,18 @@ const DashboardContent = ({ navigation }) => {
         }
     };
 
-    const filterPoolBy = useCallback((override = {}) => {
-        const nextFilters = { ...filters, ...override };
-        const filtered = availableOrders.filter(o => {
-            if (nextFilters.urgency !== 'all' && o.urgency !== nextFilters.urgency) return false;
-            if (nextFilters.service !== 'all' && o.service_type !== nextFilters.service) return false;
-            if (nextFilters.area !== 'all' && o.area !== nextFilters.area) return false;
-            if (nextFilters.pricing !== 'all' && o.pricing_type !== nextFilters.pricing) return false;
-            return true;
-        });
-        if (nextFilters.urgency === 'all') {
-            const urgencyRank = { emergency: 0, urgent: 1, planned: 2 };
-            return [...filtered].sort((a, b) => {
-                const rankA = urgencyRank[a.urgency] ?? 9;
-                const rankB = urgencyRank[b.urgency] ?? 9;
-                if (rankA !== rankB) return rankA - rankB;
-                return new Date(b.created_at) - new Date(a.created_at);
-            });
-        }
-        return filtered;
-    }, [availableOrders, filters]);
-
-    const processedOrders = useMemo(() => {
-        if (orderSection === 'myJobs') {
-            const relevant = myOrders.filter(o => ['claimed', 'started', 'completed'].includes(o.status));
-            const urgencyRank = { emergency: 0, urgent: 1, planned: 2 };
-            const getPreferredStamp = (order) => {
-                if (order.preferred_date) {
-                    const dateStr = order.preferred_date;
-                    const timeStr = order.preferred_time || '00:00:00';
-                    const raw = `${dateStr}T${timeStr}`;
-                    const parsed = Date.parse(raw);
-                    return Number.isNaN(parsed) ? 0 : parsed;
-                }
-                const created = Date.parse(order.created_at);
-                return Number.isNaN(created) ? 0 : created;
-            };
-            return [...relevant].sort((a, b) => {
-                const statusPriority = { started: 0, claimed: 1, completed: 2 };
-                const priA = statusPriority[a.status] ?? 9;
-                const priB = statusPriority[b.status] ?? 9;
-                if (priA !== priB) return priA - priB;
-                if (a.status === 'claimed' && b.status === 'claimed') {
-                    const urgA = urgencyRank[a.urgency] ?? 9;
-                    const urgB = urgencyRank[b.urgency] ?? 9;
-                    if (urgA !== urgB) return urgA - urgB;
-                    return getPreferredStamp(a) - getPreferredStamp(b);
-                }
-                if (a.status === 'completed' && b.status === 'completed') {
-                    const compA = Date.parse(a.completed_at || a.created_at || '');
-                    const compB = Date.parse(b.completed_at || b.created_at || '');
-                    return (Number.isNaN(compB) ? 0 : compB) - (Number.isNaN(compA) ? 0 : compA);
-                }
-                if (a.status === 'started' && b.status === 'started') {
-                    return getPreferredStamp(a) - getPreferredStamp(b);
-                }
-                return 0;
-            });
-        }
-        return filterPoolBy();
-    }, [filterPoolBy, myOrders, orderSection]);
+    const {
+        processedOrders,
+        activeJobsCount,
+        immediateOrdersCount,
+        startedOrdersCount,
+        pendingOrdersCount,
+    } = useMasterOrderProcessing({
+        availableOrders,
+        myOrders,
+        filters,
+        orderSection,
+    });
     const upsertOrderById = useCallback((list, order) => {
         if (!order) return list;
         const idx = list.findIndex(o => o.id == order.id);
@@ -1498,23 +650,6 @@ const DashboardContent = ({ navigation }) => {
         });
     }, [logPerf, orderSection, processedOrders.length]);
 
-    const {
-        activeJobsCount,
-        immediateOrdersCount,
-        startedOrdersCount,
-        pendingOrdersCount,
-    } = useMemo(() => {
-        const active = myOrders.filter(o => ['claimed', 'started', 'completed'].includes(o.status));
-        const immediate = myOrders.filter(o => ['claimed', 'started'].includes(o.status) && ['urgent', 'emergency'].includes(o.urgency));
-        const started = myOrders.filter(o => o.status === 'started');
-        const pending = myOrders.filter(o => o.status === 'completed');
-        return {
-            activeJobsCount: active.length,
-            immediateOrdersCount: immediate.length,
-            startedOrdersCount: started.length,
-            pendingOrdersCount: pending.length,
-        };
-    }, [myOrders]);
     const maxActiveJobs = Number(user?.max_active_jobs || 2);
     const maxImmediateOrders = Number(user?.max_immediate_orders || 1);
     const maxPendingOrders = Number(user?.max_pending_confirmation || 3);
@@ -1560,7 +695,7 @@ const DashboardContent = ({ navigation }) => {
         [filterDropdownHeight]
     );
     const filterOverlayStaticHeight = filterSummaryHeight + (showFilters ? 40 : 0);
-    const listTopPadding = orderSection === 'available'
+    const listTopPadding = orderSection === ORDER_SECTIONS.AVAILABLE
         ? filterOverlayStaticHeight + 16
         : 12;
     const baseBottomPadding = tabBarHeight + 60 + (insets?.bottom || 0);
@@ -1674,208 +809,58 @@ const DashboardContent = ({ navigation }) => {
     }, [areaOptions, getMetaCount, language]);
 
 
-    const handleClaim = useCallback(async (orderId) => {
-        const actionStart = perfNow();
-        let success = false;
-        // Find the order to estimate commission
-        const order = availableOrders.find(o => o.id === orderId);
-        const priceForCommission = Number(order?.final_price ?? order?.initial_price ?? 0);
-        if (priceForCommission > 0) {
-            const estimatedCommission = priceForCommission * 0.20; // 20% platform rate on job price only
-            const projectedBalance = (financials?.prepaidBalance || 0) - estimatedCommission;
-
-            // Show warning if balance would go negative after commission
-            if (projectedBalance < 0 && financials?.prepaidBalance > 0) {
-                showToast?.(safeT('warningBalanceMayGoNegative', 'After completion, your balance may go negative. Please top up in advance.'), 'warning');
-            }
-        }
-
-        setActionLoading(true);
-        try {
-            const result = await timedCall('orders.claimOrder', () => ordersService.claimOrder(orderId), { flow: 'action', action: 'claim' });
-            if (result.success) {
-                success = true;
-                showToast?.(localizeSuccessMessage(result.message, 'toastOrderClaimed', 'Order claimed!'), 'success');
-                if (Array.isArray(result.warnings) && result.warnings.includes('TIME_CONFLICT')) {
-                    showToast?.(safeT('warningTimeConflict', 'Potential time conflict with another planned order'), 'warning');
-                }
-                setSelectedPoolOrderId(null);
-                const claimedOrder = result.order || (order ? { ...order, status: ORDER_STATUS.CLAIMED } : { id: orderId, status: ORDER_STATUS.CLAIMED });
-                setActiveSheetOrder(claimedOrder);
-                setSheetSnap('full');
-                setAvailableOrders(prev => removeOrderById(prev, orderId));
-                setTotalPool(prev => Math.max(0, prev - 1));
-                setMyOrders(prev => upsertOrderById(prev, claimedOrder));
-                loadCriticalData({ reset: false, reason: 'claim' });
-            } else {
-                showToast?.(normalizeActionMessage(result.message, result.blockers), 'error');
-            }
-        } finally {
-            const ms = roundMs(perfNow() - actionStart);
-            logPerf('action_done', {
-                action: 'claim',
-                ok: success,
-                ms,
-                targetMs: PERF_TARGETS_MS.action,
-                withinTarget: ms <= PERF_TARGETS_MS.action,
-            });
-            setActionLoading(false);
-        }
-    }, [
+    const {
+        actionLoading,
+        handleClaim,
+        handleAction,
+        handleStart,
+        handleOpenComplete,
+        handleOpenRefuse,
+        handleCopyAddress,
+        handleCopyPhone,
+        handlePoolPageChange,
+    } = useMasterActions({
         availableOrders,
         financials,
         loadCriticalData,
         localizeSuccessMessage,
-        logPerf,
         normalizeActionMessage,
-        removeOrderById,
-        safeT,
-        showToast,
-        timedCall,
-        upsertOrderById,
-    ]);
-
-    const handleAction = useCallback(async (fn, ...args) => {
-        const actionStart = perfNow();
-        let success = false;
-        const action =
-            fn === ordersService.startJob ? 'start'
-                : fn === ordersService.completeJob ? 'complete'
-                    : fn === ordersService.refuseJob ? 'refuse'
-                        : 'action';
-        setActionLoading(true);
-        try {
-            const res = await timedCall(`orders.${action}`, () => fn(...args), { flow: 'action', action });
-            if (res.success) {
-                success = true;
-                showToast?.(actionSuccessMessage(fn, res.message), 'success');
-                setModalState({ type: null, order: null });
-                if (res.order) {
-                    setMyOrders(prev => upsertOrderById(prev, res.order));
-                    if (res.order.id === activeSheetOrder?.id) {
-                        setActiveSheetOrder(res.order);
-                    }
-                }
-                loadCriticalData({ reset: false, reason: action });
-            }
-            else showToast?.(normalizeActionMessage(res.message, res.blockers), 'error');
-            return res;
-        } catch (e) { showToast?.(safeT('errorActionFailed', 'Action failed'), 'error'); }
-        finally {
-            const ms = roundMs(perfNow() - actionStart);
-            logPerf('action_done', {
-                action,
-                ok: success,
-                ms,
-                targetMs: PERF_TARGETS_MS.action,
-                withinTarget: ms <= PERF_TARGETS_MS.action,
-            });
-            setActionLoading(false);
-        }
-    }, [
         actionSuccessMessage,
-        activeSheetOrder?.id,
-        loadCriticalData,
-        logPerf,
-        normalizeActionMessage,
         safeT,
         showToast,
         timedCall,
+        logPerf,
+        removeOrderById,
         upsertOrderById,
-    ]);
-    const handleStart = useCallback(async (orderId) => {
-        const res = await handleAction(ordersService.startJob, orderId, user.id);
-        if (res?.success) {
-            const updatedOrder = res.order || myOrders.find(o => o.id === orderId) || activeSheetOrder;
-            if (updatedOrder) {
-                setActiveSheetOrder(updatedOrder);
-            }
-            setSheetSnap('full');
-        }
-        return res;
-    }, [activeSheetOrder, handleAction, myOrders, user?.id]);
-    const ensureCancelReasons = useCallback(async () => {
-        if (cancelReasons.length > 0) return true;
-        const cached = getCachedLookup('cancelReasons');
-        if (cached?.length) {
-            setCancelReasons(cached);
-            return true;
-        }
-        try {
-            const reasons = await timedCall('orders.getCancellationReasons', () => ordersService.getCancellationReasons('master'), { flow: 'prefetch' });
-            const safeReasons = reasons || [];
-            setCancelReasons(safeReasons);
-            setCachedLookup('cancelReasons', safeReasons);
-            return true;
-        } catch (e) {
-            console.error(e);
-            return false;
-        }
-    }, [cancelReasons.length, timedCall]);
-    const handleOpenComplete = useCallback((order) => {
-        if (!order) return;
-        setModalState({ type: 'complete', order });
-    }, []);
-    const handleOpenRefuse = useCallback(async (order) => {
-        if (!order) return;
-        await ensureCancelReasons();
-        setModalState({ type: 'refuse', order });
-    }, [ensureCancelReasons]);
-
-    const handleCopyAddress = useCallback((text) => {
-        if (!text) {
-            showToast?.(t('toastClipboardEmpty') || 'Nothing to copy', 'info');
-            return;
-        }
-        Clipboard.setString(text);
-        showToast?.(t('toastCopied') || 'Copied', 'success');
-    }, [showToast, t]);
-
-    const handleCopyPhone = useCallback((text) => {
-        if (!text) {
-            showToast?.(t('toastClipboardEmpty') || 'Nothing to copy', 'info');
-            return;
-        }
-        Clipboard.setString(text);
-        showToast?.(t('toastCopied') || 'Copied', 'success');
-    }, [showToast, t]);
-
-    const handlePoolPageChange = useCallback(async (nextPage) => {
-        if (nextPage < 1 || nextPage > totalPages) return;
-        const loadId = perfRef.current.pageLoadSeq + 1;
-        perfRef.current.pageLoadSeq = loadId;
-        const start = perfNow();
-        setActionLoading(true);
-        try {
-            const res = await timedCall('orders.getAvailableOrders', () => ordersService.getAvailableOrders(nextPage, PAGE_LIMIT, filters), {
-                flow: 'page_change',
-                page: nextPage,
-                loadId,
-            });
-            if (perfRef.current.pageLoadSeq !== loadId) return;
-            setAvailableOrders(res.data);
-            setTotalPool(res.count);
-            setPagePool(nextPage);
-            setSelectedPoolOrderId(null);
-        } catch (e) {
-            console.error(e);
-        } finally {
-            if (perfRef.current.pageLoadSeq !== loadId) return;
-            const ms = roundMs(perfNow() - start);
-            logPerf('page_change_done', {
-                page: nextPage,
-                ms,
-                targetMs: PERF_TARGETS_MS.pageChange,
-                withinTarget: ms <= PERF_TARGETS_MS.pageChange,
-            });
-            setActionLoading(false);
-        }
-    }, [filters, logPerf, timedCall, totalPages]);
-
+        activeSheetOrder,
+        myOrders,
+        userId: user?.id,
+        cancelReasons,
+        setCancelReasons,
+        getCachedLookup,
+        setCachedLookup,
+        setSelectedPoolOrderId,
+        setActiveSheetOrder,
+        setSheetSnap,
+        setAvailableOrders,
+        setTotalPool,
+        setMyOrders,
+        setModalState,
+        filters,
+        totalPages,
+        perfRef,
+        setPagePool,
+        pageLimit: PAGE_LIMIT,
+        perfNow,
+        roundMs,
+        perfTargets: PERF_TARGETS_MS,
+        t,
+    });
 
     const handleOpenOrderSheet = useCallback((order) => {
         if (!order) return;
-        const normalized = order.status ? order : { ...order, status: ORDER_STATUS.PLACED };
+        const normalized = normalizeMasterOrder(order, ORDER_STATUS.PLACED);
+        if (!normalized) return;
         if ([ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED].includes(normalized.status)) {
             setSelectedPoolOrderId(normalized.id);
             return;
@@ -1911,6 +896,7 @@ const DashboardContent = ({ navigation }) => {
                 onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
             >
                 <Header
+                    styles={styles}
                     user={user}
                     financials={financials}
                     onLogout={handleLogout}
@@ -1919,12 +905,13 @@ const DashboardContent = ({ navigation }) => {
                     onRefresh={onHeaderRefresh}
                     topInset={insets?.top || 0}
                 />
-                {activeTab === 'orders' && (
+                {activeTab === MASTER_TABS.ORDERS && (
                     <View style={styles.headerExtras}>
                         <SectionToggle
+                            styles={styles}
                             sections={[
-                                { key: 'available', label: t('sectionAvailable'), count: totalPool },
-                                { key: 'myJobs', label: t('sectionMyJobs'), count: activeJobsCount }
+                                { key: ORDER_SECTIONS.AVAILABLE, label: t('sectionAvailable'), count: totalPool },
+                                { key: ORDER_SECTIONS.MY_JOBS, label: t('sectionMyJobs'), count: activeJobsCount }
                             ]}
                             activeSection={orderSection}
                             onSectionChange={setOrderSection}
@@ -1932,7 +919,7 @@ const DashboardContent = ({ navigation }) => {
                     </View>
                 )}
             </View>
-            {activeTab === 'orders' && orderSection === 'available' && (
+            {activeTab === MASTER_TABS.ORDERS && orderSection === ORDER_SECTIONS.AVAILABLE && (
                 <Animated.View
                     style={[
                         styles.filterOverlay,
@@ -1959,9 +946,9 @@ const DashboardContent = ({ navigation }) => {
                     <Animated.View style={[styles.filterPanel, { height: filterDropdownHeight, opacity: filterAnim }]}>
                         <View style={styles.filterPanelInner}>
                             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScrollContent} style={styles.filterScroll}>
-                                <Dropdown label={t('filterUrgency')} value={filters.urgency} options={urgencyOptions} optionLabels={urgencyOptionLabels} onChange={v => setFilters({ ...filters, urgency: v })} />
-                                <Dropdown label={t('filterService')} value={filters.service} options={serviceOptions} optionLabels={serviceOptionLabels} onChange={v => setFilters({ ...filters, service: v })} />
-                                <Dropdown label={t('filterArea')} value={filters.area} options={areaOptions} optionLabels={areaOptionLabels} onChange={v => setFilters({ ...filters, area: v })} />
+                                <Dropdown styles={styles} label={t('filterUrgency')} value={filters.urgency} options={urgencyOptions} optionLabels={urgencyOptionLabels} onChange={v => setFilters({ ...filters, urgency: v })} />
+                                <Dropdown styles={styles} label={t('filterService')} value={filters.service} options={serviceOptions} optionLabels={serviceOptionLabels} onChange={v => setFilters({ ...filters, service: v })} />
+                                <Dropdown styles={styles} label={t('filterArea')} value={filters.area} options={areaOptions} optionLabels={areaOptionLabels} onChange={v => setFilters({ ...filters, area: v })} />
                             </ScrollView>
                             {(filters.urgency !== 'all' || filters.service !== 'all' || filters.area !== 'all' || filters.pricing !== 'all') && (
                                 <TouchableOpacity
@@ -1977,7 +964,7 @@ const DashboardContent = ({ navigation }) => {
             )}
 
             {loading && !refreshing ? (
-                activeTab === 'orders' ? (
+                activeTab === MASTER_TABS.ORDERS ? (
                     <ScrollView
                         contentContainerStyle={[
                             styles.list,
@@ -1993,15 +980,16 @@ const DashboardContent = ({ navigation }) => {
                             const availableWidth = Dimensions.get('window').width - (containerPadding * 2) - totalGaps;
                             const cardWidth = columns === 1 ? '100%' : (availableWidth / columns) - cardMargin;
                             return Array.from({ length: 4 }).map((_, index) => (
-                                <SkeletonOrderCard key={`skeleton-${index}`} width={cardWidth} />
+                                <SkeletonOrderCard key={`skeleton-${index}`} styles={styles} width={cardWidth} />
                             ));
                         })()}
                     </ScrollView>
                 ) : (
                     <View style={styles.center}><ActivityIndicator color={theme.accentIndigo} size="large" /></View>
                 )
-            ) : activeTab === 'account' ? (
+            ) : activeTab === MASTER_TABS.ACCOUNT ? (
                 <MyAccountTab
+                    styles={styles}
                     user={user}
                     financials={financials}
                     earnings={earnings}
@@ -2010,6 +998,8 @@ const DashboardContent = ({ navigation }) => {
                     districts={districts}
                     refreshing={refreshing}
                     onRefresh={onRefresh}
+                    accountView={accountView}
+                    setAccountView={setAccountView}
                 />
             ) : (
                 <FlatList
@@ -2029,7 +1019,7 @@ const DashboardContent = ({ navigation }) => {
                     ]}
                     columnWrapperStyle={gridColumns > 1 ? styles.colWrapper : null} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}
                     ListHeaderComponent={
-                        orderSection === 'myJobs' ? (
+                        orderSection === ORDER_SECTIONS.MY_JOBS ? (
                             <View style={[styles.limitsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
                                 <Text style={[styles.limitsTitle, { color: theme.textPrimary }]}>
                                     {safeT('myJobsLimitsTitle', 'Current limits')}
@@ -2058,8 +1048,8 @@ const DashboardContent = ({ navigation }) => {
                     renderItem={({ item }) => (
                         <OrderCard
                             order={item}
-                            isPool={orderSection === 'available'}
-                            isSelected={orderSection === 'available' && selectedPoolOrderId === item.id}
+                            isPool={orderSection === ORDER_SECTIONS.AVAILABLE}
+                            isSelected={orderSection === ORDER_SECTIONS.AVAILABLE && selectedPoolOrderId === item.id}
                             canClaim={Boolean(user?.is_verified && !financials?.balanceBlocked)}
                             actionLoading={actionLoading}
                             onClaim={handleClaim}
@@ -2071,7 +1061,7 @@ const DashboardContent = ({ navigation }) => {
                         />
                     )}
                     ListFooterComponent={
-                        orderSection === 'available' && totalPages > 1 ? (
+                        orderSection === ORDER_SECTIONS.AVAILABLE && totalPages > 1 ? (
                             <View style={[styles.paginationBar, { borderColor: theme.borderPrimary }]}>
                                 <TouchableOpacity
                                     style={[styles.paginationBtn, { borderColor: theme.borderPrimary, opacity: pagePool > 1 ? 1 : 0.4 }]}
@@ -2097,7 +1087,7 @@ const DashboardContent = ({ navigation }) => {
                         <View style={styles.center}>
                             <Inbox size={48} color={theme.textMuted} />
                             <Text style={{ color: theme.textMuted, marginTop: 10 }}>
-                                {orderSection === 'available'
+                                {orderSection === ORDER_SECTIONS.AVAILABLE
                                     ? safeT('emptyPoolTitle', 'No available orders')
                                     : safeT('emptyJobsTitle', 'No active jobs')}
                             </Text>
@@ -2108,13 +1098,13 @@ const DashboardContent = ({ navigation }) => {
 
             {/* Bottom Tabs */}
             <View style={[styles.bottomBar, { backgroundColor: theme.tabBarBg, borderTopColor: theme.tabBarBorder }]}>
-                <TouchableOpacity style={styles.tabBtn} onPress={() => setActiveTab('orders')}>
-                    <ClipboardList size={22} color={activeTab === 'orders' ? theme.accentIndigo : theme.textSecondary} />
-                    <Text style={[styles.tabLabel, { color: activeTab === 'orders' ? theme.accentIndigo : theme.textSecondary }]}>{t('tabOrders')}</Text>
+                <TouchableOpacity style={styles.tabBtn} onPress={() => setActiveTab(MASTER_TABS.ORDERS)}>
+                    <ClipboardList size={22} color={activeTab === MASTER_TABS.ORDERS ? theme.accentIndigo : theme.textSecondary} />
+                    <Text style={[styles.tabLabel, { color: activeTab === MASTER_TABS.ORDERS ? theme.accentIndigo : theme.textSecondary }]}>{t('tabOrders')}</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.tabBtn} onPress={() => setActiveTab('account')}>
-                    <User size={22} color={activeTab === 'account' ? theme.accentIndigo : theme.textSecondary} />
-                    <Text style={[styles.tabLabel, { color: activeTab === 'account' ? theme.accentIndigo : theme.textSecondary }]}>{t('tabMyAccount')}</Text>
+                <TouchableOpacity style={styles.tabBtn} onPress={() => setActiveTab(MASTER_TABS.ACCOUNT)}>
+                    <User size={22} color={activeTab === MASTER_TABS.ACCOUNT ? theme.accentIndigo : theme.textSecondary} />
+                    <Text style={[styles.tabLabel, { color: activeTab === MASTER_TABS.ACCOUNT ? theme.accentIndigo : theme.textSecondary }]}>{t('tabMyAccount')}</Text>
                 </TouchableOpacity>
             </View>
 
@@ -2138,7 +1128,7 @@ const DashboardContent = ({ navigation }) => {
                             <Pressable style={[styles.modalContent, styles.claimModalContent, { backgroundColor: theme.bgSecondary }]} onPress={() => {}}>
                                 <LinearGradient
                                     colors={isDark ? ['#111827', '#0f172a'] : ['#ffffff', '#f1f5f9']}
-                                    style={[StyleSheet.absoluteFill, { pointerEvents: 'none' }]}
+                                    style={[{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, pointerEvents: 'none' }]}
                                 />
                                 <Pressable style={styles.claimHandle} onPress={() => setSheetSnap(sheetSnap === 'half' ? 'full' : 'half')} />
                                 <View style={styles.sheetContent}>
@@ -2366,7 +1356,7 @@ const DashboardContent = ({ navigation }) => {
                     </View>
                 </Modal>
             )}
-            {activeTab === 'orders' && activeSheetOrder?.status === ORDER_STATUS.STARTED && sheetSnap === 'peek' && !sheetModalVisible && (
+            {activeTab === MASTER_TABS.ORDERS && activeSheetOrder?.status === ORDER_STATUS.STARTED && sheetSnap === 'peek' && !sheetModalVisible && (
                 <Pressable
                     style={[styles.sheetPeek, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary, bottom: sheetBottomInset + 20 }]}
                     onPress={() => setSheetSnap('full')}
@@ -2468,342 +1458,3 @@ const DashboardContent = ({ navigation }) => {
 export default function MasterDashboard(props) {
     return <ThemeProvider><LocalizationProvider><DashboardContent {...props} /></LocalizationProvider></ThemeProvider>;
 }
-
-const styles = StyleSheet.create({
-    container: { flex: 1 },
-    header: { paddingTop: 0, paddingBottom: 8, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between' },
-    headerShell: { borderBottomWidth: 1, paddingBottom: 4, zIndex: 1 },
-    headerExtras: { gap: 4, paddingBottom: 2 },
-    filterOverlay: { position: 'absolute', left: 12, right: 12, borderRadius: 14, borderWidth: 1, overflow: 'hidden', zIndex: 3 },
-    filterSummaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4, paddingHorizontal: 10 },
-    filterSummaryLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    filterSummaryText: { fontSize: 11, fontWeight: '700' },
-    headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
-    headerRight: { flexDirection: 'row', gap: 8 },
-    userName: { fontSize: 15, fontWeight: '700', maxWidth: 100 },
-    verifiedBadge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 12, borderWidth: 1, gap: 4 },
-    verifiedText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-    balanceMini: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-    headerButton: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-    skeletonName: { width: 80, height: 16, borderRadius: 4 },
-    sectionToggle: { flexDirection: 'row', borderWidth: 1, borderRadius: 14, padding: 4, marginHorizontal: 12, marginTop: 6, marginBottom: 4 },
-    sectionBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 12 },
-    sectionBtnText: { fontSize: 12, fontWeight: '700' },
-    filterBar: { paddingVertical: 8, paddingHorizontal: 12, borderWidth: 1, borderRadius: 16, marginHorizontal: 12 },
-    filterBarRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    filterToggleBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, height: 34, borderRadius: 999, borderWidth: 1 },
-    filterScroll: { flex: 1 },
-    filterScrollContent: { gap: 6 },
-    filterRoll: { overflow: 'hidden', marginTop: 8 },
-    filterPanel: { overflow: 'hidden' },
-    filterPanelInner: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4, paddingHorizontal: 8 },
-    // Clear filters button - outline style with X icon
-    clearFiltersBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, height: 26, borderRadius: 999, borderWidth: 1, backgroundColor: 'transparent' },
-    clearFiltersBtnText: { fontSize: 10, fontWeight: '600', textTransform: 'uppercase' },
-    dropdownWrapper: { position: 'relative' },
-    dropdownButton: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, height: 28, borderRadius: 10, borderWidth: 1 },
-    dropdownLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-    dropdownOverlay: { flex: 1, backgroundColor: 'transparent' },
-    dropdownMenu: { position: 'absolute', borderRadius: 8, borderWidth: 1, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 12, elevation: 8, overflow: 'hidden' },
-    dropdownItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 14 },
-    dropdownItemText: { fontSize: 13, fontWeight: '500' },
-    checkIconWrapper: { width: 20, alignItems: 'center', marginRight: 6 },
-    list: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 0 },
-    listWithFiltersOpen: { paddingTop: 64 },
-    listWithFiltersClosed: { paddingTop: 24 },
-    colWrapper: { justifyContent: 'space-between' },
-    center: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 300 },
-    orderCard: {
-        borderRadius: 18,
-        borderWidth: 1,
-        marginBottom: 14,
-        overflow: 'hidden',
-        shadowColor: '#000',
-        shadowOpacity: 0.06,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 2,
-    },
-    cardContent: { flex: 1, padding: 14, gap: 2 },
-    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 },
-    serviceType: { fontSize: 16, fontWeight: '700', flex: 1, paddingRight: 6 },
-    cardPrice: { fontSize: 16, fontWeight: '700' },
-    cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
-    urgencyBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, borderWidth: 1 },
-    urgencyText: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase' },
-    pricingBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, borderWidth: 1, maxWidth: '40%' },
-    pricingText: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase' },
-    locationContainer: { flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1 },
-    locationText: { fontSize: 12, flex: 1 },
-    description: { fontSize: 13, marginBottom: 8, lineHeight: 18 },
-    plannedRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, borderRadius: 10, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 7 },
-    plannedLabel: { fontSize: 11, fontWeight: '600' },
-    plannedText: { fontSize: 14, flex: 1, lineHeight: 20, fontWeight: '600' },
-    inlineHintRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-    inlineHintLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
-    inlineHintValue: { fontSize: 13, flex: 1, lineHeight: 18 },
-    cardInfoBlock: { borderRadius: 12, borderWidth: 1, padding: 10, gap: 6, marginBottom: 10 },
-    cardInfoRow: { gap: 3 },
-    cardInfoLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
-    cardInfoValue: { fontSize: 14, lineHeight: 20 },
-    copyAddressBtn: { alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
-    copyAddressText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-    clientInfo: { paddingTop: 10, borderTopWidth: 1, gap: 4 },
-    clientRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    clientLabel: { fontSize: 12 },
-    clientPhone: { fontSize: 12, fontWeight: '600' },
-    cardActions: { marginTop: 12 },
-    actionRow: { flexDirection: 'row', gap: 8 },
-    actionButton: {
-        paddingVertical: 12,
-        paddingHorizontal: 14,
-        borderRadius: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-        shadowColor: '#000',
-        shadowOpacity: 0.12,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 3,
-    },
-    actionButtonText: { color: '#fff', fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
-    outlineButton: {
-        paddingVertical: 11,
-        paddingHorizontal: 16,
-        borderRadius: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1.5,
-        backgroundColor: 'transparent',
-    },
-    outlineButtonText: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
-    pendingBadge: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, gap: 4 },
-    pendingText: { fontSize: 11, fontStyle: 'italic' },
-    bottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', paddingBottom: Platform.OS === 'ios' ? 24 : 10, paddingTop: 10, borderTopWidth: 1 },
-    tabBtn: { flex: 1, alignItems: 'center', gap: 4 },
-    tabLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-    accountContainer: { flex: 1, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16 },
-    balanceCard: { padding: 20, borderRadius: 16, borderWidth: 1, marginBottom: 16, alignItems: 'center' },
-    balanceHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-    balanceLabel: { fontSize: 12, fontWeight: '600', textTransform: 'uppercase' },
-    balanceValue: { fontSize: 36, fontWeight: '200' },
-    blockedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, marginTop: 8 },
-    accountHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
-    accountBackBtn: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
-    accountHeaderTitle: { fontSize: 16, fontWeight: '700' },
-    accountMenu: { gap: 10 },
-    accountMenuItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 14, borderWidth: 1 },
-    accountMenuIcon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-    accountMenuLabel: { flex: 1, fontSize: 13, fontWeight: '600' },
-    earningsSection: {},
-    periodFilter: { flexDirection: 'row', gap: 8, marginBottom: 16 },
-    periodChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
-    statCard: { padding: 20, borderRadius: 12, borderWidth: 1, marginBottom: 12, alignItems: 'center' },
-    statCardSmall: { width: '48%', padding: 14, borderRadius: 12, borderWidth: 1 },
-    statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
-    statHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
-    statLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-    statValue: { fontSize: 28, fontWeight: '200' },
-    statValueSmall: { fontSize: 18, fontWeight: '300' },
-    earningsList: { borderRadius: 12, borderWidth: 1 },
-    earningItem: { flexDirection: 'row', justifyContent: 'space-between', padding: 14 },
-    earningService: { fontSize: 13, fontWeight: '600' },
-    historySection: { gap: 10 },
-    historyFilterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
-    historyFilterChip: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1 },
-    historySortRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
-    historySortChip: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1 },
-    limitsCard: { borderWidth: 1, borderRadius: 14, padding: 10, marginBottom: 12, gap: 6 },
-    limitsTitle: { fontSize: 12, fontWeight: '700' },
-    limitsRow: { flexDirection: 'row', gap: 8 },
-    limitBadge: { flex: 1, borderWidth: 1, borderRadius: 10, paddingVertical: 6, paddingHorizontal: 10, gap: 2 },
-    limitBadgeLabel: { fontSize: 10, fontWeight: '600' },
-    limitBadgeValue: { fontSize: 14, fontWeight: '700' },
-    historyTable: { borderWidth: 1, borderRadius: 12, overflow: 'hidden' },
-    historyRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12, borderTopWidth: 1 },
-    historyHeaderRow: { borderTopWidth: 0 },
-    historyGroupHeader: { paddingVertical: 8, paddingHorizontal: 12, borderTopWidth: 1 },
-    historyGroupHeaderText: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
-    historyCell: { fontSize: 11 },
-    historyCellType: { flex: 1.6, fontWeight: '700' },
-    historyCellDetails: { flex: 1.6 },
-    historyCellAmount: { flex: 0.8, alignItems: 'flex-start' },
-    historyItem: { flexDirection: 'row', justifyContent: 'space-between', padding: 14, borderRadius: 10, borderWidth: 1 },
-    statusBadgeSmall: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginTop: 4 },
-    emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
-    paginationBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 12, paddingHorizontal: 16, borderTopWidth: 1, marginTop: 8 },
-    paginationBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 999, borderWidth: 1 },
-    paginationInfo: { fontSize: 11, fontWeight: '600' },
-    profileSection: { gap: 16 },
-    profileCard: { padding: 16, borderRadius: 12, borderWidth: 1 },
-    // Profile header row with name and verified badge
-    profileHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    verifiedBadgeProfile: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
-    profileName: { fontSize: 18, fontWeight: '700' },
-    statsRow: { flexDirection: 'row', gap: 10 },
-    statItem: { flex: 1, alignItems: 'center', padding: 16, borderRadius: 12, gap: 4 },
-    infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
-    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-    modalContent: { width: '100%', maxWidth: 500, borderRadius: 16, padding: 20, maxHeight: '80%' },
-    modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 20, textAlign: 'center' },
-    modalLabel: { fontSize: 12, fontWeight: '600', marginBottom: 8, textTransform: 'uppercase' },
-    modalInput: { borderWidth: 1, borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 14 },
-    modalActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
-    modalButton: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-    modalButtonText: { color: '#fff', fontSize: 13, fontWeight: '700', textTransform: 'uppercase' },
-    reasonItem: { padding: 12, borderRadius: 8, borderWidth: 1, marginBottom: 8 },
-    claimOverlay: { padding: 0, alignItems: 'stretch', justifyContent: 'flex-end' },
-    claimModalContent: {
-        width: '100%',
-        maxWidth: '100%',
-        alignSelf: 'stretch',
-        flex: 1,
-        maxHeight: '100%',
-        padding: 0,
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        borderBottomLeftRadius: 0,
-        borderBottomRightRadius: 0,
-        overflow: 'hidden',
-        paddingTop: 6,
-        paddingHorizontal: 18,
-        paddingBottom: 0
-    },
-    claimHandle: { alignSelf: 'center', width: 48, height: 5, borderRadius: 999, backgroundColor: 'rgba(148,163,184,0.5)', marginBottom: 6 },
-    claimScroll: { paddingBottom: 12 },
-    claimHeader: { alignItems: 'center', gap: 10, marginBottom: 6 },
-    claimHeaderRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 6, position: 'relative' },
-    claimHeaderText: { flex: 1, alignItems: 'center' },
-    claimCloseBtn: { position: 'absolute', right: 0, top: 0, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-    claimCloseText: { fontSize: 18, fontWeight: '700' },
-    sheetContent: { flex: 1, position: 'relative', justifyContent: 'flex-start' },
-    sheetBody: { flex: 1 },
-    sheetBodyContent: { gap: 6 },
-    sheetHeaderBlock: { marginTop: 16, marginBottom: 20 },
-    claimTitle: { fontSize: 22, fontWeight: '700', textAlign: 'center' },
-    claimSubtitle: { fontSize: 13, textAlign: 'center', marginBottom: 16, lineHeight: 18 },
-    claimDetails: { borderRadius: 16, borderWidth: 1, padding: 12, gap: 10, marginBottom: 12 },
-    claimRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    claimLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4 },
-    claimValue: { fontSize: 16, fontWeight: '600', lineHeight: 22 },
-    claimWarningBox: { marginTop: 6, gap: 4 },
-    claimActions: { position: 'absolute', left: 18, right: 18, bottom: 16, flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-    claimButton: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-    claimButtonText: { fontSize: 13, fontWeight: '700', textTransform: 'uppercase', color: '#fff' },
-    sheetSubTitle: { fontSize: 12, marginTop: 2, lineHeight: 16, textAlign: 'center' },
-    sheetHeroRow: { flexDirection: 'row', gap: 8 },
-    sheetHeroCard: { flex: 1, borderRadius: 16, padding: 12, gap: 6, borderWidth: 1 },
-    sheetHeroLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 },
-    sheetValueBase: { fontSize: 18, lineHeight: 24 },
-    sheetValuePrimary: { fontWeight: '400' },
-    sheetValueSecondary: { fontWeight: '400' },
-    sheetValuePhone: { fontWeight: '400' },
-    sheetMetaInline: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
-    sheetMetaRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
-    sheetMetaCard: { flex: 1, borderRadius: 14, padding: 10, gap: 6, borderWidth: 1 },
-    sheetMetaLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 },
-    sheetMetaValue: { fontSize: 18, fontWeight: '400', lineHeight: 24 },
-    sheetLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4 },
-    sheetValue: { fontSize: 18, fontWeight: '400', lineHeight: 24 },
-    sheetStatusPill: { alignSelf: 'center', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, marginLeft: 8 },
-    sheetStatusText: { fontSize: 12, fontWeight: '700' },
-    sheetTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-    sheetDetailsBlock: { marginTop: 6, gap: 6 },
-    sheetDetailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
-    sheetDetailMain: { flex: 1, gap: 4 },
-    sheetDetailSide: { flex: 1, gap: 6, alignItems: 'flex-start' },
-    sheetInlineActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
-    sheetInlineBtn: { borderWidth: 1, borderRadius: 10, paddingVertical: 6, paddingHorizontal: 10, alignSelf: 'flex-start' },
-    sheetInlineText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-    sheetInfoCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, borderRadius: 16, padding: 12, borderWidth: 1 },
-    sheetInfoMain: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, flex: 1 },
-    sheetInfoText: { flex: 1, gap: 1 },
-    sheetInfoLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 },
-    sheetInfoValue: { fontSize: 18, fontWeight: '400', lineHeight: 24 },
-    sheetAddressBlock: { gap: 10 },
-    sheetFieldBlock: { gap: 4 },
-    sheetFieldLabel: { fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
-    sheetInfoActions: { flexDirection: 'row', gap: 8 },
-    sheetPhoneRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4 },
-    sheetIconBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-    sheetFooter: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: 1, paddingTop: 10, paddingHorizontal: 18 },
-    sheetFooterActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-    primarySheetButton: {
-        flex: 1,
-        paddingVertical: 16,
-        borderRadius: 14,
-        alignItems: 'center',
-        justifyContent: 'center',
-        shadowOffset: { width: 0, height: 6 },
-        shadowRadius: 10,
-        elevation: 6,
-    },
-    primarySheetButtonText: { fontSize: 13, fontWeight: '800', textTransform: 'uppercase', color: '#fff' },
-    secondarySheetButton: {
-        flex: 1,
-        paddingVertical: 14,
-        borderRadius: 14,
-        borderWidth: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'transparent',
-        shadowOffset: { width: 0, height: 4 },
-        shadowRadius: 8,
-        elevation: 4,
-    },
-    secondarySheetButtonText: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase' },
-    sheetPeek: {
-        position: 'absolute',
-        left: 16,
-        right: 16,
-        bottom: 76,
-        borderRadius: 16,
-        paddingVertical: 12,
-        paddingHorizontal: 14,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 12,
-        borderWidth: 1,
-        shadowColor: '#000',
-        shadowOpacity: 0.16,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 8,
-    },
-    sheetPeekLeft: { flex: 1, gap: 4 },
-    sheetPeekTopRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    sheetPeekLabel: { fontSize: 11, textTransform: 'uppercase', fontWeight: '700', letterSpacing: 0.4 },
-    sheetPeekValue: { fontSize: 16, fontWeight: '700' },
-    sheetPeekStatusPill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999 },
-    sheetPeekStatusText: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-    sheetPeekChevron: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
-    sheetModalRoot: { flex: 1, justifyContent: 'flex-end', zIndex: 999, elevation: 30 },
-    sheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,23,42,0.5)', zIndex: 1 },
-    sheetContainer: { width: '100%', zIndex: 2 },
-    settingsSection: { gap: 12 },
-    settingsCard: { borderRadius: 14, borderWidth: 1, padding: 14 },
-    settingsTitle: { fontSize: 13, fontWeight: '700', marginBottom: 10 },
-    settingsOptionsRow: { flexDirection: 'row', gap: 8 },
-    settingsOption: { flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, minWidth: 64, alignItems: 'center', justifyContent: 'center', gap: 4 },
-    settingsToggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    settingsToggle: { width: 48, height: 26, borderRadius: 999, justifyContent: 'center' },
-    settingsToggleThumb: { position: 'absolute', width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff' },
-    settingsSupportList: { gap: 8, marginTop: 4 },
-    settingsSupportRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1 },
-    settingsSupportLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    settingsSupportLabel: { fontSize: 12, fontWeight: '600' },
-    settingsSupportValue: { fontSize: 11 },
-    skeletonCard: { borderRadius: 18, borderWidth: 1, padding: 14, marginBottom: 14 },
-    skeletonHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-    skeletonMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-    skeletonDesc: { gap: 6, marginBottom: 10 },
-    skeletonInfoBlock: { borderRadius: 12, padding: 10, gap: 6, backgroundColor: 'rgba(148,163,184,0.12)' },
-    skeletonAction: { height: 36, borderRadius: 12, backgroundColor: 'rgba(148,163,184,0.25)', marginTop: 12 },
-    skeletonLineWide: { height: 14, borderRadius: 8, width: '55%', backgroundColor: 'rgba(148,163,184,0.25)' },
-    skeletonLineShort: { height: 14, borderRadius: 8, width: '20%', backgroundColor: 'rgba(148,163,184,0.25)' },
-    skeletonBadge: { height: 18, borderRadius: 999, width: 70, backgroundColor: 'rgba(148,163,184,0.22)' },
-    skeletonLineTiny: { height: 10, borderRadius: 6, width: 90, backgroundColor: 'rgba(148,163,184,0.22)' },
-    skeletonLineFull: { height: 10, borderRadius: 6, width: '100%', backgroundColor: 'rgba(148,163,184,0.22)' },
-    skeletonLineMid: { height: 10, borderRadius: 6, width: '70%', backgroundColor: 'rgba(148,163,184,0.22)' },
-});

@@ -112,7 +112,32 @@ master-kg/
 - Added app-side fallback:
   - `ordersService.getAvailableOrders` calls RPC first.
   - Falls back to legacy multi-query flow if RPC is missing/fails.
-- Added consolidated DB validation script: `../tests/db/00_run_all_pool_optimization_checks.sql`.
+- DB validation is now documented as SQL snippets inside optimization notes and patch files (no dedicated `tests/db` scripts kept in repo).
+
+## 1.7 Maintainability Refactor (2026-02-08)
+
+### Master Dashboard codebase split
+
+- Added `src/screens/master/constants/domain.js`
+  - Centralized tab/section/account keys
+  - Centralized status groups and sort priorities
+- Added `src/screens/master/mappers/orderMappers.js`
+  - Normalizes inbound order payloads before state writes
+- Added `src/screens/master/hooks/useMasterOrderProcessing.js`
+  - Extracted pure pool filter/sort + my-jobs sort + counters
+- Added `src/screens/master/hooks/useMasterRouteState.js`
+  - Web URL query-param sync for internal dashboard state
+  - Browser `Back`/`Forward` support using `popstate`
+
+### Unit tests for extracted logic
+
+- Added:
+  - `tests/unit/masterOrderProcessing.test.js`
+  - `tests/unit/masterOrderMappers.test.js`
+- Test setup/usage guide:
+  - `tests/unit/README.md`
+- Refactor notes:
+  - `docs/MASTER_DASHBOARD_MAINTAINABILITY.md`
 
 ---
 
@@ -585,7 +610,7 @@ npx expo start --clear
 5. Run `SELECT setup_test_data();`
 6. Configure Auth + CORS for web (see "Supabase Auth Configuration" below)
 7. Run optimization patches in `../data` (including `PATCH_MASTER_POOL_RPC_OPTIMIZATION.sql`)
-8. Run DB validation script `../tests/db/00_run_all_pool_optimization_checks.sql`
+8. Run SQL validation snippets listed in `data/PATCH_MASTER_POOL_RPC_OPTIMIZATION.sql` comments.
 
 ### Supabase Auth Configuration (Web/Session Stability)
 This section covers the Supabase settings needed to support the session reliability fixes in v5.4.1 and avoid stuck loading screens on web.
@@ -649,9 +674,9 @@ This section covers the Supabase settings needed to support the session reliabil
   - automatic fallback to legacy query path if RPC is unavailable
 
 ### Validation Artifacts
-- Added consolidated DB optimization test script in `../tests/db`:
-  - `00_run_all_pool_optimization_checks.sql`
-  - includes deployment prerequisites, master-context smoke tests, `EXPLAIN (ANALYZE, BUFFERS)`, and dataset analysis snapshot
+- DB optimization validation is documented as SQL snippets and execution notes in:
+  - `data/PATCH_MASTER_POOL_RPC_OPTIMIZATION.sql`
+  - `PROJECT_DOCUMENTATION.md` (Performance + DB sections)
 
 ## v5.4.2 - Master Dashboard Notifications, Limits, and Stability (February 7, 2026)
 
