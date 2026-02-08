@@ -31,6 +31,19 @@ const callWithRetry = async (fn, retries = 1, delayMs = 300) => {
   }
   return fn();
 };
+const POOL_RPC_NAME = 'get_available_orders_pool';
+const normalizePoolFilters = (filters = {}) => ({
+  urgency: filters?.urgency && filters.urgency !== '' ? filters.urgency : 'all',
+  service: filters?.service && filters.service !== '' ? filters.service : 'all',
+  area: filters?.area && filters.area !== '' ? filters.area : 'all',
+  pricing: filters?.pricing && filters.pricing !== '' ? filters.pricing : 'all',
+});
+const isMissingRpcFunction = (error, fnName) => {
+  const msg = String(error?.message || '').toLowerCase();
+  return msg.includes('function')
+    && msg.includes(String(fnName || '').toLowerCase())
+    && (msg.includes('does not exist') || msg.includes('not found'));
+};
 
 // Order status constants
 export const ORDER_STATUS = {
@@ -62,10 +75,9 @@ class OrdersService {
   // ============================================
 
   /**
-   * Get available orders (pool view for masters)
-   * Returns orders with STAGED visibility - no full_address before claim
+   * Legacy implementation kept as fallback until RPC patch is deployed.
    */
-  getAvailableOrders = async (page = 1, limit = 10, filters = {}) => {
+  getAvailableOrdersLegacy = async (page = 1, limit = 10, filters = {}) => {
     try {
       const baseSelect = `
           id,
@@ -177,7 +189,45 @@ class OrdersService {
       console.error(`${LOG_PREFIX} getAvailableOrders failed:`, error);
       return { data: [], count: 0 };
     }
-  }
+  };
+
+  /**
+   * Get available orders (pool view for masters)
+   * Uses RPC for one-roundtrip fetch, with automatic fallback to legacy flow.
+   */
+  getAvailableOrders = async (page = 1, limit = 10, filters = {}) => {
+    const safePage = Number.isInteger(page) && page > 0 ? page : 1;
+    const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : 10;
+    const safeFilters = normalizePoolFilters(filters);
+
+    try {
+      const { data: rpcData, error: rpcError } = await callWithRetry(() => supabase.rpc(POOL_RPC_NAME, {
+        p_page: safePage,
+        p_limit: safeLimit,
+        p_urgency: safeFilters.urgency,
+        p_service: safeFilters.service,
+        p_area: safeFilters.area,
+        p_pricing: safeFilters.pricing,
+      }));
+
+      if (rpcError) {
+        if (isMissingRpcFunction(rpcError, POOL_RPC_NAME)) {
+          console.warn(`${LOG_PREFIX} ${POOL_RPC_NAME} is missing, using legacy getAvailableOrders flow`);
+        } else {
+          console.warn(`${LOG_PREFIX} ${POOL_RPC_NAME} failed, using legacy flow:`, rpcError?.message || rpcError);
+        }
+        return this.getAvailableOrdersLegacy(safePage, safeLimit, safeFilters);
+      }
+
+      const items = Array.isArray(rpcData?.items) ? rpcData.items : [];
+      const count = Number(rpcData?.total_count || 0);
+      console.log(`${LOG_PREFIX} Found ${items.length} available orders (Total: ${count})`);
+      return { data: items, count };
+    } catch (error) {
+      console.warn(`${LOG_PREFIX} ${POOL_RPC_NAME} exception, using legacy flow:`, error?.message || error);
+      return this.getAvailableOrdersLegacy(safePage, safeLimit, safeFilters);
+    }
+  };
 
   /**
    * Get metadata for ALL available orders (for filters/counts)

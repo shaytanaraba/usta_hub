@@ -1,7 +1,7 @@
 # Master KG v5 - Complete Technical Documentation
 
 > **Version**: 5.0  
-> **Last Updated**: February 2026  
+> **Last Updated**: February 8, 2026  
 > **Architecture**: Dispatcher-Mediated Service Platform
 
 ---
@@ -85,6 +85,34 @@ master-kg/
 - **Admin confirm payment requires `payment_confirmed_by`**: The DB trigger blocks `status = confirmed` if `payment_method` or `payment_confirmed_by` is missing. `confirmPaymentAdmin` now sets `payment_confirmed_by` (current admin) and `payment_confirmed_at` to avoid the error.
 - **Admin final price override**: Use RPC `admin_override_final_price(order_id, final_price, reason)` for completed/confirmed orders. It recalculates commission, updates master earnings, adjusts balance, and logs the change.
 - **Recent UI updates (Master dashboard)**: Orders list now uses skeleton loading; filters are a compact overlay row that expands into a horizontal chip panel; order cards were restyled to match the prototype and now show landmark/orientir even before claim; the active order peek widget/bottom sheet layout was updated; My Account now hides raw order IDs in history and shows human-friendly context; Settings screen got language flags and a support contact card.
+
+## 1.6 Performance Optimizations (2026-02-08)
+
+### Master Dashboard (frontend/app layer)
+- Split load flow into `critical` and `account` scopes to reduce blocking on first paint.
+- Added perf instrumentation events (`[MasterDashboard][PERF]`) with target thresholds for first load, refresh, pool reload, actions, and page changes.
+- Added stale-response guards using incremental load IDs (`criticalLoadSeq`, `poolLoadSeq`, `pageLoadSeq`) to avoid race-condition UI overwrite.
+- Added lookup caching (service types, cancellation reasons, districts) with TTL.
+- Debounced filter reload and duplicate-filter key suppression to reduce unnecessary pool calls.
+- Reused `authUser` from context to avoid redundant `auth.getCurrentUser` calls on refresh.
+- Added header-refresh in-flight lock to prevent stacked refresh requests.
+- Added list/render tuning (`initialNumToRender`, `maxToRenderPerBatch`, `windowSize`, memoized order cards).
+- Added web compatibility fixes:
+  - `pointerEvents` prop usage replaced with `style.pointerEvents`.
+  - `Animated` `useNativeDriver` guarded for web.
+
+### Master Pool (database/query layer)
+- Added patch `data/PATCH_MASTER_POOL_RPC_OPTIMIZATION.sql`.
+- Added partial indexes:
+  - `idx_orders_pool_status_created_at`
+  - `idx_orders_pool_filters_created_at`
+- Added RPC `public.get_available_orders_pool(...)` that returns:
+  - `total_count`
+  - `items` (paged rows)
+- Added app-side fallback:
+  - `ordersService.getAvailableOrders` calls RPC first.
+  - Falls back to legacy multi-query flow if RPC is missing/fails.
+- Added consolidated DB validation script: `../tests/db/00_run_all_pool_optimization_checks.sql`.
 
 ---
 
@@ -556,6 +584,8 @@ npx expo start --clear
 4. Run `version_5/SEED_DATA.sql`
 5. Run `SELECT setup_test_data();`
 6. Configure Auth + CORS for web (see "Supabase Auth Configuration" below)
+7. Run optimization patches in `../data` (including `PATCH_MASTER_POOL_RPC_OPTIMIZATION.sql`)
+8. Run DB validation script `../tests/db/00_run_all_pool_optimization_checks.sql`
 
 ### Supabase Auth Configuration (Web/Session Stability)
 This section covers the Supabase settings needed to support the session reliability fixes in v5.4.1 and avoid stuck loading screens on web.
@@ -596,6 +626,32 @@ This section covers the Supabase settings needed to support the session reliabil
 ---
 
 # 5. Version History & Changelog
+
+## v5.4.3 - Master Pool RPC + Performance Instrumentation (February 8, 2026)
+
+### Dashboard Performance
+- Added structured performance logging in Master dashboard with explicit targets and flow labels.
+- Added load dedupe/race protection (sequence guards) and refresh dedupe (header refresh lock).
+- Reduced avoidable reloads (filter-key dedupe + debounce + context user reuse).
+- Added render-side tuning for large order lists and memoized order cards.
+
+### Web Stability
+- Replaced deprecated `pointerEvents` prop usage with `style.pointerEvents` in active components.
+- Guarded animated native driver usage for web runtime.
+
+### Database Optimization
+- Added `data/PATCH_MASTER_POOL_RPC_OPTIMIZATION.sql`:
+  - two partial indexes for pool workload
+  - `get_available_orders_pool` RPC for one-roundtrip pool fetch (`items + total_count`)
+  - role/verification guard inside RPC for security parity with pool visibility policy
+- Updated `src/services/orders.js`:
+  - RPC-first available-orders fetch
+  - automatic fallback to legacy query path if RPC is unavailable
+
+### Validation Artifacts
+- Added consolidated DB optimization test script in `../tests/db`:
+  - `00_run_all_pool_optimization_checks.sql`
+  - includes deployment prerequisites, master-context smoke tests, `EXPLAIN (ANALYZE, BUFFERS)`, and dataset analysis snapshot
 
 ## v5.4.2 - Master Dashboard Notifications, Limits, and Stability (February 7, 2026)
 

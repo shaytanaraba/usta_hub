@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Animated, TouchableOpacity, Platform, Modal } f
 import { CheckCircle2, XCircle, AlertTriangle, Info, X } from 'lucide-react-native';
 
 const ToastContext = createContext();
+const CAN_USE_NATIVE_DRIVER = Platform.OS !== 'web';
 
 export const useToast = () => {
     const context = useContext(ToastContext);
@@ -45,7 +46,7 @@ const ToastContainer = ({ toasts, onDismiss }) => {
 
     return (
         <Modal transparent visible animationType="none" onRequestClose={() => {}}>
-            <View style={styles.container} pointerEvents="box-none">
+            <View style={styles.container}>
                 {toasts.map(toast => (
                     <Toast key={toast.id} toast={toast} onDismiss={onDismiss} />
                 ))}
@@ -61,7 +62,7 @@ const Toast = ({ toast, onDismiss }) => {
         Animated.timing(fadeAnim, {
             toValue: 1,
             duration: 220,
-            useNativeDriver: true,
+            useNativeDriver: CAN_USE_NATIVE_DRIVER,
         }).start();
     }, [fadeAnim]);
 
@@ -111,6 +112,7 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         alignItems: 'center',
+        pointerEvents: 'box-none',
         zIndex: 99999,
         elevation: 99999,
     },

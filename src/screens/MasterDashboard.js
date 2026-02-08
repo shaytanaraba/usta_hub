@@ -10,7 +10,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl,
-    Modal, TextInput, ScrollView, ActivityIndicator, Platform, Dimensions, Pressable, Clipboard, Linking, Animated, Easing, PanResponder,
+    Modal, TextInput, ScrollView, ActivityIndicator, Platform, Dimensions, Pressable, Clipboard, Linking, Animated, Easing, PanResponder, InteractionManager,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -34,7 +34,40 @@ import { getOrderStatusLabel, getServiceLabel } from '../utils/orderHelpers';
 
 const LOG_PREFIX = '[MasterDashboard]';
 const PAGE_LIMIT = 20;
+const CAN_USE_NATIVE_DRIVER = Platform.OS !== 'web';
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+// Toggle performance logs in production by setting globalThis.__PERF_LOGS__ = true.
+const PERF_LOG_ENABLED = __DEV__ || Boolean(typeof globalThis !== 'undefined' && globalThis.__PERF_LOGS__);
+const LOOKUP_TTL_MS = 6 * 60 * 60 * 1000;
+const LOOKUP_CACHE = {
+    serviceTypes: { ts: 0, data: null },
+    cancelReasons: { ts: 0, data: null },
+    districts: { ts: 0, data: null },
+};
+const PERF_TARGETS_MS = {
+    initialLoad: 2500,
+    firstListLayout: 2800,
+    refresh: 1500,
+    reloadPool: 800,
+    action: 1200,
+    pageChange: 700,
+};
+const perfNow = () => {
+    if (typeof globalThis !== 'undefined' && globalThis.performance && typeof globalThis.performance.now === 'function') {
+        return globalThis.performance.now();
+    }
+    return Date.now();
+};
+const roundMs = (value) => Math.round(value);
+const getCachedLookup = (key) => {
+    const entry = LOOKUP_CACHE[key];
+    if (!entry || !entry.data) return null;
+    if (Date.now() - entry.ts > LOOKUP_TTL_MS) return null;
+    return entry.data;
+};
+const setCachedLookup = (key, data) => {
+    LOOKUP_CACHE[key] = { ts: Date.now(), data: Array.isArray(data) ? [...data] : data };
+};
 const sanitizeNumberInput = (value) => {
     if (value === null || value === undefined) return '';
     const cleaned = String(value).replace(/[^\d.]/g, '');
@@ -150,7 +183,7 @@ const Header = ({ user, financials, onLogout, onLanguageToggle, onThemeToggle, o
 // ============================================
 // ORDER CARD COMPONENT
 // ============================================
-const OrderCard = ({ order, isPool, isSelected, canClaim, actionLoading, onClaim, onStart, onComplete, onRefuse, onCopyAddress, onOpen }) => {
+const OrderCardBase = ({ order, isPool, isSelected, canClaim, actionLoading, onClaim, onStart, onComplete, onRefuse, onCopyAddress, onOpen }) => {
     const { t, language } = useLocalization();
     const { theme } = useTheme();
     const { width } = Dimensions.get('window');
@@ -336,6 +369,7 @@ const OrderCard = ({ order, isPool, isSelected, canClaim, actionLoading, onClaim
         </TouchableOpacity>
     );
 };
+const OrderCard = React.memo(OrderCardBase);
 
 // ============================================
 // SKELETON ORDER CARD
@@ -436,6 +470,83 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
         profile: t('sectionProfile'),
         settings: t('sectionSettings') || 'Settings'
     }[accountView];
+    const orderById = useMemo(() => new Map(orderHistory.map(o => [o.id, o])), [orderHistory]);
+    const uuidRegex = useMemo(() => /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g, []);
+    const contextSeparator = ' - ';
+    const districtLabelByCode = useMemo(() => {
+        const map = {};
+        districts.forEach((d) => {
+            if (!d?.code) return;
+            const localized = language === 'ru'
+                ? (d.name_ru || d.name_en)
+                : language === 'kg'
+                    ? (d.name_kg || d.name_en)
+                    : d.name_en;
+            map[String(d.code).toLowerCase()] = localized;
+        });
+        return map;
+    }, [districts, language]);
+    const getAreaLabel = useCallback((area) => {
+        if (!area) return '-';
+        const raw = String(area).trim();
+        const normalized = raw.toLowerCase();
+        if (districtLabelByCode[normalized]) {
+            return districtLabelByCode[normalized];
+        }
+        const parts = raw.split(/вЂ”|-/).map(p => p.trim()).filter(Boolean);
+        if (parts.length > 1) {
+            const tail = parts[parts.length - 1].toLowerCase();
+            if (districtLabelByCode[tail]) {
+                return `${parts.slice(0, -1).join(' вЂ” ')} вЂ” ${districtLabelByCode[tail]}`;
+            }
+        }
+        return raw;
+    }, [districtLabelByCode]);
+    const formatOrderContext = useCallback((serviceType, area) => {
+        const serviceLabel = getServiceLabel(serviceType, t);
+        const areaLabel = getAreaLabel(area);
+        return `${serviceLabel}${contextSeparator}${areaLabel}`;
+    }, [getAreaLabel, t]);
+    const historyRows = useMemo(() => {
+        if (accountView !== 'history') return [];
+        const combinedHistory = [
+            ...orderHistory.map(o => ({ ...o, type: 'order', date: new Date(o.created_at) })),
+            ...balanceTransactions.map(tx => ({ ...tx, type: 'transaction', date: new Date(tx.created_at) }))
+        ].sort((a, b) => historySort === 'desc' ? (b.date - a.date) : (a.date - b.date));
+        const filteredHistory = combinedHistory.filter(item => {
+            if (historyFilter === 'financial') return item.type === 'transaction';
+            if (historyFilter === 'orders') return item.type === 'order';
+            return true;
+        });
+        if (!filteredHistory.length) return [];
+        const locale = language === 'ru' ? 'ru-RU' : language === 'kg' ? 'ky-KG' : 'en-US';
+        const nowYear = new Date().getFullYear();
+        const formatDayKey = (dateObj) => {
+            const d = new Date(dateObj);
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        };
+        const formatDayLabel = (dateObj) => {
+            const d = new Date(dateObj);
+            const isCurrentYear = d.getFullYear() === nowYear;
+            return d.toLocaleDateString(locale, {
+                day: 'numeric',
+                month: 'short',
+                ...(isCurrentYear ? {} : { year: 'numeric' })
+            });
+        };
+        const grouped = filteredHistory.reduce((acc, item) => {
+            const key = formatDayKey(item.date);
+            if (!acc[key]) acc[key] = { key, label: formatDayLabel(item.date), items: [] };
+            acc[key].items.push(item);
+            return acc;
+        }, {});
+        const rows = [];
+        Object.values(grouped).forEach((group) => {
+            rows.push({ type: 'group', key: `g-${group.key}`, label: group.label });
+            group.items.forEach((item) => rows.push({ type: 'row', key: `${item.type}-${item.id}`, item }));
+        });
+        return rows;
+    }, [accountView, balanceTransactions, historyFilter, historySort, language, orderHistory]);
     const formatAccountingAmount = (value) => {
         const num = Number(value);
         if (Number.isNaN(num)) return '-';
@@ -447,6 +558,192 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
         if (Number.isNaN(num) || num === 0) return theme.textMuted;
         return num < 0 ? theme.accentDanger : theme.accentSuccess;
     };
+    const historyEmpty = historyRows.length === 0;
+    const renderTransactionRow = useCallback((item) => {
+        const isCommissionTx = String(item.transaction_type || '').includes('commission');
+        const noteText = String(item.notes || '').trim();
+        const uuidMatch = noteText.match(uuidRegex);
+        const relatedOrder = uuidMatch ? orderById.get(uuidMatch[0]) : null;
+        const txTypeLabel = {
+            top_up: safeT('transactionTopUp', 'Top up'),
+            adjustment: safeT('transactionAdjustment', 'Adjustment'),
+            refund: safeT('transactionRefund', 'Refund'),
+            waiver: safeT('transactionWaiver', 'Waiver'),
+            commission: safeT('transactionCommission', 'Commission'),
+            commission_deduct: safeT('transactionCommission', 'Commission'),
+            initial_deposit: safeT('transactionInitialDeposit', 'Initial deposit')
+        }[item.transaction_type] || (isCommissionTx
+            ? safeT('transactionCommission', 'Commission')
+            : (item.transaction_type || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+        const contextLabel = isCommissionTx || relatedOrder
+            ? safeT('historyOrderTag', 'Order')
+            : safeT('historyTransactionTag', 'Transaction');
+        return (
+            <View style={[styles.historyRow, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
+                <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textPrimary }]} numberOfLines={1}>
+                    {txTypeLabel}
+                </Text>
+                <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]} numberOfLines={1}>
+                    {contextLabel}
+                </Text>
+                <View style={[styles.historyCell, styles.historyCellAmount]}>
+                    <Text style={{ color: getAmountColor(item.amount), fontWeight: '400', fontSize: 11 }}>
+                        {formatAccountingAmount(item.amount)}
+                    </Text>
+                </View>
+            </View>
+        );
+    }, [formatAccountingAmount, getAmountColor, orderById, safeT, theme, uuidRegex]);
+    const renderOrderRow = useCallback((o) => {
+        const orderArea = o.area || o.district || '-';
+        const orderContext = formatOrderContext(o.service_type, orderArea);
+        const orderEventLabel = {
+            completed: safeT('jobCompleted', 'Job completed'),
+            confirmed: safeT('jobConfirmed', 'Job confirmed'),
+            canceled_by_master: safeT('jobCanceled', 'Job canceled'),
+            canceled_by_client: safeT('jobCanceled', 'Job canceled'),
+            expired: safeT('jobExpired', 'Job expired'),
+        }[o.status] || getStatusLabel(o.status);
+        const isOrderNoAmount = ['canceled_by_master', 'canceled_by_client', 'expired'].includes(o.status);
+        return (
+            <View style={[styles.historyRow, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
+                <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textPrimary }]} numberOfLines={1}>
+                    {orderEventLabel}
+                </Text>
+                <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]} numberOfLines={1}>
+                    {orderContext}
+                </Text>
+                <View style={[styles.historyCell, styles.historyCellAmount]}>
+                    {isOrderNoAmount ? (
+                        <Text style={{ color: theme.textMuted, fontWeight: '400', fontSize: 11 }}>
+                            {safeT('historyNoAmount', 'вЂ”')}
+                        </Text>
+                    ) : (
+                        <Text style={{ color: theme.accentSuccess, fontWeight: '400', fontSize: 11 }}>
+                            {formatAccountingAmount(o.final_price ?? o.initial_price ?? o.callout_fee ?? 0)}
+                        </Text>
+                    )}
+                </View>
+            </View>
+        );
+    }, [formatAccountingAmount, formatOrderContext, getStatusLabel, safeT, theme]);
+    const renderHistoryItem = useCallback(({ item }) => {
+        if (item.type === 'group') {
+            return (
+                <View style={[styles.historyGroupHeader, { borderTopColor: theme.borderPrimary, backgroundColor: theme.bgCard }]}>
+                    <Text style={[styles.historyGroupHeaderText, { color: theme.textSecondary }]}>{item.label}</Text>
+                </View>
+            );
+        }
+        const row = item.item;
+        return row.type === 'transaction'
+            ? renderTransactionRow(row)
+            : renderOrderRow(row);
+    }, [renderOrderRow, renderTransactionRow, theme]);
+    const historyHeaderRow = useMemo(() => (
+        <View style={[styles.historyRow, styles.historyHeaderRow, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+            <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textMuted }]}>
+                {safeT('historyColType', 'Type')}
+            </Text>
+            <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]}>
+                {safeT('historyColDetails', 'Details')}
+            </Text>
+            <Text style={[styles.historyCell, styles.historyCellAmount, { color: theme.textMuted }]}>
+                {safeT('historyColAmount', 'Amount')}
+            </Text>
+        </View>
+    ), [safeT, theme]);
+
+    if (accountView === 'history') {
+        return (
+            <View style={styles.accountContainer}>
+                <View style={styles.accountHeaderRow}>
+                    <TouchableOpacity
+                        style={[styles.accountBackBtn, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}
+                        onPress={() => setAccountView('menu')}
+                    >
+                        <ChevronLeft size={18} color={theme.textPrimary} />
+                    </TouchableOpacity>
+                    <Text style={[styles.accountHeaderTitle, { color: theme.textPrimary }]}>{accountTitle}</Text>
+                </View>
+                <View style={[styles.historySection, { flex: 1 }]}>
+                    <View style={styles.historyFilterRow}>
+                        {[
+                            { key: 'all', label: safeT('filterAll', 'All') },
+                            { key: 'financial', label: safeT('historyFilterFinancial', 'Financial') },
+                            { key: 'orders', label: safeT('historyFilterOrders', 'Orders') },
+                        ].map((option) => {
+                            const isActive = historyFilter === option.key;
+                            return (
+                                <TouchableOpacity
+                                    key={option.key}
+                                    style={[
+                                        styles.historyFilterChip,
+                                        {
+                                            backgroundColor: isActive ? `${theme.accentIndigo}18` : theme.bgCard,
+                                            borderColor: isActive ? theme.accentIndigo : theme.borderPrimary,
+                                        },
+                                    ]}
+                                    onPress={() => setHistoryFilter(option.key)}
+                                >
+                                    <Text style={{ color: isActive ? theme.accentIndigo : theme.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>
+                                        {option.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                    <View style={styles.historySortRow}>
+                        {[
+                            { key: 'desc', label: safeT('filterNewestFirst', 'Newest First') },
+                            { key: 'asc', label: safeT('filterOldestFirst', 'Oldest First') },
+                        ].map((option) => {
+                            const isActive = historySort === option.key;
+                            return (
+                                <TouchableOpacity
+                                    key={option.key}
+                                    style={[
+                                        styles.historySortChip,
+                                        {
+                                            backgroundColor: isActive ? `${theme.accentIndigo}18` : theme.bgCard,
+                                            borderColor: isActive ? theme.accentIndigo : theme.borderPrimary,
+                                        },
+                                    ]}
+                                    onPress={() => setHistorySort(option.key)}
+                                >
+                                    <Text style={{ color: isActive ? theme.accentIndigo : theme.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>
+                                        {option.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                    {historyEmpty ? (
+                        <View style={styles.emptyState}>
+                            <ClipboardList size={40} color={theme.textMuted} />
+                            <Text style={{ color: theme.textMuted }}>{t('noOrderHistory')}</Text>
+                        </View>
+                    ) : (
+                        <FlatList
+                            data={historyRows}
+                            keyExtractor={(item) => item.key}
+                            renderItem={renderHistoryItem}
+                            ListHeaderComponent={historyHeaderRow}
+                            ListFooterComponent={<View style={{ height: 80 }} />}
+                            style={[styles.historyTable, { borderColor: theme.borderPrimary, flex: 1 }]}
+                            contentContainerStyle={{ paddingBottom: 12 }}
+                            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}
+                            initialNumToRender={18}
+                            maxToRenderPerBatch={24}
+                            windowSize={8}
+                            updateCellsBatchingPeriod={50}
+                            removeClippedSubviews={Platform.OS === 'android'}
+                        />
+                    )}
+                </View>
+            </View>
+        );
+    }
 
     return (
         <ScrollView style={styles.accountContainer} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}>
@@ -505,237 +802,6 @@ const MyAccountTab = ({ user, financials, earnings, orderHistory, balanceTransac
                         </TouchableOpacity>
                     </View>
                 </>
-            )}
-
-            {/* History Section - Combined orders and balance transactions */}
-            {accountView === 'history' && (
-                <View style={styles.historySection}>
-                    <View style={styles.historyFilterRow}>
-                        {[
-                            { key: 'all', label: safeT('filterAll', 'All') },
-                            { key: 'financial', label: safeT('historyFilterFinancial', 'Financial') },
-                            { key: 'orders', label: safeT('historyFilterOrders', 'Orders') },
-                        ].map((option) => {
-                            const isActive = historyFilter === option.key;
-                            return (
-                                <TouchableOpacity
-                                    key={option.key}
-                                    style={[
-                                        styles.historyFilterChip,
-                                        {
-                                            backgroundColor: isActive ? `${theme.accentIndigo}18` : theme.bgCard,
-                                            borderColor: isActive ? theme.accentIndigo : theme.borderPrimary,
-                                        },
-                                    ]}
-                                    onPress={() => setHistoryFilter(option.key)}
-                                >
-                                    <Text style={{ color: isActive ? theme.accentIndigo : theme.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>
-                                        {option.label}
-                                    </Text>
-                                </TouchableOpacity>
-                            );
-                        })}
-                    </View>
-                    <View style={styles.historySortRow}>
-                        {[
-                            { key: 'desc', label: safeT('filterNewestFirst', 'Newest First') },
-                            { key: 'asc', label: safeT('filterOldestFirst', 'Oldest First') },
-                        ].map((option) => {
-                            const isActive = historySort === option.key;
-                            return (
-                                <TouchableOpacity
-                                    key={option.key}
-                                    style={[
-                                        styles.historySortChip,
-                                        {
-                                            backgroundColor: isActive ? `${theme.accentIndigo}18` : theme.bgCard,
-                                            borderColor: isActive ? theme.accentIndigo : theme.borderPrimary,
-                                        },
-                                    ]}
-                                    onPress={() => setHistorySort(option.key)}
-                                >
-                                    <Text style={{ color: isActive ? theme.accentIndigo : theme.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>
-                                        {option.label}
-                                    </Text>
-                                </TouchableOpacity>
-                            );
-                        })}
-                    </View>
-                    {(() => {
-                        // Combine and sort order history + balance transactions by date.
-                        const orderById = new Map(orderHistory.map(o => [o.id, o]));
-                        const uuidRegex = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
-                        const contextSeparator = ' \u00b7 ';
-                        const balanceLabel = safeT('balance', 'Balance').replace(/:\s*$/, '');
-                        const districtLabelByCode = {};
-                        districts.forEach((d) => {
-                            if (!d?.code) return;
-                            const localized = language === 'ru'
-                                ? (d.name_ru || d.name_en)
-                                : language === 'kg'
-                                    ? (d.name_kg || d.name_en)
-                                    : d.name_en;
-                            districtLabelByCode[String(d.code).toLowerCase()] = localized;
-                        });
-                        const getAreaLabel = (area) => {
-                            if (!area) return '-';
-                            const raw = String(area).trim();
-                            const normalized = raw.toLowerCase();
-                            if (districtLabelByCode[normalized]) {
-                                return districtLabelByCode[normalized];
-                            }
-                            const parts = raw.split(/—|-/).map(p => p.trim()).filter(Boolean);
-                            if (parts.length > 1) {
-                                const tail = parts[parts.length - 1].toLowerCase();
-                                if (districtLabelByCode[tail]) {
-                                    return `${parts.slice(0, -1).join(' — ')} — ${districtLabelByCode[tail]}`;
-                                }
-                            }
-                            return raw;
-                        };
-                        const formatOrderContext = (serviceType, area) => {
-                            const serviceLabel = getServiceLabel(serviceType, t);
-                            const areaLabel = getAreaLabel(area);
-                            return `${serviceLabel}${contextSeparator}${areaLabel}`;
-                        };
-                        const combinedHistory = [
-                            ...orderHistory.map(o => ({ ...o, type: 'order', date: new Date(o.created_at) })),
-                            ...balanceTransactions.map(tx => ({ ...tx, type: 'transaction', date: new Date(tx.created_at) }))
-                        ].sort((a, b) => historySort === 'desc' ? (b.date - a.date) : (a.date - b.date));
-                        const filteredHistory = combinedHistory.filter(item => {
-                            if (historyFilter === 'financial') return item.type === 'transaction';
-                            if (historyFilter === 'orders') return item.type === 'order';
-                            return true;
-                        });
-
-                        if (filteredHistory.length === 0) {
-                            return (
-                                <View style={styles.emptyState}>
-                                    <ClipboardList size={40} color={theme.textMuted} />
-                                    <Text style={{ color: theme.textMuted }}>{t('noOrderHistory')}</Text>
-                                </View>
-                            );
-                        }
-
-                        const renderTransactionRow = (item) => {
-                            const isCommissionTx = String(item.transaction_type || '').includes('commission');
-                            const noteText = String(item.notes || '').trim();
-                            const uuidMatch = noteText.match(uuidRegex);
-                            const relatedOrder = uuidMatch ? orderById.get(uuidMatch[0]) : null;
-                            const txTypeLabel = {
-                                top_up: safeT('transactionTopUp', 'Top up'),
-                                adjustment: safeT('transactionAdjustment', 'Adjustment'),
-                                refund: safeT('transactionRefund', 'Refund'),
-                                waiver: safeT('transactionWaiver', 'Waiver'),
-                                commission: safeT('transactionCommission', 'Commission'),
-                                commission_deduct: safeT('transactionCommission', 'Commission'),
-                                initial_deposit: safeT('transactionInitialDeposit', 'Initial deposit')
-                            }[item.transaction_type] || (isCommissionTx
-                                ? safeT('transactionCommission', 'Commission')
-                                : (item.transaction_type || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
-                            const contextLabel = isCommissionTx || relatedOrder
-                                ? safeT('historyOrderTag', 'Order')
-                                : safeT('historyTransactionTag', 'Transaction');
-                            return (
-                                <View key={`tx-${item.id}`} style={[styles.historyRow, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
-                                    <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textPrimary }]} numberOfLines={1}>
-                                        {txTypeLabel}
-                                    </Text>
-                                    <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]} numberOfLines={1}>
-                                        {contextLabel}
-                                    </Text>
-                                    <View style={[styles.historyCell, styles.historyCellAmount]}>
-                                        <Text style={{ color: getAmountColor(item.amount), fontWeight: '400', fontSize: 11 }}>
-                                            {formatAccountingAmount(item.amount)}
-                                        </Text>
-                                    </View>
-                                </View>
-                            );
-                        };
-                        const renderOrderRow = (o) => {
-                            const orderArea = o.area || o.district || '-';
-                            const orderContext = formatOrderContext(o.service_type, orderArea);
-                            const orderEventLabel = {
-                                completed: safeT('jobCompleted', 'Job completed'),
-                                confirmed: safeT('jobConfirmed', 'Job confirmed'),
-                                canceled_by_master: safeT('jobCanceled', 'Job canceled'),
-                                canceled_by_client: safeT('jobCanceled', 'Job canceled'),
-                                expired: safeT('jobExpired', 'Job expired'),
-                            }[o.status] || getStatusLabel(o.status);
-                            const isOrderNoAmount = ['canceled_by_master', 'canceled_by_client', 'expired'].includes(o.status);
-                            return (
-                                <View key={o.id} style={[styles.historyRow, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
-                                    <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textPrimary }]} numberOfLines={1}>
-                                        {orderEventLabel}
-                                    </Text>
-                                    <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]} numberOfLines={1}>
-                                        {orderContext}
-                                    </Text>
-                                    <View style={[styles.historyCell, styles.historyCellAmount]}>
-                                        {isOrderNoAmount ? (
-                                            <Text style={{ color: theme.textMuted, fontWeight: '400', fontSize: 11 }}>
-                                                {safeT('historyNoAmount', '—')}
-                                            </Text>
-                                        ) : (
-                                            <Text style={{ color: theme.accentSuccess, fontWeight: '400', fontSize: 11 }}>
-                                                {formatAccountingAmount(o.final_price ?? o.initial_price ?? o.callout_fee ?? 0)}
-                                            </Text>
-                                        )}
-                                    </View>
-                                </View>
-                            );
-                        };
-                        const renderRow = (item) => (
-                            item.type === 'transaction'
-                                ? renderTransactionRow(item)
-                                : renderOrderRow(item)
-                        );
-                        const locale = language === 'ru' ? 'ru-RU' : language === 'kg' ? 'ky-KG' : 'en-US';
-                        const nowYear = new Date().getFullYear();
-                        const formatDayKey = (dateObj) => {
-                            const d = new Date(dateObj);
-                            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                        };
-                        const formatDayLabel = (dateObj) => {
-                            const d = new Date(dateObj);
-                            const isCurrentYear = d.getFullYear() === nowYear;
-                            return d.toLocaleDateString(locale, {
-                                day: 'numeric',
-                                month: 'short',
-                                ...(isCurrentYear ? {} : { year: 'numeric' })
-                            });
-                        };
-                        const grouped = filteredHistory.reduce((acc, item) => {
-                            const key = formatDayKey(item.date);
-                            if (!acc[key]) acc[key] = { label: formatDayLabel(item.date), items: [] };
-                            acc[key].items.push(item);
-                            return acc;
-                        }, {});
-                        return (
-                            <View style={[styles.historyTable, { borderColor: theme.borderPrimary }]}>
-                                <View style={[styles.historyRow, styles.historyHeaderRow, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                                    <Text style={[styles.historyCell, styles.historyCellType, { color: theme.textMuted }]}>
-                                        {safeT('historyColType', 'Type')}
-                                    </Text>
-                                    <Text style={[styles.historyCell, styles.historyCellDetails, { color: theme.textMuted }]}>
-                                        {safeT('historyColDetails', 'Details')}
-                                    </Text>
-                                    <Text style={[styles.historyCell, styles.historyCellAmount, { color: theme.textMuted }]}>
-                                        {safeT('historyColAmount', 'Amount')}
-                                    </Text>
-                                </View>
-                                {Object.values(grouped).map((group) => (
-                                    <View key={group.label}>
-                                        <View style={[styles.historyGroupHeader, { borderTopColor: theme.borderPrimary, backgroundColor: theme.bgCard }]}>
-                                            <Text style={[styles.historyGroupHeaderText, { color: theme.textSecondary }]}>{group.label}</Text>
-                                        </View>
-                                        {group.items.map((item) => renderRow(item))}
-                                    </View>
-                                ))}
-                            </View>
-                        );
-                    })()}
-                </View>
             )}
 
             {/* Profile Section */}
@@ -957,14 +1023,76 @@ const DashboardContent = ({ navigation }) => {
     const sheetAnim = useRef(new Animated.Value(0)).current;
     const sheetSnapAnim = useRef(new Animated.Value(0)).current;
     const filterAnim = useRef(new Animated.Value(showFilters ? 1 : 0)).current;
+    const perfRef = useRef({
+        mountTs: perfNow(),
+        firstDataLogged: false,
+        firstListLayoutLogged: false,
+        criticalLoadSeq: 0,
+        accountLoadSeq: 0,
+        poolLoadSeq: 0,
+        pageLoadSeq: 0,
+        accountLoaded: false,
+        accountLoadedAt: 0,
+        filtersInitialized: false,
+        lastFilterKey: '',
+    });
+    const filterDebounceRef = useRef(null);
+    const headerRefreshInFlightRef = useRef(false);
 
     const { logout, user: authUser } = useAuth();
+    const logPerf = useCallback((event, data = {}) => {
+        if (!PERF_LOG_ENABLED) return;
+        console.log(`${LOG_PREFIX}[PERF] ${event}`, data);
+    }, []);
+    const timedCall = useCallback(async (label, fn, meta = {}) => {
+        const start = perfNow();
+        try {
+            const res = await fn();
+            logPerf('api_done', { label, ms: roundMs(perfNow() - start), ok: true, ...meta });
+            return res;
+        } catch (error) {
+            logPerf('api_done', { label, ms: roundMs(perfNow() - start), ok: false, error: error?.message, ...meta });
+            throw error;
+        }
+    }, [logPerf]);
 
-    useEffect(() => { loadData(); }, []);
     useEffect(() => {
-        if (!authUser) setUser(null);
+        loadCriticalData({ reset: true, reason: 'mount' });
+        const task = InteractionManager.runAfterInteractions(() => {
+            loadAccountData({ reason: 'post_mount' });
+        });
+        return () => task?.cancel?.();
+    }, []);
+    useEffect(() => {
+        if (!authUser) {
+            setUser(null);
+            perfRef.current.accountLoaded = false;
+            perfRef.current.accountLoadedAt = 0;
+            perfRef.current.filtersInitialized = false;
+            perfRef.current.lastFilterKey = '';
+        }
     }, [authUser]);
-    useEffect(() => { if (user) reloadPool(); }, [filters]);
+    useEffect(() => {
+        const userId = user?.id;
+        if (!userId) return;
+        const filterKey = JSON.stringify(filters);
+        if (!perfRef.current.filtersInitialized) {
+            perfRef.current.filtersInitialized = true;
+            perfRef.current.lastFilterKey = filterKey;
+            return;
+        }
+        if (perfRef.current.lastFilterKey === filterKey) return;
+        perfRef.current.lastFilterKey = filterKey;
+        if (filterDebounceRef.current) {
+            clearTimeout(filterDebounceRef.current);
+        }
+        filterDebounceRef.current = setTimeout(() => {
+            reloadPool({ reason: 'filters' });
+        }, 280);
+        return () => {
+            if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current);
+        };
+    }, [filters, user?.id]);
     useEffect(() => {
         Animated.timing(filterAnim, {
             toValue: showFilters ? 1 : 0,
@@ -1000,7 +1128,7 @@ const DashboardContent = ({ navigation }) => {
                 toValue: 1,
                 duration: 240,
                 easing: Easing.out(Easing.cubic),
-                useNativeDriver: true,
+                useNativeDriver: CAN_USE_NATIVE_DRIVER,
             }).start();
             return;
         }
@@ -1009,7 +1137,7 @@ const DashboardContent = ({ navigation }) => {
                 toValue: 0,
                 duration: 180,
                 easing: Easing.in(Easing.cubic),
-                useNativeDriver: true,
+                useNativeDriver: CAN_USE_NATIVE_DRIVER,
             }).start(({ finished }) => {
                 if (finished) setSheetModalVisible(false);
             });
@@ -1022,7 +1150,7 @@ const DashboardContent = ({ navigation }) => {
             toValue: target,
             duration: 220,
             easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
+            useNativeDriver: CAN_USE_NATIVE_DRIVER,
         }).start();
     }, [sheetSnap, sheetSnapAnim]);
 
@@ -1050,25 +1178,37 @@ const DashboardContent = ({ navigation }) => {
         if (hasNewDetails) setActiveSheetOrder(updated);
     }, [myOrders, activeSheetOrder]);
 
-    const loadData = async (reset = true) => {
+    const loadCriticalData = useCallback(async (options = {}) => {
+        const { reset = true, reason = 'manual', meta = {}, forceUserReload = false } = options;
+        const loadId = perfRef.current.criticalLoadSeq + 1;
+        perfRef.current.criticalLoadSeq = loadId;
+        const start = perfNow();
         if (reset) setLoading(true);
+        logPerf('load_start', { loadId, reset, scope: 'critical', reason, filters, ...meta });
         try {
-            const u = await authService.getCurrentUser({ retries: 1, retryDelayMs: 350 });
-            if (u) setUser(u);
-            const effectiveUser = u || authUser || user;
+            let resolvedUser = null;
+            const cachedUser = authUser || user;
+            const shouldFetchCurrentUser = forceUserReload || !cachedUser?.id;
+            if (shouldFetchCurrentUser) {
+                resolvedUser = await timedCall(
+                    'auth.getCurrentUser',
+                    () => authService.getCurrentUser({ retries: 1, retryDelayMs: 350 }),
+                    { loadId }
+                );
+            } else {
+                logPerf('user_resolve', { loadId, source: authUser?.id ? 'authUser' : 'localUser', skippedAuthFetch: true, reason });
+            }
+            if (resolvedUser) setUser(resolvedUser);
+            else if (authUser && (!user || user.id !== authUser.id)) setUser(authUser);
+            const effectiveUser = resolvedUser || cachedUser;
             if (effectiveUser) {
-                const [poolRes, jobsRes, fin, earn, hist, balTx, svcTypes, reasons, districtList, poolMeta] = await Promise.all([
-                    ordersService.getAvailableOrders(1, PAGE_LIMIT, filters),
-                    ordersService.getMasterOrders(effectiveUser.id, 1, 100),
-                    earningsService.getMasterFinancialSummary(effectiveUser.id),
-                    earningsService.getMasterEarnings(effectiveUser.id),
-                    ordersService.getMasterOrderHistory(effectiveUser.id),
-                    earningsService.getBalanceTransactions(effectiveUser.id),  // Fetch balance transactions (top-ups)
-                    ordersService.getServiceTypes(),
-                    ordersService.getCancellationReasons('master'),
-                    ordersService.getDistricts(),
-                    ordersService.getAvailableOrdersMeta(),
+                const [poolRes, jobsRes, fin, poolMeta] = await Promise.all([
+                    timedCall('orders.getAvailableOrders', () => ordersService.getAvailableOrders(1, PAGE_LIMIT, filters), { loadId }),
+                    timedCall('orders.getMasterOrders', () => ordersService.getMasterOrders(effectiveUser.id, 1, 100), { loadId }),
+                    timedCall('earnings.getMasterFinancialSummary', () => earningsService.getMasterFinancialSummary(effectiveUser.id), { loadId }),
+                    timedCall('orders.getAvailableOrdersMeta', () => ordersService.getAvailableOrdersMeta(), { loadId }),
                 ]);
+                if (perfRef.current.criticalLoadSeq !== loadId) return;
                 const safePoolMeta = poolMeta || [];
                 const filteredMetaCount = safePoolMeta.length
                     ? safePoolMeta.filter(row => {
@@ -1085,23 +1225,121 @@ const DashboardContent = ({ navigation }) => {
                     : resolvedPoolCount;
                 setAvailableOrders(poolRes.data);
                 setTotalPool(safePoolCount);
-                setMyOrders(jobsRes.data); setFinancials(fin); setEarnings(earn);
-                setOrderHistory(hist); setBalanceTransactions(balTx);
-                setServiceTypes(svcTypes); setCancelReasons(reasons); setDistricts(districtList || []);
+                setMyOrders(jobsRes.data);
+                setFinancials(fin);
                 const shouldKeepMeta = safePoolMeta.length === 0 && (typeof poolRes.count === 'number' ? poolRes.count > 0 : poolRes.data.length > 0);
                 setAvailableOrdersMeta(prev => (shouldKeepMeta ? prev : safePoolMeta));
             }
-        } catch (e) { console.error(e); }
-        finally { setLoading(false); }
-    };
+        } catch (e) {
+            console.error(e);
+            logPerf('load_error', { loadId, scope: 'critical', error: e?.message });
+        } finally {
+            if (perfRef.current.criticalLoadSeq !== loadId) return;
+            const ms = roundMs(perfNow() - start);
+            logPerf('load_done', {
+                loadId,
+                ms,
+                reset,
+                scope: 'critical',
+                targetMs: PERF_TARGETS_MS.initialLoad,
+                withinTarget: ms <= PERF_TARGETS_MS.initialLoad,
+                reason,
+                ...meta,
+            });
+            if (reset && !perfRef.current.firstDataLogged) {
+                perfRef.current.firstDataLogged = true;
+                const firstMs = roundMs(perfNow() - perfRef.current.mountTs);
+                logPerf('first_data_ready', {
+                    ms: firstMs,
+                    targetMs: PERF_TARGETS_MS.initialLoad,
+                    withinTarget: firstMs <= PERF_TARGETS_MS.initialLoad,
+                });
+            }
+            setLoading(false);
+        }
+    }, [authUser, filters, logPerf, timedCall, user]);
 
-    const reloadPool = async () => {
+    const loadAccountData = useCallback(async (options = {}) => {
+        const { reason = 'manual', forceLookups = false } = options;
+        const loadId = perfRef.current.accountLoadSeq + 1;
+        perfRef.current.accountLoadSeq = loadId;
+        const start = perfNow();
+        logPerf('load_start', { loadId, reset: false, scope: 'account', reason });
+        try {
+            const effectiveUser = authUser || user;
+            if (!effectiveUser) return;
+            const cachedServiceTypes = forceLookups ? null : getCachedLookup('serviceTypes');
+            const cachedCancelReasons = forceLookups ? null : getCachedLookup('cancelReasons');
+            const cachedDistricts = forceLookups ? null : getCachedLookup('districts');
+
+            const svcTypesPromise = cachedServiceTypes
+                ? Promise.resolve(cachedServiceTypes)
+                : timedCall('orders.getServiceTypes', () => ordersService.getServiceTypes(), { loadId, scope: 'account' })
+                    .then((res) => { setCachedLookup('serviceTypes', res || []); return res || []; });
+            const cancelPromise = cachedCancelReasons
+                ? Promise.resolve(cachedCancelReasons)
+                : timedCall('orders.getCancellationReasons', () => ordersService.getCancellationReasons('master'), { loadId, scope: 'account' })
+                    .then((res) => { setCachedLookup('cancelReasons', res || []); return res || []; });
+            const districtsPromise = cachedDistricts
+                ? Promise.resolve(cachedDistricts)
+                : timedCall('orders.getDistricts', () => ordersService.getDistricts(), { loadId, scope: 'account' })
+                    .then((res) => { setCachedLookup('districts', res || []); return res || []; });
+
+            const [earn, hist, balTx, svcTypes, reasons, districtList] = await Promise.all([
+                timedCall('earnings.getMasterEarnings', () => earningsService.getMasterEarnings(effectiveUser.id), { loadId, scope: 'account' }),
+                timedCall('orders.getMasterOrderHistory', () => ordersService.getMasterOrderHistory(effectiveUser.id), { loadId, scope: 'account' }),
+                timedCall('earnings.getBalanceTransactions', () => earningsService.getBalanceTransactions(effectiveUser.id), { loadId, scope: 'account' }),
+                svcTypesPromise,
+                cancelPromise,
+                districtsPromise,
+            ]);
+            if (perfRef.current.accountLoadSeq !== loadId) return;
+            setEarnings(earn);
+            setOrderHistory(hist);
+            setBalanceTransactions(balTx);
+            setServiceTypes(svcTypes || []);
+            setCancelReasons(reasons || []);
+            setDistricts(districtList || []);
+            perfRef.current.accountLoaded = true;
+            perfRef.current.accountLoadedAt = Date.now();
+        } catch (e) {
+            console.error(e);
+            logPerf('load_error', { loadId, scope: 'account', error: e?.message });
+        } finally {
+            if (perfRef.current.accountLoadSeq !== loadId) return;
+            const ms = roundMs(perfNow() - start);
+            logPerf('load_done', {
+                loadId,
+                ms,
+                reset: false,
+                scope: 'account',
+                reason,
+            });
+        }
+    }, [authUser, logPerf, timedCall, user]);
+
+    useEffect(() => {
+        if (activeTab !== 'account') return;
+        if (!perfRef.current.accountLoaded) {
+            loadAccountData({ reason: 'account_tab' });
+            return;
+        }
+        const stale = perfRef.current.accountLoadedAt && (Date.now() - perfRef.current.accountLoadedAt > 10 * 60 * 1000);
+        if (stale) loadAccountData({ reason: 'account_tab_stale' });
+    }, [activeTab, loadAccountData]);
+
+    const reloadPool = async (meta = {}) => {
+        const loadId = perfRef.current.poolLoadSeq + 1;
+        perfRef.current.poolLoadSeq = loadId;
+        const start = perfNow();
+        logPerf('reload_pool_start', { filters, loadId, ...meta });
         try {
             setPagePool(1);
             const [res, poolMeta] = await Promise.all([
-                ordersService.getAvailableOrders(1, PAGE_LIMIT, filters),
-                ordersService.getAvailableOrdersMeta(),
+                timedCall('orders.getAvailableOrders', () => ordersService.getAvailableOrders(1, PAGE_LIMIT, filters), { flow: 'reloadPool', loadId }),
+                timedCall('orders.getAvailableOrdersMeta', () => ordersService.getAvailableOrdersMeta(), { flow: 'reloadPool', loadId }),
             ]);
+            if (perfRef.current.poolLoadSeq !== loadId) return;
             const safePoolMeta = poolMeta || [];
             const filteredMetaCount = safePoolMeta.length
                 ? safePoolMeta.filter(row => {
@@ -1120,10 +1358,53 @@ const DashboardContent = ({ navigation }) => {
             setTotalPool(safePoolCount);
             const shouldKeepMeta = safePoolMeta.length === 0 && (typeof res.count === 'number' ? res.count > 0 : res.data.length > 0);
             setAvailableOrdersMeta(prev => (shouldKeepMeta ? prev : safePoolMeta));
-        } catch (e) { console.error(e); }
+        } catch (e) {
+            console.error(e);
+            logPerf('reload_pool_error', { error: e?.message, loadId, ...meta });
+        } finally {
+            if (perfRef.current.poolLoadSeq !== loadId) return;
+            const ms = roundMs(perfNow() - start);
+            logPerf('reload_pool_done', {
+                ms,
+                targetMs: PERF_TARGETS_MS.reloadPool,
+                withinTarget: ms <= PERF_TARGETS_MS.reloadPool,
+                loadId,
+                ...meta,
+            });
+        }
     };
 
-    const onRefresh = useCallback(async () => { setRefreshing(true); await loadData(false); setRefreshing(false); }, []);
+    const onRefresh = useCallback(async () => {
+        const start = perfNow();
+        setRefreshing(true);
+        if (activeTab === 'account') {
+            await Promise.all([
+                loadCriticalData({ reset: false, reason: 'pull_to_refresh' }),
+                loadAccountData({ reason: 'pull_to_refresh' }),
+            ]);
+        } else {
+            await loadCriticalData({ reset: false, reason: 'pull_to_refresh' });
+        }
+        setRefreshing(false);
+        const ms = roundMs(perfNow() - start);
+        logPerf('refresh_done', {
+            ms,
+            targetMs: PERF_TARGETS_MS.refresh,
+            withinTarget: ms <= PERF_TARGETS_MS.refresh,
+        });
+    }, [activeTab, loadAccountData, loadCriticalData, logPerf]);
+    const onHeaderRefresh = useCallback(async () => {
+        if (headerRefreshInFlightRef.current) {
+            logPerf('refresh_skip', { reason: 'header_refresh_inflight' });
+            return;
+        }
+        headerRefreshInFlightRef.current = true;
+        try {
+            await loadCriticalData({ reset: false, reason: 'header_refresh' });
+        } finally {
+            headerRefreshInFlightRef.current = false;
+        }
+    }, [loadCriticalData, logPerf]);
 
     const handleLogout = async () => {
         try {
@@ -1195,11 +1476,45 @@ const DashboardContent = ({ navigation }) => {
         }
         return filterPoolBy();
     }, [filterPoolBy, myOrders, orderSection]);
+    const upsertOrderById = useCallback((list, order) => {
+        if (!order) return list;
+        const idx = list.findIndex(o => o.id == order.id);
+        if (idx === -1) return [order, ...list];
+        const next = [...list];
+        next[idx] = { ...next[idx], ...order };
+        return next;
+    }, []);
+    const removeOrderById = useCallback((list, id) => list.filter(o => o.id != id), []);
+    const handleListLayout = useCallback(() => {
+        if (perfRef.current.firstListLayoutLogged) return;
+        perfRef.current.firstListLayoutLogged = true;
+        const ms = roundMs(perfNow() - perfRef.current.mountTs);
+        logPerf('first_list_layout', {
+            ms,
+            items: processedOrders.length,
+            section: orderSection,
+            targetMs: PERF_TARGETS_MS.firstListLayout,
+            withinTarget: ms <= PERF_TARGETS_MS.firstListLayout,
+        });
+    }, [logPerf, orderSection, processedOrders.length]);
 
-    const activeJobsCount = myOrders.filter(o => ['claimed', 'started', 'completed'].includes(o.status)).length;
-    const immediateOrdersCount = myOrders.filter(o => ['claimed', 'started'].includes(o.status) && ['urgent', 'emergency'].includes(o.urgency)).length;
-    const startedOrdersCount = myOrders.filter(o => o.status === 'started').length;
-    const pendingOrdersCount = myOrders.filter(o => o.status === 'completed').length;
+    const {
+        activeJobsCount,
+        immediateOrdersCount,
+        startedOrdersCount,
+        pendingOrdersCount,
+    } = useMemo(() => {
+        const active = myOrders.filter(o => ['claimed', 'started', 'completed'].includes(o.status));
+        const immediate = myOrders.filter(o => ['claimed', 'started'].includes(o.status) && ['urgent', 'emergency'].includes(o.urgency));
+        const started = myOrders.filter(o => o.status === 'started');
+        const pending = myOrders.filter(o => o.status === 'completed');
+        return {
+            activeJobsCount: active.length,
+            immediateOrdersCount: immediate.length,
+            startedOrdersCount: started.length,
+            pendingOrdersCount: pending.length,
+        };
+    }, [myOrders]);
     const maxActiveJobs = Number(user?.max_active_jobs || 2);
     const maxImmediateOrders = Number(user?.max_immediate_orders || 1);
     const maxPendingOrders = Number(user?.max_pending_confirmation || 3);
@@ -1219,6 +1534,9 @@ const DashboardContent = ({ navigation }) => {
         ? safeT('fixedPrice', 'Fixed price')
         : safeT('priceOpen', 'Open');
     const screenHeight = Dimensions.get('window').height || 800;
+    const gridColumns = deviceUtils.getGridColumns();
+    const initialRenderCount = gridColumns === 1 ? 6 : 8;
+    const batchRenderCount = gridColumns === 1 ? 6 : 10;
     const tabBarHeight = Platform.OS === 'ios' ? 72 : 56;
     const sheetBottomInset = tabBarHeight + (insets?.bottom || 0); // keep above tab bar + safe area
     const sheetFooterHeight = activeSheetOrder?.status === ORDER_STATUS.STARTED ? 80 : 68; // reserve space for sticky actions
@@ -1356,7 +1674,9 @@ const DashboardContent = ({ navigation }) => {
     }, [areaOptions, getMetaCount, language]);
 
 
-    const handleClaim = async (orderId) => {
+    const handleClaim = useCallback(async (orderId) => {
+        const actionStart = perfNow();
+        let success = false;
         // Find the order to estimate commission
         const order = availableOrders.find(o => o.id === orderId);
         const priceForCommission = Number(order?.final_price ?? order?.initial_price ?? 0);
@@ -1372,25 +1692,98 @@ const DashboardContent = ({ navigation }) => {
 
         setActionLoading(true);
         try {
-            const result = await ordersService.claimOrder(orderId);
+            const result = await timedCall('orders.claimOrder', () => ordersService.claimOrder(orderId), { flow: 'action', action: 'claim' });
             if (result.success) {
+                success = true;
                 showToast?.(localizeSuccessMessage(result.message, 'toastOrderClaimed', 'Order claimed!'), 'success');
                 if (Array.isArray(result.warnings) && result.warnings.includes('TIME_CONFLICT')) {
                     showToast?.(safeT('warningTimeConflict', 'Potential time conflict with another planned order'), 'warning');
                 }
                 setSelectedPoolOrderId(null);
-                setActiveSheetOrder(order ? { ...order, status: ORDER_STATUS.CLAIMED } : { id: orderId, status: ORDER_STATUS.CLAIMED });
+                const claimedOrder = result.order || (order ? { ...order, status: ORDER_STATUS.CLAIMED } : { id: orderId, status: ORDER_STATUS.CLAIMED });
+                setActiveSheetOrder(claimedOrder);
                 setSheetSnap('full');
-                await loadData(false);
+                setAvailableOrders(prev => removeOrderById(prev, orderId));
+                setTotalPool(prev => Math.max(0, prev - 1));
+                setMyOrders(prev => upsertOrderById(prev, claimedOrder));
+                loadCriticalData({ reset: false, reason: 'claim' });
             } else {
                 showToast?.(normalizeActionMessage(result.message, result.blockers), 'error');
             }
         } finally {
+            const ms = roundMs(perfNow() - actionStart);
+            logPerf('action_done', {
+                action: 'claim',
+                ok: success,
+                ms,
+                targetMs: PERF_TARGETS_MS.action,
+                withinTarget: ms <= PERF_TARGETS_MS.action,
+            });
             setActionLoading(false);
         }
-    };
+    }, [
+        availableOrders,
+        financials,
+        loadCriticalData,
+        localizeSuccessMessage,
+        logPerf,
+        normalizeActionMessage,
+        removeOrderById,
+        safeT,
+        showToast,
+        timedCall,
+        upsertOrderById,
+    ]);
 
-    const handleStart = async (orderId) => {
+    const handleAction = useCallback(async (fn, ...args) => {
+        const actionStart = perfNow();
+        let success = false;
+        const action =
+            fn === ordersService.startJob ? 'start'
+                : fn === ordersService.completeJob ? 'complete'
+                    : fn === ordersService.refuseJob ? 'refuse'
+                        : 'action';
+        setActionLoading(true);
+        try {
+            const res = await timedCall(`orders.${action}`, () => fn(...args), { flow: 'action', action });
+            if (res.success) {
+                success = true;
+                showToast?.(actionSuccessMessage(fn, res.message), 'success');
+                setModalState({ type: null, order: null });
+                if (res.order) {
+                    setMyOrders(prev => upsertOrderById(prev, res.order));
+                    if (res.order.id === activeSheetOrder?.id) {
+                        setActiveSheetOrder(res.order);
+                    }
+                }
+                loadCriticalData({ reset: false, reason: action });
+            }
+            else showToast?.(normalizeActionMessage(res.message, res.blockers), 'error');
+            return res;
+        } catch (e) { showToast?.(safeT('errorActionFailed', 'Action failed'), 'error'); }
+        finally {
+            const ms = roundMs(perfNow() - actionStart);
+            logPerf('action_done', {
+                action,
+                ok: success,
+                ms,
+                targetMs: PERF_TARGETS_MS.action,
+                withinTarget: ms <= PERF_TARGETS_MS.action,
+            });
+            setActionLoading(false);
+        }
+    }, [
+        actionSuccessMessage,
+        activeSheetOrder?.id,
+        loadCriticalData,
+        logPerf,
+        normalizeActionMessage,
+        safeT,
+        showToast,
+        timedCall,
+        upsertOrderById,
+    ]);
+    const handleStart = useCallback(async (orderId) => {
         const res = await handleAction(ordersService.startJob, orderId, user.id);
         if (res?.success) {
             const updatedOrder = res.order || myOrders.find(o => o.id === orderId) || activeSheetOrder;
@@ -1400,49 +1793,66 @@ const DashboardContent = ({ navigation }) => {
             setSheetSnap('full');
         }
         return res;
-    };
-
-    const handleAction = async (fn, ...args) => {
-        setActionLoading(true);
+    }, [activeSheetOrder, handleAction, myOrders, user?.id]);
+    const ensureCancelReasons = useCallback(async () => {
+        if (cancelReasons.length > 0) return true;
+        const cached = getCachedLookup('cancelReasons');
+        if (cached?.length) {
+            setCancelReasons(cached);
+            return true;
+        }
         try {
-            const res = await fn(...args);
-            if (res.success) {
-                showToast?.(actionSuccessMessage(fn, res.message), 'success');
-                setModalState({ type: null, order: null });
-                if (res.order && res.order.id === activeSheetOrder?.id) {
-                    setActiveSheetOrder(res.order);
-                }
-                await loadData(false);
-            }
-            else showToast?.(normalizeActionMessage(res.message, res.blockers), 'error');
-            return res;
-        } catch (e) { showToast?.(safeT('errorActionFailed', 'Action failed'), 'error'); }
-        finally { setActionLoading(false); }
-    };
+            const reasons = await timedCall('orders.getCancellationReasons', () => ordersService.getCancellationReasons('master'), { flow: 'prefetch' });
+            const safeReasons = reasons || [];
+            setCancelReasons(safeReasons);
+            setCachedLookup('cancelReasons', safeReasons);
+            return true;
+        } catch (e) {
+            console.error(e);
+            return false;
+        }
+    }, [cancelReasons.length, timedCall]);
+    const handleOpenComplete = useCallback((order) => {
+        if (!order) return;
+        setModalState({ type: 'complete', order });
+    }, []);
+    const handleOpenRefuse = useCallback(async (order) => {
+        if (!order) return;
+        await ensureCancelReasons();
+        setModalState({ type: 'refuse', order });
+    }, [ensureCancelReasons]);
 
-    const handleCopyAddress = (text) => {
+    const handleCopyAddress = useCallback((text) => {
         if (!text) {
             showToast?.(t('toastClipboardEmpty') || 'Nothing to copy', 'info');
             return;
         }
         Clipboard.setString(text);
         showToast?.(t('toastCopied') || 'Copied', 'success');
-    };
+    }, [showToast, t]);
 
-    const handleCopyPhone = (text) => {
+    const handleCopyPhone = useCallback((text) => {
         if (!text) {
             showToast?.(t('toastClipboardEmpty') || 'Nothing to copy', 'info');
             return;
         }
         Clipboard.setString(text);
         showToast?.(t('toastCopied') || 'Copied', 'success');
-    };
+    }, [showToast, t]);
 
-    const handlePoolPageChange = async (nextPage) => {
+    const handlePoolPageChange = useCallback(async (nextPage) => {
         if (nextPage < 1 || nextPage > totalPages) return;
+        const loadId = perfRef.current.pageLoadSeq + 1;
+        perfRef.current.pageLoadSeq = loadId;
+        const start = perfNow();
         setActionLoading(true);
         try {
-            const res = await ordersService.getAvailableOrders(nextPage, PAGE_LIMIT, filters);
+            const res = await timedCall('orders.getAvailableOrders', () => ordersService.getAvailableOrders(nextPage, PAGE_LIMIT, filters), {
+                flow: 'page_change',
+                page: nextPage,
+                loadId,
+            });
+            if (perfRef.current.pageLoadSeq !== loadId) return;
             setAvailableOrders(res.data);
             setTotalPool(res.count);
             setPagePool(nextPage);
@@ -1450,12 +1860,20 @@ const DashboardContent = ({ navigation }) => {
         } catch (e) {
             console.error(e);
         } finally {
+            if (perfRef.current.pageLoadSeq !== loadId) return;
+            const ms = roundMs(perfNow() - start);
+            logPerf('page_change_done', {
+                page: nextPage,
+                ms,
+                targetMs: PERF_TARGETS_MS.pageChange,
+                withinTarget: ms <= PERF_TARGETS_MS.pageChange,
+            });
             setActionLoading(false);
         }
-    };
+    }, [filters, logPerf, timedCall, totalPages]);
 
 
-    const handleOpenOrderSheet = (order) => {
+    const handleOpenOrderSheet = useCallback((order) => {
         if (!order) return;
         const normalized = order.status ? order : { ...order, status: ORDER_STATUS.PLACED };
         if ([ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED].includes(normalized.status)) {
@@ -1464,16 +1882,16 @@ const DashboardContent = ({ navigation }) => {
         }
         setActiveSheetOrder(normalized);
         setSheetSnap('full');
-    };
+    }, []);
 
-    const handleCloseOrderSheet = () => {
+    const handleCloseOrderSheet = useCallback(() => {
         if (activeSheetOrder && [ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED].includes(activeSheetOrder.status)) {
             setActiveSheetOrder(null);
             setSheetSnap('peek');
             return;
         }
         setSheetSnap('peek');
-    };
+    }, [activeSheetOrder]);
 
     const sheetPan = useMemo(() => PanResponder.create({
         onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 6,
@@ -1498,7 +1916,7 @@ const DashboardContent = ({ navigation }) => {
                     onLogout={handleLogout}
                     onLanguageToggle={cycleLanguage}
                     onThemeToggle={toggleTheme}
-                    onRefresh={() => loadData(false)}
+                    onRefresh={onHeaderRefresh}
                     topInset={insets?.top || 0}
                 />
                 {activeTab === 'orders' && (
@@ -1568,7 +1986,7 @@ const DashboardContent = ({ navigation }) => {
                         showsVerticalScrollIndicator={false}
                     >
                         {(() => {
-                            const columns = deviceUtils.getGridColumns();
+                            const columns = gridColumns;
                             const cardMargin = 6;
                             const containerPadding = 16;
                             const totalGaps = (columns - 1) * (cardMargin * 2);
@@ -1596,14 +2014,20 @@ const DashboardContent = ({ navigation }) => {
             ) : (
                 <FlatList
                     data={processedOrders}
-                    key={deviceUtils.getGridColumns()}
-                    numColumns={deviceUtils.getGridColumns()}
+                    key={gridColumns}
+                    numColumns={gridColumns}
                     keyExtractor={item => item.id}
+                    onLayout={handleListLayout}
+                    initialNumToRender={initialRenderCount}
+                    maxToRenderPerBatch={batchRenderCount}
+                    windowSize={7}
+                    updateCellsBatchingPeriod={50}
+                    removeClippedSubviews={Platform.OS === 'android'}
                     contentContainerStyle={[
                         styles.list,
                         { paddingTop: listTopPadding, paddingBottom: listBottomPadding }
                     ]}
-                    columnWrapperStyle={deviceUtils.getGridColumns() > 1 ? styles.colWrapper : null} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}
+                    columnWrapperStyle={gridColumns > 1 ? styles.colWrapper : null} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accentIndigo} />}
                     ListHeaderComponent={
                         orderSection === 'myJobs' ? (
                             <View style={[styles.limitsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
@@ -1639,10 +2063,10 @@ const DashboardContent = ({ navigation }) => {
                             canClaim={Boolean(user?.is_verified && !financials?.balanceBlocked)}
                             actionLoading={actionLoading}
                             onClaim={handleClaim}
-                            onStart={(id) => handleStart(id)}
+                            onStart={handleStart}
                             onCopyAddress={handleCopyAddress}
-                            onComplete={(o) => setModalState({ type: 'complete', order: o })}
-                            onRefuse={(o) => setModalState({ type: 'refuse', order: o })}
+                            onComplete={handleOpenComplete}
+                            onRefuse={handleOpenRefuse}
                             onOpen={handleOpenOrderSheet}
                         />
                     )}
@@ -1713,9 +2137,8 @@ const DashboardContent = ({ navigation }) => {
                         >
                             <Pressable style={[styles.modalContent, styles.claimModalContent, { backgroundColor: theme.bgSecondary }]} onPress={() => {}}>
                                 <LinearGradient
-                                    pointerEvents="none"
                                     colors={isDark ? ['#111827', '#0f172a'] : ['#ffffff', '#f1f5f9']}
-                                    style={StyleSheet.absoluteFill}
+                                    style={[StyleSheet.absoluteFill, { pointerEvents: 'none' }]}
                                 />
                                 <Pressable style={styles.claimHandle} onPress={() => setSheetSnap(sheetSnap === 'half' ? 'full' : 'half')} />
                                 <View style={styles.sheetContent}>
@@ -1922,7 +2345,7 @@ const DashboardContent = ({ navigation }) => {
                                             <>
                                                 <TouchableOpacity
                                                     style={[styles.secondarySheetButton, { borderColor: theme.accentDanger, backgroundColor: `${theme.accentDanger}12`, shadowColor: theme.accentDanger, shadowOpacity: 0.25 }]}
-                                                    onPress={() => setModalState({ type: 'refuse', order: activeSheetOrder })}
+                                                    onPress={() => handleOpenRefuse(activeSheetOrder)}
                                                 >
                                                     <Text style={[styles.secondarySheetButtonText, { color: theme.accentDanger }]}>
                                                         {safeT('actionCancel', 'Cancel')}
@@ -1930,7 +2353,7 @@ const DashboardContent = ({ navigation }) => {
                                                 </TouchableOpacity>
                                                 <TouchableOpacity
                                                     style={[styles.primarySheetButton, { backgroundColor: theme.accentSuccess, shadowColor: theme.accentSuccess, shadowOpacity: 0.35 }]}
-                                                    onPress={() => setModalState({ type: 'complete', order: activeSheetOrder })}
+                                                    onPress={() => handleOpenComplete(activeSheetOrder)}
                                                 >
                                                     <Text style={styles.primarySheetButtonText}>{safeT('actionComplete', 'Complete')}</Text>
                                                 </TouchableOpacity>

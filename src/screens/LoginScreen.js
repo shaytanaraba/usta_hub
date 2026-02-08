@@ -233,12 +233,12 @@ function LoginContent({ navigation }) {
 
       {/* Matte Overlay (covers the logo/bg as sheet expands) */}
       <Animated.View
-        pointerEvents="none"
         style={[
           styles.matteOverlay,
           {
             backgroundColor: isDark ? '#0f172a' : '#ffffff',
-            opacity: matteOpacity
+            opacity: matteOpacity,
+            pointerEvents: 'none'
           }
         ]}
       />
