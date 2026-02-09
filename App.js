@@ -60,6 +60,8 @@ function AppNavigator() {
   const { user, session, loading, refreshSession, resetAppData } = useAuth();
   const { navRef, onStateChange, resetHistory } = useNavHistory();
   const [loadingTimeout, setLoadingTimeout] = useState(false);
+  const waitingForProfile = !loading && !!session?.user && !user;
+  const isBootstrapping = loading || waitingForProfile;
 
   const syncRoute = () => {
     if (!navRef.isReady()) return;
@@ -71,8 +73,15 @@ function AppNavigator() {
         : user?.role === 'admin'
           ? 'AdminDashboard'
           : 'Login';
-    const current = navRef.getCurrentRoute()?.name;
-    if (current !== target) {
+    const currentRoute = navRef.getCurrentRoute();
+    const current = currentRoute?.name;
+    const currentUserId = currentRoute?.params?.user?.id || null;
+    const nextUserId = user?.id || null;
+    const sameScreenDifferentUser = current === target
+      && target !== 'Login'
+      && !!nextUserId
+      && currentUserId !== nextUserId;
+    if (current !== target || sameScreenDifferentUser) {
       const params = user ? { user } : undefined;
       navRef.reset({ index: 0, routes: [{ name: target, params }] });
       resetHistory({ name: target, params });
@@ -81,16 +90,39 @@ function AppNavigator() {
 
   useEffect(() => {
     syncRoute();
-  }, [user]);
+  }, [session, user]);
 
   useEffect(() => {
-    if (!loading) {
+    if (!isBootstrapping) {
       setLoadingTimeout(false);
       return;
     }
     const timer = setTimeout(() => setLoadingTimeout(true), LOADING_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [loading]);
+  }, [isBootstrapping]);
+
+  useEffect(() => {
+    if (!waitingForProfile) return undefined;
+    let canceled = false;
+
+    const resolveProfile = async () => {
+      try {
+        await refreshSession({ retries: 2, retryDelayMs: 400, minIntervalMs: 0 });
+      } catch (error) {
+        // Keep trying while auth bootstrap is still unresolved.
+      }
+    };
+
+    resolveProfile();
+    const timer = setInterval(() => {
+      if (!canceled) resolveProfile();
+    }, 3000);
+
+    return () => {
+      canceled = true;
+      clearInterval(timer);
+    };
+  }, [refreshSession, waitingForProfile]);
 
   const handleRetry = async () => {
     setLoadingTimeout(false);
@@ -101,7 +133,7 @@ function AppNavigator() {
     await resetAppData();
   };
 
-  if (loading) {
+  if (isBootstrapping) {
     if (loadingTimeout) {
       return <LoadingFallback onRetry={handleRetry} onReset={handleReset} />;
     }

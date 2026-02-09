@@ -90,6 +90,13 @@ export const useMasterDataLoader = ({
         setFinancials(fin);
         const shouldKeepMeta = safePoolMeta.length === 0 && (typeof poolRes.count === 'number' ? poolRes.count > 0 : poolRes.data.length > 0);
         setAvailableOrdersMeta((prev) => (shouldKeepMeta ? prev : safePoolMeta));
+      } else {
+        setPagePool(1);
+        setAvailableOrders([]);
+        setAvailableOrdersMeta([]);
+        setTotalPool(0);
+        setMyOrders([]);
+        setFinancials(null);
       }
     } catch (e) {
       console.error(e);
@@ -132,6 +139,7 @@ export const useMasterDataLoader = ({
     setFinancials,
     setLoading,
     setMyOrders,
+    setPagePool,
     setTotalPool,
     setUser,
     timedCall,
@@ -146,7 +154,14 @@ export const useMasterDataLoader = ({
     logPerf('load_start', { loadId, reset: false, scope: 'account', reason });
     try {
       const effectiveUser = authUser || user;
-      if (!effectiveUser) return;
+      if (!effectiveUser) {
+        setEarnings([]);
+        setOrderHistory([]);
+        setBalanceTransactions([]);
+        perfRef.current.accountLoaded = false;
+        perfRef.current.accountLoadedAt = 0;
+        return;
+      }
       const cachedServiceTypes = forceLookups ? null : getCachedLookup('serviceTypes');
       const cachedCancelReasons = forceLookups ? null : getCachedLookup('cancelReasons');
       const cachedDistricts = forceLookups ? null : getCachedLookup('districts');
@@ -275,21 +290,24 @@ export const useMasterDataLoader = ({
   const onRefresh = useCallback(async () => {
     const start = perfNow();
     setRefreshing(true);
-    if (activeTab === MASTER_TABS.ACCOUNT) {
-      await Promise.all([
-        loadCriticalData({ reset: false, reason: 'pull_to_refresh' }),
-        loadAccountData({ reason: 'pull_to_refresh' }),
-      ]);
-    } else {
-      await loadCriticalData({ reset: false, reason: 'pull_to_refresh' });
+    try {
+      if (activeTab === MASTER_TABS.ACCOUNT) {
+        await Promise.all([
+          loadCriticalData({ reset: false, reason: 'pull_to_refresh' }),
+          loadAccountData({ reason: 'pull_to_refresh' }),
+        ]);
+      } else {
+        await loadCriticalData({ reset: false, reason: 'pull_to_refresh' });
+      }
+    } finally {
+      setRefreshing(false);
+      const ms = roundMs(perfNow() - start);
+      logPerf('refresh_done', {
+        ms,
+        targetMs: perfTargets.refresh,
+        withinTarget: ms <= perfTargets.refresh,
+      });
     }
-    setRefreshing(false);
-    const ms = roundMs(perfNow() - start);
-    logPerf('refresh_done', {
-      ms,
-      targetMs: perfTargets.refresh,
-      withinTarget: ms <= perfTargets.refresh,
-    });
   }, [activeTab, loadAccountData, loadCriticalData, logPerf, perfNow, perfTargets.refresh, roundMs, setRefreshing]);
 
   const onHeaderRefresh = useCallback(async () => {
@@ -313,4 +331,3 @@ export const useMasterDataLoader = ({
     onHeaderRefresh,
   };
 };
-

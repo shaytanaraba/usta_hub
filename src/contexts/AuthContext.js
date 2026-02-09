@@ -84,6 +84,18 @@ const clearSupabaseWebStorage = async () => {
     console.warn('[Auth] Failed to clear Supabase web storage', error);
   }
 };
+const clearSupabaseNativeStorage = async () => {
+  if (isWeb) return;
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const authKeys = keys.filter((key) => key.startsWith('sb-') && key.endsWith('-auth-token'));
+    if (authKeys.length > 0) {
+      await AsyncStorage.multiRemove(authKeys);
+    }
+  } catch (error) {
+    console.warn('[Auth] Failed to clear Supabase native storage', error);
+  }
+};
 const activityStorage = {
   getItem: async (key) => {
     if (!isWeb) return AsyncStorage.getItem(key);
@@ -120,11 +132,18 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
+  const latestUserRef = useRef(null);
   const refreshInFlight = useRef(null);
+  const refreshVersionRef = useRef(0);
+  const resumeRefreshInFlightRef = useRef(false);
   const lastRefreshRef = useRef(0);
   const lastActivityRef = useRef(Date.now());
   const lastInteractionRefreshRef = useRef(0);
   const lastAuthIssueToastRef = useRef({ key: '', at: 0 });
+
+  useEffect(() => {
+    latestUserRef.current = user;
+  }, [user]);
 
   const notifyAuthIssue = useCallback((key) => {
     if (!key || !showToast) return;
@@ -161,98 +180,127 @@ export function AuthProvider({ children }) {
 
   const refreshSession = useCallback(async (options = {}) => {
     const minIntervalMs = Number.isInteger(options.minIntervalMs) ? options.minIntervalMs : 0;
-    const now = Date.now();
-    if (minIntervalMs > 0 && now - lastRefreshRef.current < minIntervalMs) {
-      return user;
-    }
-    if (refreshInFlight.current) {
-      return refreshInFlight.current;
-    }
+    if (!refreshInFlight.current) {
+      const now = Date.now();
+      if (minIntervalMs > 0 && now - lastRefreshRef.current < minIntervalMs) {
+        return latestUserRef.current;
+      }
 
-    refreshInFlight.current = (async () => {
-      try {
-        lastRefreshRef.current = now;
-        const { data: { session: activeSession }, error: sessionError } = await supabase.auth.getSession();
-        if (sessionError) {
-          if (isAuthInvalidError(sessionError)) {
+      const refreshVersion = refreshVersionRef.current + 1;
+      refreshVersionRef.current = refreshVersion;
+
+      const refreshPromise = (async () => {
+        const isStaleRefresh = () => refreshVersion !== refreshVersionRef.current;
+        try {
+          lastRefreshRef.current = Date.now();
+          const { data: { session: activeSession }, error: sessionError } = await supabase.auth.getSession();
+          if (isStaleRefresh()) {
+            return latestUserRef.current || null;
+          }
+          if (sessionError) {
+            if (isAuthInvalidError(sessionError)) {
+              notifyAuthIssue('session_expired');
+              try { await supabase.auth.signOut({ scope: 'local' }); } catch (e) {}
+              if (!isStaleRefresh()) {
+                setSession(null);
+                setUser(null);
+              }
+              return null;
+            }
+            notifyAuthIssue(toAuthIssueKey(sessionError));
+            console.warn('[Auth] getSession error', sessionError);
+          }
+
+          if (!isStaleRefresh()) {
+            setSession(activeSession || null);
+          }
+
+          if (!activeSession?.user) {
+            if (!isStaleRefresh()) {
+              setUser(null);
+            }
+            return null;
+          }
+
+          const retries = Number.isInteger(options.retries) ? options.retries : 2;
+          const retryDelayMs = Number.isInteger(options.retryDelayMs) ? options.retryDelayMs : 350;
+          let attempt = 0;
+          let currentUser = null;
+          while (attempt <= retries) {
+            currentUser = await authService.getCurrentUser({ session: activeSession });
+            if (currentUser || isStaleRefresh()) break;
+            attempt += 1;
+            if (attempt <= retries) {
+              await sleep(retryDelayMs);
+            }
+          }
+
+          if (isStaleRefresh()) {
+            return latestUserRef.current || null;
+          }
+
+          if (currentUser) {
+            setUser(currentUser);
+            return currentUser;
+          }
+
+          // Keep existing user on transient failures to avoid random logouts.
+          if (latestUserRef.current) return latestUserRef.current;
+
+          setUser(null);
+          return null;
+        } catch (error) {
+          if (isStaleRefresh()) {
+            return latestUserRef.current || null;
+          }
+          console.error('[Auth] refreshSession failed', error);
+          if (isAuthInvalidError(error)) {
             notifyAuthIssue('session_expired');
             try { await supabase.auth.signOut({ scope: 'local' }); } catch (e) {}
             setSession(null);
             setUser(null);
             return null;
           }
-          notifyAuthIssue(toAuthIssueKey(sessionError));
-          console.warn('[Auth] getSession error', sessionError);
-        }
-
-        setSession(activeSession || null);
-
-        if (!activeSession?.user) {
-          setUser(null);
-          return null;
-        }
-
-        const retries = Number.isInteger(options.retries) ? options.retries : 2;
-        const retryDelayMs = Number.isInteger(options.retryDelayMs) ? options.retryDelayMs : 350;
-        let attempt = 0;
-        let currentUser = null;
-        while (attempt <= retries) {
-          currentUser = await authService.getCurrentUser({ session: activeSession });
-          if (currentUser) break;
-          attempt += 1;
-          if (attempt <= retries) {
-            await sleep(retryDelayMs);
+          if (isTransientError(error)) {
+            notifyAuthIssue(toAuthIssueKey(error));
+            return latestUserRef.current;
           }
-        }
-
-        if (currentUser) {
-          setUser(currentUser);
-          return currentUser;
-        }
-
-        // Keep existing user on transient failures to avoid random logouts.
-        if (user) return user;
-
-        setUser(null);
-        return null;
-      } catch (error) {
-        console.error('[Auth] refreshSession failed', error);
-        if (isAuthInvalidError(error)) {
-          notifyAuthIssue('session_expired');
-          try { await supabase.auth.signOut({ scope: 'local' }); } catch (e) {}
           setSession(null);
           setUser(null);
           return null;
         }
-        if (isTransientError(error)) {
-          notifyAuthIssue(toAuthIssueKey(error));
-          return user;
+      })();
+
+      refreshInFlight.current = refreshPromise;
+      refreshPromise.finally(() => {
+        if (refreshInFlight.current === refreshPromise) {
+          refreshInFlight.current = null;
         }
-        setSession(null);
-        setUser(null);
-        return null;
-      }
-    })();
+      });
+    }
 
     let result = null;
+    const activeRefreshPromise = refreshInFlight.current;
     const timeoutToken = '__refresh_timeout__';
-    try {
-      result = await Promise.race([
-        refreshInFlight.current,
-        sleep(REFRESH_HARD_TIMEOUT_MS).then(() => timeoutToken),
-      ]);
-      if (result === timeoutToken) {
-        console.warn('[Auth] refreshSession timed out');
-        notifyAuthIssue('timeout');
-        return user || null;
+    result = await Promise.race([
+      activeRefreshPromise,
+      sleep(REFRESH_HARD_TIMEOUT_MS).then(() => timeoutToken),
+    ]);
+    if (result === timeoutToken) {
+      console.warn('[Auth] refreshSession timed out');
+      notifyAuthIssue('timeout');
+      if (refreshInFlight.current === activeRefreshPromise) {
+        refreshVersionRef.current += 1;
+        refreshInFlight.current = null;
       }
-    } finally {
-      refreshInFlight.current = null;
+      return latestUserRef.current || null;
     }
     return result;
-  }, [notifyAuthIssue, user]);
+  }, [notifyAuthIssue]);
 
   const logout = useCallback(async (options = {}) => {
+    refreshVersionRef.current += 1;
+    refreshInFlight.current = null;
     const result = await authService.logoutUser(options);
     setSession(null);
     setUser(null);
@@ -263,6 +311,7 @@ export function AuthProvider({ children }) {
   const resetAppData = useCallback(async () => {
     await logout({ scope: 'local' });
     await clearSupabaseWebStorage();
+    await clearSupabaseNativeStorage();
   }, [logout]);
 
   const recordActivity = useCallback(async () => {
@@ -279,6 +328,10 @@ export function AuthProvider({ children }) {
         return false;
       }
       const lastActiveAt = Number(stored);
+      if (!Number.isFinite(lastActiveAt)) {
+        await recordActivity();
+        return false;
+      }
       const elapsed = Date.now() - lastActiveAt;
       // If you want per-role timeouts, swap INACTIVITY_TIMEOUT_MS for a lookup by user?.role.
       if (elapsed > INACTIVITY_TIMEOUT_MS) {
@@ -291,6 +344,19 @@ export function AuthProvider({ children }) {
       return false;
     }
   }, [logout, recordActivity]);
+
+  const handleAppResume = useCallback(async () => {
+    if (resumeRefreshInFlightRef.current) return;
+    resumeRefreshInFlightRef.current = true;
+    try {
+      const expired = await checkInactivity();
+      if (expired) return;
+      await recordActivity();
+      await refreshSession({ retries: 1, retryDelayMs: 300, minIntervalMs: REFRESH_MIN_INTERVAL_MS });
+    } finally {
+      resumeRefreshInFlightRef.current = false;
+    }
+  }, [checkInactivity, recordActivity, refreshSession]);
 
   useEffect(() => {
     let mounted = true;
@@ -318,7 +384,10 @@ export function AuthProvider({ children }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, nextSession) => {
       setSession(nextSession || null);
       if (event === 'SIGNED_OUT') {
+        refreshVersionRef.current += 1;
+        refreshInFlight.current = null;
         setUser(null);
+        await activityStorage.removeItem(LAST_ACTIVE_KEY);
         return;
       }
       if (nextSession?.user) {
@@ -337,9 +406,7 @@ export function AuthProvider({ children }) {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
       const handleVisibility = () => {
         if (document.visibilityState === 'visible') {
-          checkInactivity();
-          recordActivity();
-          refreshSession({ retries: 1, retryDelayMs: 300, minIntervalMs: REFRESH_MIN_INTERVAL_MS });
+          handleAppResume();
         }
       };
       document.addEventListener('visibilitychange', handleVisibility);
@@ -348,14 +415,12 @@ export function AuthProvider({ children }) {
 
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
-        checkInactivity();
-        recordActivity();
-        refreshSession({ retries: 1, retryDelayMs: 300, minIntervalMs: REFRESH_MIN_INTERVAL_MS });
+        handleAppResume();
       }
     });
 
     return () => subscription?.remove();
-  }, [checkInactivity, recordActivity, refreshSession]);
+  }, [handleAppResume]);
 
   useEffect(() => {
     if (!user?.id) return undefined;

@@ -420,6 +420,7 @@ const DashboardContent = ({ navigation }) => {
         lastFilterKey: '',
     });
     const filterDebounceRef = useRef(null);
+    const authSyncUserIdRef = useRef(null);
 
     const { logout, user: authUser } = useAuth();
     const logPerf = useCallback((event, data = {}) => {
@@ -446,13 +447,35 @@ const DashboardContent = ({ navigation }) => {
         return () => task?.cancel?.();
     }, []);
     useEffect(() => {
-        if (!authUser) {
+        if (!authUser?.id) {
+            authSyncUserIdRef.current = null;
             setUser(null);
+            setAvailableOrders([]);
+            setAvailableOrdersMeta([]);
+            setTotalPool(0);
+            setMyOrders([]);
+            setFinancials(null);
+            setEarnings([]);
+            setOrderHistory([]);
+            setBalanceTransactions([]);
+            if (filterDebounceRef.current) {
+                clearTimeout(filterDebounceRef.current);
+                filterDebounceRef.current = null;
+            }
+            perfRef.current.criticalLoadSeq += 1;
+            perfRef.current.accountLoadSeq += 1;
+            perfRef.current.poolLoadSeq += 1;
+            perfRef.current.pageLoadSeq += 1;
             perfRef.current.accountLoaded = false;
             perfRef.current.accountLoadedAt = 0;
             perfRef.current.filtersInitialized = false;
             perfRef.current.lastFilterKey = '';
+            return;
         }
+        setUser((prev) => {
+            if (prev?.id === authUser.id) return { ...prev, ...authUser };
+            return authUser;
+        });
     }, [authUser]);
     useEffect(() => {
         const userId = user?.id;
@@ -596,6 +619,15 @@ const DashboardContent = ({ navigation }) => {
         getCachedLookup,
         setCachedLookup,
     });
+    useEffect(() => {
+        if (!authUser?.id) return;
+        if (authSyncUserIdRef.current === authUser.id) return;
+        authSyncUserIdRef.current = authUser.id;
+        loadCriticalData({ reset: false, reason: 'auth_user_sync', forceUserReload: true });
+        if (activeTab === MASTER_TABS.ACCOUNT) {
+            loadAccountData({ reason: 'auth_user_sync', forceLookups: false });
+        }
+    }, [activeTab, authUser?.id, loadAccountData, loadCriticalData]);
     useEffect(() => {
         if (activeTab !== MASTER_TABS.ACCOUNT) return;
         if (!perfRef.current.accountLoaded) {

@@ -158,6 +158,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     const prevQueueFilterSignatureRef = useRef(queueFilterSignature);
 
     const {
+        invalidateLoaders,
         loadQueueData,
         loadServiceTypes,
         loadDistricts,
@@ -208,8 +209,27 @@ export default function DispatcherDashboard({ navigation, route }) {
         loadPlatformSettings();
     }, [loadServiceTypes, loadDistricts, loadDispatchers, loadPlatformSettings]);
     useEffect(() => {
-        if (!authUser) setUser(null);
-    }, [authUser]);
+        if (!authUser?.id) {
+            invalidateLoaders();
+            setUser(null);
+            setOrders([]);
+            setQueueTotalCount(0);
+            setStatusCounts({ Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 });
+            setAttentionOrders([]);
+            setNeedsAttentionCount(0);
+            setStatsSummary(null);
+            return;
+        }
+        setUser((prev) => {
+            if (prev?.id === authUser.id) return { ...prev, ...authUser };
+            return authUser;
+        });
+    }, [authUser, invalidateLoaders]);
+
+    useEffect(() => {
+        if (!authUser?.id) return;
+        loadQueueData({ reason: 'auth_user_sync' });
+    }, [authUser?.id, loadQueueData]);
 
     useEffect(() => {
         loadServiceTypes();

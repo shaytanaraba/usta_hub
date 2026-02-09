@@ -164,6 +164,11 @@ class AuthService {
         throw error;
       }
 
+      if (!data?.user?.id) {
+        await this.logoutUser({ scope: 'local' });
+        throw new Error('Login succeeded but user session was not returned');
+      }
+
       debug(`${LOG_PREFIX} Auth successful, fetching profile...`);
 
       // Fetch profile with v5 fields
@@ -187,6 +192,7 @@ class AuthService {
       if (profileError || !profile) {
         console.error(`${LOG_PREFIX} Profile error:`, profileError?.message);
         if (profileError && isTransientError(profileError)) {
+          await this.logoutUser({ scope: 'local' });
           throw profileError;
         }
         await this.logoutUser({ scope: 'local' });
@@ -236,9 +242,18 @@ class AuthService {
     debug(`${LOG_PREFIX} Getting current user...`);
 
     try {
-      const session = options.session
-        ? options.session
-        : (await supabase.auth.getSession()).data.session;
+      let session = options.session || null;
+      if (!session) {
+        const { data, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) {
+          console.error(`${LOG_PREFIX} Session fetch error:`, sessionError?.message);
+          if (isAuthInvalidError(sessionError)) {
+            await supabase.auth.signOut({ scope: 'local' });
+          }
+          return null;
+        }
+        session = data?.session || null;
+      }
 
       if (!session) {
         debug(`${LOG_PREFIX} No active session`);
@@ -257,12 +272,29 @@ class AuthService {
           .single();
 
         if (!error && profile) {
+          if (profile.is_active === false) {
+            await supabase.auth.signOut({ scope: 'local' });
+            return null;
+          }
+          if (profile.role === 'client') {
+            await supabase.auth.signOut({ scope: 'local' });
+            return null;
+          }
           debug(`${LOG_PREFIX} Current user: ${profile.full_name} (${profile.role})`);
           return { ...session.user, ...profile };
         }
 
         if (error) {
           console.error(`${LOG_PREFIX} Profile fetch error:`, error?.message);
+          const errorCode = String(error?.code || '');
+          const lowered = String(error?.message || '').toLowerCase();
+          const missingProfile = errorCode === 'PGRST116'
+            || lowered.includes('multiple (or no) rows returned')
+            || lowered.includes('0 rows');
+          if (missingProfile) {
+            await supabase.auth.signOut({ scope: 'local' });
+            return null;
+          }
           if (isAuthInvalidError(error)) {
             await supabase.auth.signOut({ scope: 'local' });
             return null;
@@ -499,6 +531,52 @@ class AuthService {
   async createUser(userData) {
     debug(`${LOG_PREFIX} Creating new user: ${userData.email} (${userData.role})`);
 
+    let originalSessionTokens = null;
+    let originalSessionUserId = null;
+    let snapshotSucceeded = false;
+    try {
+      const { data: { session: originalSession } } = await supabase.auth.getSession();
+      snapshotSucceeded = true;
+      originalSessionUserId = originalSession?.user?.id || null;
+      if (originalSession?.access_token && originalSession?.refresh_token) {
+        originalSessionTokens = {
+          access_token: originalSession.access_token,
+          refresh_token: originalSession.refresh_token,
+        };
+      }
+    } catch (sessionSnapshotError) {
+      console.error(`${LOG_PREFIX} Failed to snapshot session before createUser:`, sessionSnapshotError);
+    }
+
+    const restoreOriginalSession = async () => {
+      if (!originalSessionTokens) {
+        if (!snapshotSucceeded) return;
+        try {
+          await supabase.auth.signOut({ scope: 'local' });
+        } catch (signOutError) {
+          console.error(`${LOG_PREFIX} createUser local cleanup failed:`, signOutError);
+        }
+        return;
+      }
+      try {
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        if (currentSession?.user?.id && currentSession.user.id === originalSessionUserId) {
+          return;
+        }
+      } catch (sessionReadError) {
+        console.error(`${LOG_PREFIX} Failed to read current session during restore:`, sessionReadError);
+      }
+      const { error: restoreError } = await supabase.auth.setSession(originalSessionTokens);
+      if (restoreError) {
+        console.error(`${LOG_PREFIX} Failed to restore previous session after createUser:`, restoreError);
+        try {
+          await supabase.auth.signOut({ scope: 'local' });
+        } catch (signOutError) {
+          console.error(`${LOG_PREFIX} createUser fallback signOut failed:`, signOutError);
+        }
+      }
+    };
+
     try {
       if (!userData.email || !userData.password || !userData.role) {
         throw new Error('Email, password, and role are required');
@@ -570,6 +648,8 @@ class AuthService {
     } catch (error) {
       console.error(`${LOG_PREFIX} createUser error:`, error);
       return { success: false, message: error.message };
+    } finally {
+      await restoreOriginalSession();
     }
   }
 

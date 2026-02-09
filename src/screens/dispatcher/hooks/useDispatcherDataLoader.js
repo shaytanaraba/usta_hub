@@ -34,6 +34,10 @@ export default function useDispatcherDataLoader({
 }) {
   const queueLoadIdRef = useRef(0);
   const statsLoadIdRef = useRef(0);
+  const invalidateLoaders = useCallback(() => {
+    queueLoadIdRef.current += 1;
+    statsLoadIdRef.current += 1;
+  }, []);
 
   const resolveCurrentUser = useCallback(async () => {
     if (authUser?.id) {
@@ -284,6 +288,7 @@ export default function useDispatcherDataLoader({
   }, [loadQueueData, loadStatsSummary, setRefreshing]);
 
   return {
+    invalidateLoaders,
     loadQueueData,
     loadServiceTypes,
     loadDistricts,

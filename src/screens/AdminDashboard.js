@@ -131,6 +131,7 @@ export default function AdminDashboard({ navigation }) {
     const analyticsTooltipTimer = useRef(null);
     const [analyticsTrendTooltip, setAnalyticsTrendTooltip] = useState(null);
     const analyticsTrendTooltipTimer = useRef(null);
+    const authSyncUserIdRef = useRef(null);
     const [priceDistRange, setPriceDistRange] = useState('30d');
     const [priceDistGrouping, setPriceDistGrouping] = useState('week');
     const [priceDistScope, setPriceDistScope] = useState('completed');
@@ -1587,6 +1588,8 @@ export default function AdminDashboard({ navigation }) {
     const [showDatePicker, setShowDatePicker] = useState(false);
     const [showTimePicker, setShowTimePicker] = useState(false);
     const loadedTabsRef = useRef(new Set());
+    const queueLoadIdRef = useRef(0);
+    const loadAllDataSeqRef = useRef(0);
     const [tabLoadingState, setTabLoadingState] = useState({
         analytics: false,
         orders: false,
@@ -1678,7 +1681,35 @@ export default function AdminDashboard({ navigation }) {
         loadAllData();
     }, []);
     useEffect(() => {
-        if (!authUser) setUser(null);
+        if (!authUser?.id) {
+            authSyncUserIdRef.current = null;
+            loadedTabsRef.current.clear();
+            queueLoadIdRef.current += 1;
+            loadAllDataSeqRef.current += 1;
+            setUser(null);
+            setOrders([]);
+            setQueueOrders([]);
+            setQueueTotalCount(0);
+            setQueueStatusCountsState(null);
+            setQueueAttentionItemsState([]);
+            setQueueAttentionCountState(0);
+            setQueueLoading(false);
+            setStats({});
+            setCommissionStats({});
+            setBalanceTopUpStats({ totalTopUps: 0, avgTopUp: 0, count: 0 });
+            setTabLoadingState({
+                analytics: false,
+                orders: false,
+                people: false,
+                settings: false,
+                create_order: false,
+            });
+            return;
+        }
+        setUser(prev => {
+            if (prev?.id === authUser.id) return { ...prev, ...authUser };
+            return authUser;
+        });
     }, [authUser]);
 
     useEffect(() => {
@@ -1773,13 +1804,18 @@ export default function AdminDashboard({ navigation }) {
             const currentUser = await authService.getCurrentUser({ retries: 1, retryDelayMs: 350 });
             if (currentUser) {
                 setUser(currentUser);
+                return currentUser;
             } else if (authUser) {
                 setUser(authUser);
+                return authUser;
             } else {
                 setUser(null);
+                return null;
             }
         } catch (e) {
             console.error('Failed to load current user', e);
+            setUser(null);
+            return null;
         }
     }, [authUser]);
 
@@ -1822,6 +1858,9 @@ export default function AdminDashboard({ navigation }) {
     }, []);
 
     const loadOrdersQueue = useCallback(async (targetPage = queuePage, { force = false } = {}) => {
+        const loadId = queueLoadIdRef.current + 1;
+        queueLoadIdRef.current = loadId;
+        const isStale = () => loadId !== queueLoadIdRef.current;
         setQueueLoading(true);
         try {
             if (force) {
@@ -1838,6 +1877,7 @@ export default function AdminDashboard({ navigation }) {
                 serviceType: serviceFilter,
                 sort: filterSort,
             });
+            if (isStale()) return null;
             setQueueOrders(payload?.data || []);
             setQueueTotalCount(Number(payload?.count || 0));
             setQueueStatusCountsState(payload?.statusCounts || null);
@@ -1846,10 +1886,13 @@ export default function AdminDashboard({ navigation }) {
             setQueueSource(payload?.source || 'unknown');
             return payload;
         } catch (e) {
+            if (isStale()) return null;
             console.error('Queue load error', e);
             return null;
         } finally {
-            setQueueLoading(false);
+            if (!isStale()) {
+                setQueueLoading(false);
+            }
         }
     }, [queuePage, viewMode, statusFilter, queueSearchDebounced, filterDispatcher, filterUrgency, serviceFilter, filterSort]);
 
@@ -2026,19 +2069,35 @@ export default function AdminDashboard({ navigation }) {
     ]);
 
     const loadAllData = useCallback(async (skipLoadingScreen = false) => {
+        const loadId = loadAllDataSeqRef.current + 1;
+        loadAllDataSeqRef.current = loadId;
+        const isStale = () => loadId !== loadAllDataSeqRef.current;
         if (!skipLoadingScreen) setLoading(true);
         try {
-            await loadCurrentUser();
+            const resolvedUser = await loadCurrentUser();
+            if (isStale()) return;
+            if (!resolvedUser?.id) {
+                loadedTabsRef.current.clear();
+                return;
+            }
             await Promise.all([
                 loadSettings(),
                 loadServiceTypes(),
                 loadDistricts(),
             ]);
+            if (isStale()) return;
             await ensureTabData(activeTab || 'analytics', { force: true });
         } finally {
-            if (!skipLoadingScreen) setLoading(false);
+            if (!skipLoadingScreen && !isStale()) setLoading(false);
         }
     }, [activeTab, loadCurrentUser, ensureTabData]);
+
+    useEffect(() => {
+        if (!authUser?.id) return;
+        if (authSyncUserIdRef.current === authUser.id) return;
+        authSyncUserIdRef.current = authUser.id;
+        loadAllData(true);
+    }, [authUser?.id, loadAllData]);
 
     const onRefresh = useCallback(async () => {
         setRefreshing(true);
