@@ -87,6 +87,28 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
   - `DROP FUNCTION IF EXISTS public.get_active_cancellation_reasons(text);`
   - recreate function with `name_kg` in `RETURNS TABLE(...)`.
 
+### Auth/Idle Session Incident Fix (2026-02-09)
+
+- Issue:
+  - After long idle periods, users could trigger actions that appeared stuck in loading, especially after tab sleep/wake or unstable network recovery.
+- Root cause:
+  - stale/expired auth session on first post-idle action
+  - transient Supabase requests that could hang without a hard timeout
+  - login flow treated transient profile fetch failures as fatal (forced local logout)
+- Implemented fix:
+  - Added global Supabase request timeout wrapper (`EXPO_PUBLIC_SUPABASE_TIMEOUT_MS`, default `20000` ms)
+  - Added auth heartbeat refresh and web interaction-triggered refresh in `AuthContext`
+  - Added throttled user-visible auth toasts (session expired, timeout, network retrying)
+  - Hardened login retries and transient error mapping in `authService.loginUser`
+  - Localized new auth/login error messages in EN/RU/KG
+- Files:
+  - `src/lib/supabase.js`
+  - `src/contexts/AuthContext.js`
+  - `src/services/auth.js`
+  - `src/screens/LoginScreen.js`
+  - `src/contexts/LocalizationContext.js`
+  - `App.js` (provider order adjusted so `AuthContext` can use localization)
+
 ### Running the App
 
 #### Option 1: Using Expo Go App (Recommended for Testing)

@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
 const isDebug = process?.env?.EXPO_PUBLIC_ENABLE_SUPABASE_LOGS === '1';
+const REQUEST_TIMEOUT_MS = Number(process?.env?.EXPO_PUBLIC_SUPABASE_TIMEOUT_MS || 20000);
 const debug = (...args) => {
     if (isDebug) console.log(...args);
 };
@@ -92,11 +93,46 @@ const createWebStorage = () => {
 const storage = isWeb ? createWebStorage() : AsyncStorage;
 debug('[Supabase] Using storage:', isWeb ? 'web storage (localStorage with fallback)' : 'AsyncStorage (native)');
 
+const timedFetch = async (resource, options = {}) => {
+    // Supabase queries can occasionally hang after long idle/sleep cycles.
+    // Enforce a timeout so UI actions fail fast and recover.
+    if (typeof fetch !== 'function') {
+        throw new Error('Global fetch is not available');
+    }
+
+    if (REQUEST_TIMEOUT_MS <= 0) {
+        return fetch(resource, options);
+    }
+
+    if (options?.signal) {
+        return fetch(resource, options);
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+        return await fetch(resource, { ...options, signal: controller.signal });
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            const timeoutError = new Error('Request timed out. Please check your connection and try again.');
+            timeoutError.name = 'SupabaseTimeoutError';
+            timeoutError.code = 'SUPABASE_TIMEOUT';
+            throw timeoutError;
+        }
+        throw error;
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     auth: {
         storage: storage,
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: isWeb, // Enable for web OAuth flows
+    },
+    global: {
+        fetch: timedFetch,
     },
 });

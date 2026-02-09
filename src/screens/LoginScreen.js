@@ -142,14 +142,17 @@ function LoginContent({ navigation }) {
         if (__DEV__) {
           console.warn(`${LOG_PREFIX} Login failed`);
         }
-        setError(result.message);
-        showToast?.(result.message, 'error');
+        const localizedMessage = getErrorMessage(result.message, result.code);
+        setError(localizedMessage);
+        showToast?.(localizedMessage, 'error');
       }
     } catch (err) {
       if (__DEV__) {
         console.error(`${LOG_PREFIX} Login error:`, err);
       }
-      setError(t('loginErrorGeneric'));
+      const localizedMessage = getErrorMessage(err?.message, err?.code);
+      setError(localizedMessage);
+      showToast?.(localizedMessage, 'error');
     } finally {
       setLoading(false);
     }
@@ -184,12 +187,27 @@ function LoginContent({ navigation }) {
   };
 
   // Helper to get localized error message
-  const getErrorMessage = (msg) => {
+  const getErrorMessage = (msg, code) => {
+    if (code === 'MISSING_CREDENTIALS') return t('loginErrorMissing') || 'Enter email and password';
+    if (code === 'INVALID_CREDENTIALS') return t('loginErrorInvalidCredentials') || 'Invalid email or password';
+    if (code === 'SESSION_EXPIRED') return t('authSessionExpired') || 'Your session expired. Please sign in again.';
+    if (code === 'REQUEST_TIMEOUT') return t('authRequestTimedOut') || 'Request timed out. Please check your connection.';
+    if (code === 'NETWORK_ERROR') return t('loginErrorNetwork') || 'Network error. Please try again.';
+
     if (!msg) return null;
     if (typeof msg !== 'string') {
       return t('loginErrorGeneric');
     }
     const normalized = msg.toLowerCase();
+    if (normalized.includes('timed out') || normalized.includes('timeout') || normalized.includes('aborted')) {
+      return t('authRequestTimedOut') || 'Request timed out. Please check your connection.';
+    }
+    if (normalized.includes('network') || normalized.includes('failed to fetch')) {
+      return t('loginErrorNetwork') || 'Network error. Please try again.';
+    }
+    if (normalized.includes('session expired') || normalized.includes('auth session missing')) {
+      return t('authSessionExpired') || 'Your session expired. Please sign in again.';
+    }
     if (normalized.includes('invalid email') || normalized.includes('invalid login')) {
       return t('loginErrorInvalidCredentials') || 'Invalid email or password';
     }

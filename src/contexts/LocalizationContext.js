@@ -36,9 +36,14 @@ const translations = {
         loginButton: "Sign In",
         loginSupport: "Support",
         loginFooter: "(c) 2024 Master.kg",
+        loginErrorMissing: "Enter email and password",
         loginErrorGeneric: "An unexpected error occurred",
         loginErrorInvalidCredentials: "Invalid email or password",
+        loginErrorNetwork: "Network error. Please try again.",
         loginSuccess: "Login successful!",
+        authSessionExpired: "Your session expired. Please sign in again.",
+        authRequestTimedOut: "Request timed out. Please check your connection and retry.",
+        authNetworkRetrying: "Network issue detected. Retrying session in background.",
 
         // Tabs & Navigation
         tabOrders: "Orders",
@@ -978,7 +983,11 @@ const translations = {
         loginErrorMissing: "Введите email и пароль",
         loginErrorGeneric: "Произошла непредвиденная ошибка",
         loginErrorInvalidCredentials: "Неверный email или пароль",
+        loginErrorNetwork: "Ошибка сети. Повторите попытку.",
         loginSuccess: "Вход выполнен!",
+        authSessionExpired: "Сессия истекла. Войдите снова.",
+        authRequestTimedOut: "Время ожидания истекло. Проверьте соединение и повторите.",
+        authNetworkRetrying: "Обнаружена проблема сети. Фоновое восстановление сессии.",
         // Tabs & Navigation
         tabOrders: "Заказы",
         tabMyAccount: "Мой аккаунт",
@@ -1974,7 +1983,11 @@ const translations = {
         loginFooter: "(c) 2024 Master.kg",
         loginErrorMissing: "Э-почта жана купуя сөздү жазыңыз",
         loginErrorGeneric: "Күтүлбөгөн ката кетти",
+        loginErrorNetwork: "Тармак катасы. Кайрадан аракет кылыңыз.",
         loginSuccess: "Ийгиликтүү кирдиңиз!",
+        authSessionExpired: "Сессияңыз аяктады. Кайра кириңиз.",
+        authRequestTimedOut: "Күтүү убакыты аяктады. Байланышты текшерип, кайра аракет кылыңыз.",
+        authNetworkRetrying: "Тармак маселеси байкалды. Сессия фондо калыбына келтирилет.",
         // Tabs & Navigation
         tabOrders: "Буйрутмалар",
         tabMyAccount: "Менин аккаунтум",

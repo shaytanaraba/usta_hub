@@ -741,6 +741,47 @@ This section covers the Supabase settings needed to support the session reliabil
 
 # 5. Version History & Changelog
 
+## v5.4.5 - Idle Session/Auth Stall Recovery (February 9, 2026)
+
+### Incident Summary
+- **Symptom**: users (all roles) could stay logged in, then after long idle time see actions stuck in loading or non-responsive behavior on first interaction.
+- **Impact**: degraded reliability perception and repeated manual refresh/relogin attempts.
+
+### Root Cause
+- Post-idle session state could be stale during first action.
+- Some network/sleep-wake transitions produced requests that waited too long, causing UI loaders to appear stuck.
+- `loginUser` treated transient profile-fetch failures as fatal and forced local logout.
+
+### Implemented Fix
+- **Request timeout guard** (`src/lib/supabase.js`):
+  - Supabase client now uses a timed global fetch.
+  - Configurable via `EXPO_PUBLIC_SUPABASE_TIMEOUT_MS` (default: `20000` ms).
+  - Timeout errors normalized to `SupabaseTimeoutError` / `SUPABASE_TIMEOUT`.
+- **Session warmup + recovery** (`src/contexts/AuthContext.js`):
+  - periodic heartbeat refresh while user is logged in
+  - refresh on user interaction (web) with throttling
+  - throttled, user-facing toasts for session expired / timeout / network recovery
+- **Login hardening** (`src/services/auth.js`, `src/screens/LoginScreen.js`):
+  - transient retry for `signInWithPassword` and profile fetch
+  - transient profile fetch no longer triggers immediate forced logout
+  - standardized login error codes + localized message mapping
+- **Localization support** (`src/contexts/LocalizationContext.js`):
+  - added EN/RU/KG keys:
+    - `authSessionExpired`
+    - `authRequestTimedOut`
+    - `authNetworkRetrying`
+    - `loginErrorNetwork`
+    - missing EN `loginErrorMissing`
+- **Provider order correction** (`App.js`):
+  - `LocalizationProvider` now wraps `AuthProvider` so auth toasts can use translated strings.
+
+### Verification
+- Build validation passed via `npx expo export --platform web`.
+- Expected runtime behavior:
+  - no indefinite waiting on stalled Supabase calls
+  - clear user feedback on timeout/session/network auth issues
+  - improved first-action reliability after idle.
+
 ## v5.4.4 - Admin Localization/Data Alignment Fixes (February 8, 2026)
 
 ### Admin UI Stability

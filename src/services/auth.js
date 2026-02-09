@@ -79,12 +79,47 @@ const isAuthInvalidError = (error) => {
 
 const isTransientError = (error) => {
   const message = error?.message?.toLowerCase?.() || '';
-  return message.includes('network request failed')
+  return error?.code === 'SUPABASE_TIMEOUT'
+    || error?.name === 'SupabaseTimeoutError'
+    || message.includes('request timed out')
+    || message.includes('the operation was aborted')
+    || message.includes('aborterror')
+    || message.includes('network request failed')
     || message.includes('failed to fetch')
     || message.includes('timeout')
     || message.includes('temporarily unavailable')
     || message.includes('econnreset')
     || message.includes('eai_again');
+};
+
+const mapLoginError = (error) => {
+  const raw = String(error?.message || '').trim();
+  const message = raw.toLowerCase();
+
+  if (raw === 'Email and password are required') {
+    return { code: 'MISSING_CREDENTIALS', message: raw };
+  }
+
+  if (raw === 'Invalid login credentials' || message.includes('invalid login credentials')) {
+    return { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' };
+  }
+
+  if (isAuthInvalidError(error)) {
+    return { code: 'SESSION_EXPIRED', message: 'Your session expired. Please sign in again.' };
+  }
+
+  if (isTransientError(error)) {
+    if (error?.code === 'SUPABASE_TIMEOUT' || error?.name === 'SupabaseTimeoutError' || message.includes('request timed out')) {
+      return { code: 'REQUEST_TIMEOUT', message: 'Request timed out. Please check your connection and retry.' };
+    }
+    return { code: 'NETWORK_ERROR', message: 'Network error. Please try again.' };
+  }
+
+  if (raw) {
+    return { code: 'UNKNOWN', message: raw };
+  }
+
+  return { code: 'UNKNOWN', message: 'An unexpected error occurred' };
 };
 
 class AuthService {
@@ -108,10 +143,21 @@ class AuthService {
         throw new Error('Email and password are required');
       }
 
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
-        password,
-      });
+      const maxAttempts = 2;
+      let data = null;
+      let error = null;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const result = await supabase.auth.signInWithPassword({
+          email: email.trim().toLowerCase(),
+          password,
+        });
+        data = result?.data || null;
+        error = result?.error || null;
+        if (!error || !isTransientError(error) || attempt === maxAttempts) {
+          break;
+        }
+        await sleep(250 * attempt);
+      }
 
       if (error) {
         console.error(`${LOG_PREFIX} Auth error:`, error.message);
@@ -121,15 +167,29 @@ class AuthService {
       debug(`${LOG_PREFIX} Auth successful, fetching profile...`);
 
       // Fetch profile with v5 fields
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select(PROFILE_SELECT_FIELDS)
-        .eq('id', data.user.id)
-        .single();
+      const profileFetchAttempts = 2;
+      let profile = null;
+      let profileError = null;
+      for (let attempt = 1; attempt <= profileFetchAttempts; attempt += 1) {
+        const result = await supabase
+          .from('profiles')
+          .select(PROFILE_SELECT_FIELDS)
+          .eq('id', data.user.id)
+          .single();
+        profile = result?.data || null;
+        profileError = result?.error || null;
+        if (!profileError || !isTransientError(profileError) || attempt === profileFetchAttempts) {
+          break;
+        }
+        await sleep(250 * attempt);
+      }
 
       if (profileError || !profile) {
         console.error(`${LOG_PREFIX} Profile error:`, profileError?.message);
-        await this.logoutUser();
+        if (profileError && isTransientError(profileError)) {
+          throw profileError;
+        }
+        await this.logoutUser({ scope: 'local' });
         throw new Error('User profile not found');
       }
 
@@ -164,10 +224,8 @@ class AuthService {
       };
     } catch (error) {
       console.error(`${LOG_PREFIX} Login failed:`, error.message);
-      const msg = error.message === 'Invalid login credentials'
-        ? 'Invalid email or password'
-        : error.message;
-      return { success: false, message: msg };
+      const mapped = mapLoginError(error);
+      return { success: false, message: mapped.message, code: mapped.code };
     }
   }
 

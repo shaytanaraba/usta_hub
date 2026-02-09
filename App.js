@@ -197,14 +197,14 @@ export default function App() {
 
   return (
     <ToastProvider>
-      <AuthProvider>
-        <NavigationHistoryProvider>
-          <LocalizationProvider>
+      <LocalizationProvider>
+        <AuthProvider>
+          <NavigationHistoryProvider>
             <StatusBar style="light" />
             <AppNavigator />
-          </LocalizationProvider>
-        </NavigationHistoryProvider>
-      </AuthProvider>
+          </NavigationHistoryProvider>
+        </AuthProvider>
+      </LocalizationProvider>
     </ToastProvider>
   );
 }
