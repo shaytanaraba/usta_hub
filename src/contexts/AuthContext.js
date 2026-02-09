@@ -247,6 +247,45 @@ export function AuthProvider({ children }) {
           // Keep existing user on transient failures to avoid random logouts.
           if (latestUserRef.current) return latestUserRef.current;
 
+          let shouldClearSession = false;
+          let userCheckIssue = null;
+          try {
+            const { data: userData, error: userError } = await supabase.auth.getUser();
+            if (isStaleRefresh()) {
+              return latestUserRef.current || null;
+            }
+            if (userError) {
+              userCheckIssue = toAuthIssueKey(userError);
+              if (isAuthInvalidError(userError)) {
+                shouldClearSession = true;
+              } else if (!isTransientError(userError)) {
+                shouldClearSession = true;
+              }
+            } else if (!userData?.user?.id) {
+              shouldClearSession = true;
+            }
+          } catch (userCheckError) {
+            if (isStaleRefresh()) {
+              return latestUserRef.current || null;
+            }
+            userCheckIssue = toAuthIssueKey(userCheckError);
+            if (!isTransientError(userCheckError)) {
+              shouldClearSession = true;
+            }
+          }
+
+          if (shouldClearSession) {
+            if (userCheckIssue === 'session_expired') {
+              notifyAuthIssue('session_expired');
+            }
+            try { await supabase.auth.signOut({ scope: 'local' }); } catch (e) {}
+            if (!isStaleRefresh()) {
+              setSession(null);
+            }
+          } else if (userCheckIssue) {
+            notifyAuthIssue(userCheckIssue);
+          }
+
           setUser(null);
           return null;
         } catch (error) {
@@ -292,6 +331,9 @@ export function AuthProvider({ children }) {
       if (refreshInFlight.current === activeRefreshPromise) {
         refreshVersionRef.current += 1;
         refreshInFlight.current = null;
+      }
+      if (!latestUserRef.current) {
+        setSession(null);
       }
       return latestUserRef.current || null;
     }
