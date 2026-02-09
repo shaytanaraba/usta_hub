@@ -21,6 +21,9 @@ const INACTIVITY_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
 const REFRESH_MIN_INTERVAL_MS = 30 * 1000; // 30 seconds
 // Keep sessions warm to avoid first-action stalls after long idle/sleep.
 const SESSION_HEARTBEAT_MS = 5 * 60 * 1000; // 5 minutes
+// Guard against rare unresolved auth promises that can freeze app bootstrap.
+const INITIAL_REFRESH_TIMEOUT_MS = 12000;
+const REFRESH_HARD_TIMEOUT_MS = 12000;
 
 const isWeb = Platform.OS === 'web' && typeof window !== 'undefined' && typeof localStorage !== 'undefined';
 const memoryStorage = new Map();
@@ -232,8 +235,17 @@ export function AuthProvider({ children }) {
     })();
 
     let result = null;
+    const timeoutToken = '__refresh_timeout__';
     try {
-      result = await refreshInFlight.current;
+      result = await Promise.race([
+        refreshInFlight.current,
+        sleep(REFRESH_HARD_TIMEOUT_MS).then(() => timeoutToken),
+      ]);
+      if (result === timeoutToken) {
+        console.warn('[Auth] refreshSession timed out');
+        notifyAuthIssue('timeout');
+        return user || null;
+      }
     } finally {
       refreshInFlight.current = null;
     }
@@ -286,7 +298,14 @@ export function AuthProvider({ children }) {
     const initialize = async () => {
       try {
         await checkInactivity();
-        await refreshSession({ retries: 2, retryDelayMs: 400 });
+        const initResult = await Promise.race([
+          refreshSession({ retries: 2, retryDelayMs: 400 }),
+          sleep(INITIAL_REFRESH_TIMEOUT_MS).then(() => '__init_timeout__'),
+        ]);
+        if (initResult === '__init_timeout__') {
+          console.warn('[Auth] initialization refresh timed out');
+          notifyAuthIssue('timeout');
+        }
       } catch (error) {
         console.error('[Auth] initialization failed', error);
       } finally {
@@ -312,7 +331,7 @@ export function AuthProvider({ children }) {
       mounted = false;
       subscription?.unsubscribe();
     };
-  }, [checkInactivity, recordActivity, refreshSession]);
+  }, [checkInactivity, notifyAuthIssue, recordActivity, refreshSession]);
 
   useEffect(() => {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
