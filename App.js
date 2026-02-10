@@ -3,7 +3,7 @@
  * Dispatcher-mediated architecture with role-based routing
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
@@ -22,6 +22,14 @@ import AdminDashboard from './src/screens/AdminDashboard';
 
 const Stack = createNativeStackNavigator();
 const LOADING_TIMEOUT_MS = 10000;
+const PROFILE_RESOLUTION_RETRY_INTERVAL_MS = 3000;
+const PROFILE_RESOLUTION_MAX_RETRIES = 4;
+const APP_AUTH_DIAG_ENABLED = process?.env?.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS === '1';
+const appAuthDiag = (...args) => {
+  if (APP_AUTH_DIAG_ENABLED) {
+    console.log('[AppNavigator][Diag]', ...args);
+  }
+};
 
 const getTelegramWebApp = () => {
   if (typeof window === 'undefined') return null;
@@ -60,6 +68,9 @@ function AppNavigator() {
   const { user, session, loading, refreshSession, resetAppData } = useAuth();
   const { navRef, onStateChange, resetHistory } = useNavHistory();
   const [loadingTimeout, setLoadingTimeout] = useState(false);
+  const profileRetryCountRef = useRef(0);
+  const profileRefreshInFlightRef = useRef(false);
+  const profileResetTriggeredRef = useRef(false);
   const waitingForProfile = !loading && !!session?.user && !user;
   const isBootstrapping = loading || waitingForProfile;
 
@@ -102,29 +113,68 @@ function AppNavigator() {
   }, [isBootstrapping]);
 
   useEffect(() => {
+    if (!waitingForProfile) {
+      profileRetryCountRef.current = 0;
+      profileRefreshInFlightRef.current = false;
+      profileResetTriggeredRef.current = false;
+    }
+  }, [waitingForProfile]);
+
+  useEffect(() => {
     if (!waitingForProfile) return undefined;
     let canceled = false;
 
+    const forceResetAfterRetries = async (reason, error = null) => {
+      if (canceled || profileResetTriggeredRef.current) return;
+      profileResetTriggeredRef.current = true;
+      console.error('[AppNavigator] Profile resolution exceeded retry cap, resetting auth state', {
+        reason,
+        attempts: profileRetryCountRef.current,
+        error: error?.message || null,
+      });
+      try {
+        await resetAppData();
+      } catch (resetError) {
+        console.error('[AppNavigator] resetAppData failed after profile retry cap', resetError);
+      }
+    };
+
     const resolveProfile = async () => {
+      if (canceled || profileRefreshInFlightRef.current) return;
+      const attempt = profileRetryCountRef.current + 1;
+      profileRetryCountRef.current = attempt;
+      if (attempt > PROFILE_RESOLUTION_MAX_RETRIES) {
+        await forceResetAfterRetries('retry_limit');
+        return;
+      }
+      profileRefreshInFlightRef.current = true;
+      appAuthDiag('resolve_profile_attempt', { attempt });
       try {
         await refreshSession({ retries: 2, retryDelayMs: 400, minIntervalMs: 0 });
       } catch (error) {
-        // Keep trying while auth bootstrap is still unresolved.
+        console.error('[AppNavigator] resolveProfile attempt failed', {
+          attempt,
+          message: error?.message || String(error),
+        });
+      } finally {
+        profileRefreshInFlightRef.current = false;
       }
     };
 
     resolveProfile();
     const timer = setInterval(() => {
       if (!canceled) resolveProfile();
-    }, 3000);
+    }, PROFILE_RESOLUTION_RETRY_INTERVAL_MS);
 
     return () => {
       canceled = true;
       clearInterval(timer);
     };
-  }, [refreshSession, waitingForProfile]);
+  }, [refreshSession, resetAppData, waitingForProfile]);
 
   const handleRetry = async () => {
+    profileRetryCountRef.current = 0;
+    profileResetTriggeredRef.current = false;
     setLoadingTimeout(false);
     await refreshSession({ retries: 2, retryDelayMs: 400, minIntervalMs: 0 });
   };

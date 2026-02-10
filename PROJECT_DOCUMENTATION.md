@@ -1,7 +1,7 @@
 # Master KG v5 - Complete Technical Documentation
 
 > **Version**: 5.0  
-> **Last Updated**: February 8, 2026  
+> **Last Updated**: February 10, 2026  
 > **Architecture**: Dispatcher-Mediated Service Platform
 
 ---
@@ -840,6 +840,35 @@ This section covers the Supabase settings needed to support the session reliabil
 ### Performance & Console Stability
 - **Web lag reduction**: Resolved repeated React Native Web runtime errors by preventing string short-circuit rendering from creating text nodes inside `<View>` in order cards.
 - **Log noise reduction**: Removed noisy logs from hot paths in `orders.js` (`getAvailableOrders`, `canClaimOrder`, `startJob`) to reduce console spam in web development.
+
+## v5.4.4 - Auth Bootstrap Hardening + Dispatcher Verification Control (February 10, 2026)
+
+### Auth Bootstrap & Session Reliability
+- **Refresh hard-timeout + stuck breaker**: `AuthContext.refreshSession` now has a hard timeout with repeated-timeout hit tracking and in-flight reset guard to prevent long-lived blocked refresh promises.
+- **Stale refresh protection**: Added refresh version checks so older async refresh results cannot overwrite newer auth state.
+- **Profile deadlock recovery**: Added profile miss streak limit and forced session reset path to break session-without-profile bootstrap loops.
+- **Interaction-aware session upkeep**: Activity tracking now records pointer/keyboard/touch/focus events on web (throttled) and runs periodic heartbeat refresh while user is active.
+- **Role-aware profile revalidation**: Cached-user fast-path skips dispatcher role so dispatcher access state changes are applied quickly after admin toggles.
+
+### Auth Routing Ownership
+- **Login flow ownership fix**: Removed direct `navigation.reset` from `LoginScreen`; route switching is now driven by auth state in `AppNavigator` to avoid dual-owner routing races.
+- **Bootstrap retry cap**: `AppNavigator` now retries profile resolution with a cap and can trigger app-data reset when profile resolution is permanently stuck.
+
+### Dispatcher Access Model (Verified/Unverified)
+- **Single access gate**: Dispatcher access is now controlled by `is_verified` in auth checks (`loginUser` and `getCurrentUser`).
+- **Compatibility sync**: Admin verify/unverify dispatcher actions now update both `is_verified` and `is_active` together to keep legacy filters/queries consistent.
+- **Admin People UI wording**: Dispatcher status/action labels are now explicitly `Verified / Unverified` and `Verify / Unverify`.
+- **Dispatcher Settings visibility**: Dispatcher settings now show current verification status in the profile/info section.
+
+### Queue & Data Loading Stability
+- **Admin queue stale-load guards**: Added load-id stale checks, timeout protection, and timeout toast cooldown in admin queue loading flow.
+- **Admin queue in-flight unblock**: `orders.js` now drops stale in-flight admin queue promises after TTL so new requests are not blocked behind hung requests.
+- **Dispatcher queue sanity fallback**: If dispatcher queue RPC returns empty payload while filtered scope has rows, the app now falls back to local-filter pagination and logs a diagnostic warning.
+- **Queue diagnostics**: Added structured debug markers (`queue_load_start`, `queue_load_done`, `queue_load_stale`, `queue_load_timeout`) to speed up production issue tracing.
+
+### Additional Runtime Fixes
+- **Analytics hover crash fix**: Exported `getPointerPos` from shared analytics helpers to fix `getPointerPos is not a function` runtime errors in admin analytics charts.
+- **Master auth-reset noise reduction**: Master dashboard reset sequence now avoids unnecessary perf sequence increments when there was no prior authenticated user.
 
 ## v5.4.1 - Session Resilience + Loading Recovery (February 6, 2026)
 

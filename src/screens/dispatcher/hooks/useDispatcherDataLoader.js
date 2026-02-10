@@ -44,7 +44,11 @@ export default function useDispatcherDataLoader({
       return authUser;
     }
     try {
-      const fromAuth = await authService.getCurrentUser({ retries: 1, retryDelayMs: 350 });
+      let fromAuth = await authService.getCurrentUser({ retries: 1, retryDelayMs: 350 });
+      if (!fromAuth) {
+        await new Promise((resolve) => setTimeout(resolve, 450));
+        fromAuth = await authService.getCurrentUser({ retries: 1, retryDelayMs: 350 });
+      }
       return fromAuth || null;
     } catch (error) {
       return null;

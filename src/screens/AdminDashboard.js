@@ -87,6 +87,18 @@ import { normalizeKyrgyzPhone, isValidKyrgyzPhone } from '../utils/phone';
 
 const LOG_PREFIX = '[AdminDashboard]';
 const SCREEN_WIDTH = Dimensions.get('window').width;
+const ADMIN_LOADING_HARD_TIMEOUT_MS = 20000;
+const ADMIN_QUEUE_REQUEST_TIMEOUT_MS = Number(process?.env?.EXPO_PUBLIC_ADMIN_QUEUE_TIMEOUT_MS || 12000);
+const ADMIN_QUEUE_TIMEOUT_TOAST_COOLDOWN_MS = 15000;
+const ADMIN_DIAG_ENABLED = process?.env?.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS === '1';
+const adminDiag = (event, payload = null) => {
+    if (!ADMIN_DIAG_ENABLED) return;
+    if (payload === null) {
+        console.log(`${LOG_PREFIX}[Diag] ${event}`);
+        return;
+    }
+    console.log(`${LOG_PREFIX}[Diag] ${event}`, payload);
+};
 
 export default function AdminDashboard({ navigation }) {
     const route = useRoute();
@@ -179,6 +191,7 @@ export default function AdminDashboard({ navigation }) {
     const [filterUrgency, setFilterUrgency] = useState('all');
     const [filterSort, setFilterSort] = useState('newest');
     const [queuePage, setQueuePage] = useState(1);
+    const queuePageSize = useMemo(() => (viewMode === 'cards' ? 20 : 10), [viewMode]);
 
     // Needs Attention Section State
     const [showNeedsAttention, setShowNeedsAttention] = useState(true);
@@ -1589,7 +1602,10 @@ export default function AdminDashboard({ navigation }) {
     const [showTimePicker, setShowTimePicker] = useState(false);
     const loadedTabsRef = useRef(new Set());
     const queueLoadIdRef = useRef(0);
+    const queueTimeoutToastAtRef = useRef(0);
     const loadAllDataSeqRef = useRef(0);
+    const loadAllDataLatestRef = useRef(null);
+    const hadAuthUserRef = useRef(false);
     const [tabLoadingState, setTabLoadingState] = useState({
         analytics: false,
         orders: false,
@@ -1682,10 +1698,14 @@ export default function AdminDashboard({ navigation }) {
     }, []);
     useEffect(() => {
         if (!authUser?.id) {
+            const hadAuthUser = hadAuthUserRef.current;
+            hadAuthUserRef.current = false;
             authSyncUserIdRef.current = null;
             loadedTabsRef.current.clear();
             queueLoadIdRef.current += 1;
-            loadAllDataSeqRef.current += 1;
+            if (hadAuthUser) {
+                loadAllDataSeqRef.current += 1;
+            }
             setUser(null);
             setOrders([]);
             setQueueOrders([]);
@@ -1706,6 +1726,7 @@ export default function AdminDashboard({ navigation }) {
             });
             return;
         }
+        hadAuthUserRef.current = true;
         setUser(prev => {
             if (prev?.id === authUser.id) return { ...prev, ...authUser };
             return authUser;
@@ -1750,6 +1771,23 @@ export default function AdminDashboard({ navigation }) {
         filterSort,
         viewMode
     ]);
+
+    useEffect(() => {
+        const totalPages = Math.max(1, Math.ceil((queueTotalCount || 0) / queuePageSize));
+        if (queuePage > totalPages) {
+            adminDiag('queue_page_clamped', { from: queuePage, to: totalPages, queueTotalCount, queuePageSize });
+            setQueuePage(totalPages);
+        }
+    }, [queuePage, queuePageSize, queueTotalCount]);
+
+    useEffect(() => {
+        if (!loading) return undefined;
+        const timeout = setTimeout(() => {
+            setLoading(false);
+            showToast?.(TRANSLATIONS.authRequestTimedOut || 'Loading timed out. You can retry with refresh.', 'warning');
+        }, ADMIN_LOADING_HARD_TIMEOUT_MS);
+        return () => clearTimeout(timeout);
+    }, [loading, showToast, TRANSLATIONS.authRequestTimedOut]);
 
     useEffect(() => {
         if (settings?.default_guaranteed_payout && !newOrder.calloutFee) {
@@ -1801,7 +1839,11 @@ export default function AdminDashboard({ navigation }) {
 
     const loadCurrentUser = useCallback(async () => {
         try {
-            const currentUser = await authService.getCurrentUser({ retries: 1, retryDelayMs: 350 });
+            let currentUser = await authService.getCurrentUser({ retries: 1, retryDelayMs: 350 });
+            if (!currentUser) {
+                await new Promise((resolve) => setTimeout(resolve, 450));
+                currentUser = await authService.getCurrentUser({ retries: 1, retryDelayMs: 350 });
+            }
             if (currentUser) {
                 setUser(currentUser);
                 return currentUser;
@@ -1862,14 +1904,24 @@ export default function AdminDashboard({ navigation }) {
         queueLoadIdRef.current = loadId;
         const isStale = () => loadId !== queueLoadIdRef.current;
         setQueueLoading(true);
+        adminDiag('queue_load_start', {
+            loadId,
+            targetPage,
+            force,
+            statusFilter,
+            queueSearchDebounced,
+            filterDispatcher,
+            filterUrgency,
+            serviceFilter,
+            filterSort,
+        });
         try {
             if (force) {
                 ordersService.invalidateAdminQueueCache?.();
             }
-            const pageSize = viewMode === 'cards' ? 20 : 10;
-            const payload = await ordersService.getAdminOrdersPage({
+            const queueRequest = ordersService.getAdminOrdersPage({
                 page: targetPage,
-                limit: pageSize,
+                limit: queuePageSize,
                 status: statusFilter,
                 search: queueSearchDebounced,
                 dispatcher: filterDispatcher,
@@ -1877,24 +1929,60 @@ export default function AdminDashboard({ navigation }) {
                 serviceType: serviceFilter,
                 sort: filterSort,
             });
-            if (isStale()) return null;
-            setQueueOrders(payload?.data || []);
-            setQueueTotalCount(Number(payload?.count || 0));
-            setQueueStatusCountsState(payload?.statusCounts || null);
-            setQueueAttentionItemsState(payload?.attentionItems || []);
-            setQueueAttentionCountState(Number(payload?.attentionCount || 0));
-            setQueueSource(payload?.source || 'unknown');
-            return payload;
+            const timedPayload = await Promise.race([
+                queueRequest,
+                new Promise((resolve) => setTimeout(() => resolve('__queue_timeout__'), ADMIN_QUEUE_REQUEST_TIMEOUT_MS)),
+            ]);
+            if (timedPayload === '__queue_timeout__') {
+                adminDiag('queue_load_timeout', {
+                    loadId,
+                    targetPage,
+                    timeoutMs: ADMIN_QUEUE_REQUEST_TIMEOUT_MS,
+                });
+                const now = Date.now();
+                if (now - queueTimeoutToastAtRef.current > ADMIN_QUEUE_TIMEOUT_TOAST_COOLDOWN_MS) {
+                    queueTimeoutToastAtRef.current = now;
+                    showToast?.(
+                        TRANSLATIONS.authRequestTimedOut || 'Request timed out. Please check your connection and retry.',
+                        'warning',
+                    );
+                }
+                return null;
+            }
+            if (isStale()) {
+                adminDiag('queue_load_stale', { loadId, targetPage });
+                return null;
+            }
+            setQueueOrders(timedPayload?.data || []);
+            setQueueTotalCount(Number(timedPayload?.count || 0));
+            setQueueStatusCountsState(timedPayload?.statusCounts || null);
+            setQueueAttentionItemsState(timedPayload?.attentionItems || []);
+            setQueueAttentionCountState(Number(timedPayload?.attentionCount || 0));
+            setQueueSource(timedPayload?.source || 'unknown');
+            return timedPayload;
         } catch (e) {
             if (isStale()) return null;
-            console.error('Queue load error', e);
+            console.error(`${LOG_PREFIX} Queue load error`, e);
+            adminDiag('queue_load_error', { loadId, message: e?.message || String(e) });
             return null;
         } finally {
             if (!isStale()) {
                 setQueueLoading(false);
+                adminDiag('queue_load_done', { loadId, targetPage });
             }
         }
-    }, [queuePage, viewMode, statusFilter, queueSearchDebounced, filterDispatcher, filterUrgency, serviceFilter, filterSort]);
+    }, [
+        queuePage,
+        queuePageSize,
+        statusFilter,
+        queueSearchDebounced,
+        filterDispatcher,
+        filterUrgency,
+        serviceFilter,
+        filterSort,
+        showToast,
+        TRANSLATIONS.authRequestTimedOut,
+    ]);
 
     const loadOrders = useCallback(async ({ forceQueue = true } = {}) => {
         const tasks = [];
@@ -2072,12 +2160,13 @@ export default function AdminDashboard({ navigation }) {
         const loadId = loadAllDataSeqRef.current + 1;
         loadAllDataSeqRef.current = loadId;
         const isStale = () => loadId !== loadAllDataSeqRef.current;
+        const startedAt = Date.now();
         if (!skipLoadingScreen) setLoading(true);
+        adminDiag('load_all_data_start', { loadId, skipLoadingScreen, activeTab: activeTab || 'analytics' });
         try {
-            const resolvedUser = await loadCurrentUser();
-            if (isStale()) return;
-            if (!resolvedUser?.id) {
-                loadedTabsRef.current.clear();
+            await loadCurrentUser();
+            if (isStale()) {
+                adminDiag('load_all_data_stale_after_user', { loadId });
                 return;
             }
             await Promise.all([
@@ -2085,19 +2174,35 @@ export default function AdminDashboard({ navigation }) {
                 loadServiceTypes(),
                 loadDistricts(),
             ]);
-            if (isStale()) return;
+            if (isStale()) {
+                adminDiag('load_all_data_stale_after_bootstrap', { loadId });
+                return;
+            }
             await ensureTabData(activeTab || 'analytics', { force: true });
+        } catch (error) {
+            console.error(`${LOG_PREFIX} loadAllData failed`, error);
+            adminDiag('load_all_data_error', { loadId, message: error?.message || String(error) });
         } finally {
-            if (!skipLoadingScreen && !isStale()) setLoading(false);
+            const durationMs = Date.now() - startedAt;
+            if (durationMs > ADMIN_LOADING_HARD_TIMEOUT_MS) {
+                console.warn(`${LOG_PREFIX} loadAllData exceeded soft threshold`, { loadId, durationMs });
+            }
+            adminDiag('load_all_data_done', { loadId, durationMs, stale: isStale() });
+            if (!skipLoadingScreen) setLoading(false);
         }
     }, [activeTab, loadCurrentUser, ensureTabData]);
+
+    useEffect(() => {
+        loadAllDataLatestRef.current = loadAllData;
+    }, [loadAllData]);
 
     useEffect(() => {
         if (!authUser?.id) return;
         if (authSyncUserIdRef.current === authUser.id) return;
         authSyncUserIdRef.current = authUser.id;
-        loadAllData(true);
-    }, [authUser?.id, loadAllData]);
+        adminDiag('auth_user_sync_load', { userId: authUser.id });
+        loadAllDataLatestRef.current?.(false);
+    }, [authUser?.id]);
 
     const onRefresh = useCallback(async () => {
         setRefreshing(true);
@@ -2512,15 +2617,17 @@ export default function AdminDashboard({ navigation }) {
         finally { setActionLoading(false); }
     };
 
-    const handleToggleDispatcher = async (dispatcherId, isActive) => {
+    const handleVerifyDispatcher = async (dispatcherId, isVerified) => {
         setActionLoading(true);
         try {
-            const res = await authService.toggleDispatcherActive(dispatcherId, !isActive);
+            const res = isVerified
+                ? await authService.unverifyDispatcher(dispatcherId)
+                : await authService.verifyDispatcher(dispatcherId);
             if (res.success) {
                 showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 loadDispatchers();
             } else {
-                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (res.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
         } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
         finally { setActionLoading(false); }
@@ -3736,7 +3843,7 @@ export default function AdminDashboard({ navigation }) {
                                     style={styles.peopleLeft}
                                     onPress={() => setDetailsPerson({ ...item, type: 'dispatcher' })}
                                 >
-                                    <View style={[styles.avatarCircle, { backgroundColor: item.is_active ? '#3b82f6' : '#64748b' }]}>
+                                    <View style={[styles.avatarCircle, { backgroundColor: item.is_verified ? '#22c55e' : '#64748b' }]}>
                                         <Text style={{ color: '#fff' }}>{item.full_name?.charAt(0)}</Text>
                                     </View>
                                     <View style={styles.peopleInfo}>
@@ -3748,15 +3855,17 @@ export default function AdminDashboard({ navigation }) {
                                     <View style={[
                                         styles.peopleBadge,
                                         {
-                                            backgroundColor: item.is_active ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                                            borderColor: item.is_active ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'
+                                            backgroundColor: item.is_verified ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                                            borderColor: item.is_verified ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'
                                         }
                                     ]}>
                                         <Text style={[
                                             styles.peopleBadgeText,
-                                            { color: item.is_active ? '#22c55e' : '#ef4444' }
+                                            { color: item.is_verified ? '#22c55e' : '#ef4444' }
                                         ]}>
-                                            {item.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}
+                                            {item.is_verified
+                                                ? (TRANSLATIONS.verified || 'Verified')
+                                                : (TRANSLATIONS.unverified || 'Unverified')}
                                         </Text>
                                     </View>
                                     <View style={styles.peopleActions}>
@@ -3764,14 +3873,16 @@ export default function AdminDashboard({ navigation }) {
                                             onPress={() => setDetailsPerson({ ...item, type: 'dispatcher' })}
                                             style={[styles.miniActionBtn, { backgroundColor: 'rgba(139,92,246,0.1)', borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' }]}
                                         >
-                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#8b5cf6' }}>EDIT</Text>
+                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#8b5cf6' }}>{TRANSLATIONS.btnEdit || 'EDIT'}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
-                                            onPress={() => handleToggleDispatcher(item.id, item.is_active)}
-                                            style={[styles.miniActionBtn, { backgroundColor: item.is_active ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)', borderWidth: 1, borderColor: item.is_active ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.2)' }]}
+                                            onPress={() => handleVerifyDispatcher(item.id, item.is_verified)}
+                                            style={[styles.miniActionBtn, { backgroundColor: item.is_verified ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)', borderWidth: 1, borderColor: item.is_verified ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.2)' }]}
                                         >
-                                            <Text style={{ fontSize: 10, fontWeight: '600', color: item.is_active ? '#ef4444' : '#22c55e' }}>
-                                                {item.is_active ? (TRANSLATIONS.deactivate || 'DEACTIVATE') : (TRANSLATIONS.activate || 'ACTIVATE')}
+                                            <Text style={{ fontSize: 10, fontWeight: '600', color: item.is_verified ? '#ef4444' : '#22c55e' }}>
+                                                {item.is_verified
+                                                    ? (TRANSLATIONS.unverify || 'UNVERIFY')
+                                                    : (TRANSLATIONS.verify || 'VERIFY')}
                                             </Text>
                                         </TouchableOpacity>
                                     </View>
@@ -5335,14 +5446,16 @@ export default function AdminDashboard({ navigation }) {
                     <View style={{ width: Math.min(500, SCREEN_WIDTH), backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                                <View style={[styles.avatarCircle, { width: 48, height: 48, borderRadius: 24, backgroundColor: detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? '#22c55e' : '#64748b') : (detailsPerson?.is_active ? '#3b82f6' : '#64748b') }]}>
+                                <View style={[styles.avatarCircle, { width: 48, height: 48, borderRadius: 24, backgroundColor: detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? '#22c55e' : '#64748b') : (detailsPerson?.is_verified ? '#22c55e' : '#f59e0b') }]}>
                                     <Text style={{ color: '#fff', fontSize: 18 }}>{detailsPerson?.full_name?.charAt(0)}</Text>
                                 </View>
                                 <View>
                                     <Text style={[styles.pageTitle, !isDark && styles.textDark]}>{detailsPerson?.full_name}</Text>
-                                    <View style={[styles.statusBadge, { backgroundColor: detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? '#22c55e' : '#64748b') : (detailsPerson?.is_active ? '#3b82f6' : '#64748b'), alignSelf: 'flex-start', marginTop: 4 }]}>
+                                    <View style={[styles.statusBadge, { backgroundColor: detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? '#22c55e' : '#64748b') : (detailsPerson?.is_verified ? '#22c55e' : '#f59e0b'), alignSelf: 'flex-start', marginTop: 4 }]}>
                                         <Text style={styles.statusText}>
-                                            {detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? (TRANSLATIONS.verified || 'VERIFIED') : (TRANSLATIONS.unverified || 'UNVERIFIED')) : (detailsPerson?.is_active ? (TRANSLATIONS.active || 'ACTIVE').toUpperCase() : (TRANSLATIONS.inactive || 'INACTIVE').toUpperCase())}
+                                            {detailsPerson?.type === 'master'
+                                                ? (detailsPerson?.is_verified ? (TRANSLATIONS.verified || 'VERIFIED') : (TRANSLATIONS.unverified || 'UNVERIFIED'))
+                                                : (detailsPerson?.is_verified ? (TRANSLATIONS.verified || 'VERIFIED') : (TRANSLATIONS.unverified || 'UNVERIFIED'))}
                                         </Text>
                                     </View>
                                 </View>
@@ -5519,7 +5632,11 @@ export default function AdminDashboard({ navigation }) {
                                         <View style={{ gap: 8 }}>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                                                 <Text style={{ color: '#64748b' }}>{TRANSLATIONS.status || 'Status:'}</Text>
-                                                <Text style={{ color: detailsPerson?.is_active ? '#22c55e' : '#ef4444', fontWeight: '600' }}>{detailsPerson?.is_active ? (TRANSLATIONS.active || 'Active') : (TRANSLATIONS.inactive || 'Inactive')}</Text>
+                                                <Text style={{ color: detailsPerson?.is_verified ? '#22c55e' : '#ef4444', fontWeight: '600' }}>
+                                                    {detailsPerson?.is_verified
+                                                        ? (TRANSLATIONS.verified || 'Verified')
+                                                        : (TRANSLATIONS.unverified || 'Unverified')}
+                                                </Text>
                                             </View>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                                                 <Text style={{ color: '#64748b' }}>{TRANSLATIONS.created || 'Created:'}</Text>
@@ -5537,10 +5654,14 @@ export default function AdminDashboard({ navigation }) {
                                             <Text style={styles.actionButtonText}>{TRANSLATIONS.viewOrderHistory || 'View Order History'}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
-                                            style={[styles.actionButton, { backgroundColor: detailsPerson?.is_active ? '#ef4444' : '#22c55e' }]}
-                                            onPress={() => { handleToggleDispatcher(detailsPerson?.id, detailsPerson?.is_active); setDetailsPerson(null); }}
+                                            style={[styles.actionButton, { backgroundColor: detailsPerson?.is_verified ? '#ef4444' : '#22c55e' }]}
+                                            onPress={() => { handleVerifyDispatcher(detailsPerson?.id, detailsPerson?.is_verified); setDetailsPerson(null); }}
                                         >
-                                            <Text style={styles.actionButtonText}>{detailsPerson?.is_active ? (TRANSLATIONS.deactivate || 'Deactivate') : (TRANSLATIONS.activate || 'Activate')}</Text>
+                                            <Text style={styles.actionButtonText}>
+                                                {detailsPerson?.is_verified
+                                                    ? (TRANSLATIONS.unverify || 'Unverify')
+                                                    : (TRANSLATIONS.verify || 'Verify')}
+                                            </Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={[styles.actionButton, { backgroundColor: '#475569' }]}

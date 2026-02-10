@@ -24,6 +24,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const isTransientError = (error) => {
   const message = error?.message?.toLowerCase?.() || '';
   return message.includes('network request failed')
+    || message.includes('networkerror when attempting to fetch resource')
     || message.includes('failed to fetch')
     || message.includes('timeout')
     || message.includes('temporarily unavailable')
@@ -92,6 +93,31 @@ const mapDispatcherQueueStatusToStatuses = (status) => {
     default:
       return ACTIVE_DISPATCHER_STATUSES;
   }
+};
+
+const countDispatcherScopeOrders = async (dispatcherId, options = {}) => {
+  const opts = normalizeDispatcherQueueOptions(options);
+  const buildQuery = () => {
+    let query = supabase
+      .from('orders')
+      .select('id', { head: true, count: 'exact' })
+      .or(`assigned_dispatcher_id.eq.${dispatcherId},dispatcher_id.eq.${dispatcherId}`);
+
+    if (opts.status && opts.status !== 'all') {
+      query = query.in('status', mapDispatcherQueueStatusToStatuses(opts.status));
+    }
+    if (opts.urgency && opts.urgency !== 'all') {
+      query = query.eq('urgency', opts.urgency);
+    }
+    if (opts.serviceType && opts.serviceType !== 'all') {
+      query = query.eq('service_type', opts.serviceType);
+    }
+    return query;
+  };
+
+  const { count, error } = await callWithRetry(buildQuery);
+  if (error) throw error;
+  return Number(count || 0);
 };
 
 const normalizeDispatcherQueueOptions = (options = {}) => ({
@@ -185,6 +211,51 @@ const matchesAdminSearch = (order, searchText = '') => {
   const phoneDigits = phoneRaw.replace(/\D/g, '');
   const phoneMatch = qDigits ? phoneDigits.includes(qDigits) : phoneRaw.toLowerCase().includes(q);
   return idMatch || clientName.includes(q) || masterName.includes(q) || fullAddress.includes(q) || phoneMatch;
+};
+
+const matchesDispatcherSearch = (order, searchText = '') => {
+  if (!searchText) return true;
+  const qRaw = String(searchText || '').trim().toLowerCase();
+  if (!qRaw) return true;
+  const q = qRaw.startsWith('#') ? qRaw.slice(1) : qRaw;
+  const qDigits = q.replace(/\D/g, '');
+  const id = String(order?.id || '').toLowerCase();
+  const idMatch = q.length <= 6 ? id.endsWith(q) : id.includes(q);
+  const clientName = String(order?.client?.full_name || order?.client_name || '').toLowerCase();
+  const masterName = String(order?.master?.full_name || '').toLowerCase();
+  const fullAddress = String(order?.full_address || '').toLowerCase();
+  const problemDescription = String(order?.problem_description || '').toLowerCase();
+  const phoneRaw = String(order?.client?.phone || order?.client_phone || '');
+  const phoneDigits = phoneRaw.replace(/\D/g, '');
+  const phoneMatch = qDigits ? phoneDigits.includes(qDigits) : phoneRaw.toLowerCase().includes(q);
+  return idMatch
+    || clientName.includes(q)
+    || masterName.includes(q)
+    || fullAddress.includes(q)
+    || problemDescription.includes(q)
+    || phoneMatch;
+};
+
+const filterDispatcherOrdersLocally = (orders = [], options = {}) => {
+  const opts = normalizeDispatcherQueueOptions(options);
+  const statusFilter = mapDispatcherQueueStatusToStatuses(opts.status);
+  let filtered = (orders || []).filter((order) => statusFilter.includes(order?.status));
+
+  if (opts.urgency !== 'all') {
+    filtered = filtered.filter((o) => o?.urgency === opts.urgency);
+  }
+  if (opts.serviceType !== 'all') {
+    filtered = filtered.filter((o) => o?.service_type === opts.serviceType);
+  }
+
+  filtered = filtered.filter((o) => matchesDispatcherSearch(o, opts.search));
+  filtered.sort((a, b) => {
+    const aTs = new Date(a?.created_at || 0).getTime();
+    const bTs = new Date(b?.created_at || 0).getTime();
+    return opts.sort === 'oldest' ? (aTs - bTs) : (bTs - aTs);
+  });
+
+  return filtered;
 };
 
 const computeDispatcherStatusCounts = (orders = []) => {
@@ -319,6 +390,8 @@ class OrdersService {
   adminQueueInflight = new Map();
 
   adminQueueCacheTtlMs = 8000;
+
+  adminQueueInflightTtlMs = Number(process?.env?.EXPO_PUBLIC_ADMIN_QUEUE_INFLIGHT_TTL_MS || 15000);
 
   invalidateAdminQueueCache = () => {
     this.adminQueueCache.clear();
@@ -866,23 +939,26 @@ class OrdersService {
     serviceLog(`${LOG_PREFIX} Fetching dispatcher orders: ${dispatcherId}`);
 
     try {
-      let query = supabase
-        .from('orders')
-        .select(`
-          *,
-          client:client_id(full_name, phone, email),
-          master:master_id(id, full_name, phone),
-          dispatcher:dispatcher_id(id, full_name, phone),
-          assigned_dispatcher:assigned_dispatcher_id(id, full_name, phone)
-        `)
-        .or(`assigned_dispatcher_id.eq.${dispatcherId},dispatcher_id.eq.${dispatcherId}`)
-        .order('created_at', { ascending: false });
+      const buildQuery = () => {
+        let query = supabase
+          .from('orders')
+          .select(`
+            *,
+            client:client_id(full_name, phone, email),
+            master:master_id(id, full_name, phone),
+            dispatcher:dispatcher_id(id, full_name, phone),
+            assigned_dispatcher:assigned_dispatcher_id(id, full_name, phone)
+          `)
+          .or(`assigned_dispatcher_id.eq.${dispatcherId},dispatcher_id.eq.${dispatcherId}`)
+          .order('created_at', { ascending: false });
 
-      if (statusFilter) {
-        query = query.eq('status', statusFilter);
-      }
+        if (statusFilter) {
+          query = query.eq('status', statusFilter);
+        }
+        return query;
+      };
 
-      const { data, error } = await query;
+      const { data, error } = await callWithRetry(buildQuery, 2, 350);
       if (error) throw error;
 
       serviceLog(`${LOG_PREFIX} Found ${data.length} dispatcher orders`);
@@ -1692,36 +1768,39 @@ class OrdersService {
     try {
       const { statusFilter, search, urgency, serviceType, sortOrder = 'desc' } = options;
 
-      let query = supabase
-        .from('orders')
-        .select(`
-          *,
-          client:client_id(id, full_name, phone, email),
-          master:master_id(id, full_name, phone, rating, total_commission_owed),
-          dispatcher:dispatcher_id(id, full_name, phone),
-          assigned_dispatcher:assigned_dispatcher_id(id, full_name, phone)
-        `)
-        .or(`assigned_dispatcher_id.eq.${dispatcherId},dispatcher_id.eq.${dispatcherId}`);
+      const buildQuery = () => {
+        let query = supabase
+          .from('orders')
+          .select(`
+            *,
+            client:client_id(id, full_name, phone, email),
+            master:master_id(id, full_name, phone, rating, total_commission_owed),
+            dispatcher:dispatcher_id(id, full_name, phone),
+            assigned_dispatcher:assigned_dispatcher_id(id, full_name, phone)
+          `)
+          .or(`assigned_dispatcher_id.eq.${dispatcherId},dispatcher_id.eq.${dispatcherId}`);
 
-      // Status filter (multiple allowed)
-      if (statusFilter && statusFilter.length > 0) {
-        query = query.in('status', statusFilter);
-      }
+        // Status filter (multiple allowed)
+        if (statusFilter && statusFilter.length > 0) {
+          query = query.in('status', statusFilter);
+        }
 
-      // Urgency filter
-      if (urgency && urgency !== 'all') {
-        query = query.eq('urgency', urgency);
-      }
+        // Urgency filter
+        if (urgency && urgency !== 'all') {
+          query = query.eq('urgency', urgency);
+        }
 
-      // Service type filter
-      if (serviceType && serviceType !== 'all') {
-        query = query.eq('service_type', serviceType);
-      }
+        // Service type filter
+        if (serviceType && serviceType !== 'all') {
+          query = query.eq('service_type', serviceType);
+        }
 
-      // Sort order
-      query = query.order('created_at', { ascending: sortOrder === 'asc' });
+        // Sort order
+        query = query.order('created_at', { ascending: sortOrder === 'asc' });
+        return query;
+      };
 
-      const { data, error } = await query;
+      const { data, error } = await callWithRetry(buildQuery, 2, 350);
       if (error) throw error;
 
       // Client-side search (for flexibility)
@@ -1781,19 +1860,28 @@ class OrdersService {
       const statusCounts = rpcData?.status_counts || { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 };
       const attentionItems = Array.isArray(rpcData?.attention_items) ? rpcData.attention_items : [];
       const attentionCount = Number(rpcData?.attention_count || attentionItems.length || 0);
+
+      const shouldRunSanityFallback = opts.page === 1
+        && totalCount === 0
+        && !opts.search;
+      if (shouldRunSanityFallback) {
+        const sanityCount = await countDispatcherScopeOrders(dispatcherId, opts);
+        if (sanityCount > 0) {
+          console.warn(`${LOG_PREFIX} ${DISPATCHER_QUEUE_RPC_NAME} returned empty payload while filtered scope has rows; using fallback`, {
+            dispatcherId,
+            opts,
+            sanityCount,
+          });
+          throw new Error('DISPATCHER_QUEUE_RPC_EMPTY_MISMATCH');
+        }
+      }
+
       perfLog(`[OrdersService][PERF] dispatcher_queue_done`, { ms: Date.now() - perfStart, rows: items.length, totalCount });
       return { data: items, count: totalCount, statusCounts, attentionItems, attentionCount, source: 'rpc' };
     } catch (rpcFallbackError) {
       try {
         const allOrders = await this.getDispatcherOrders(dispatcherId);
-        const statusFilter = mapDispatcherQueueStatusToStatuses(opts.status);
-        const filtered = await this.getDispatcherOrdersAdvanced(dispatcherId, {
-          statusFilter,
-          search: opts.search,
-          urgency: opts.urgency,
-          serviceType: opts.serviceType,
-          sortOrder: opts.sort === 'oldest' ? 'asc' : 'desc',
-        });
+        const filtered = filterDispatcherOrdersLocally(allOrders, opts);
         const offset = (opts.page - 1) * opts.limit;
         const paged = filtered.slice(offset, offset + opts.limit);
         const attentionItems = computeDispatcherNeedsAttention(allOrders).slice(0, 20);
@@ -1878,8 +1966,13 @@ class OrdersService {
     }
 
     const inFlight = this.adminQueueInflight.get(cacheKey);
-    if (inFlight) {
-      return inFlight;
+    if (inFlight?.promise) {
+      const ageMs = now - (inFlight.startedAt || now);
+      if (ageMs < this.adminQueueInflightTtlMs) {
+        return inFlight.promise;
+      }
+      // Drop stale in-flight promise so new attempts are not blocked behind hung requests.
+      this.adminQueueInflight.delete(cacheKey);
     }
 
     const task = (async () => {
@@ -1981,7 +2074,7 @@ class OrdersService {
       }
     })();
 
-    this.adminQueueInflight.set(cacheKey, task);
+    this.adminQueueInflight.set(cacheKey, { promise: task, startedAt: Date.now() });
     try {
       return await task;
     } finally {

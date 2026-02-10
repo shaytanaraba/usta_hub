@@ -16,6 +16,10 @@ export default function DispatcherSettingsTab({
   const profilePhone = user?.phone || user?.phone_number || user?.phoneNumber || '-';
   const profileEmail = user?.email || '-';
   const profileRole = TRANSLATIONS[language].dispatcherRole || 'Dispatcher';
+  const isEnabled = user?.is_verified === true;
+  const accessLabel = isEnabled
+    ? (TRANSLATIONS[language].verified || 'Verified')
+    : (TRANSLATIONS[language].unverified || 'Unverified');
   const initials = profileName
     .split(' ')
     .filter(Boolean)
@@ -47,6 +51,19 @@ export default function DispatcherSettingsTab({
         </View>
         <Text style={[styles.settingsMeta, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].phone}: {profilePhone}</Text>
         <Text style={[styles.settingsMeta, !isDark && styles.textSecondary]}>{profileEmail}</Text>
+        <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: 999,
+              backgroundColor: isEnabled ? '#22c55e' : '#ef4444',
+            }}
+          />
+          <Text style={[styles.settingsMeta, !isDark && styles.textSecondary]}>
+            {(TRANSLATIONS[language].status || 'Status')}: {accessLabel}
+          </Text>
+        </View>
       </View>
 
       <View style={[styles.settingsCard, !isDark && styles.cardLight]}>

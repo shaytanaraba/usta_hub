@@ -421,6 +421,7 @@ const DashboardContent = ({ navigation }) => {
     });
     const filterDebounceRef = useRef(null);
     const authSyncUserIdRef = useRef(null);
+    const hadAuthUserRef = useRef(false);
 
     const { logout, user: authUser } = useAuth();
     const logPerf = useCallback((event, data = {}) => {
@@ -448,6 +449,8 @@ const DashboardContent = ({ navigation }) => {
     }, []);
     useEffect(() => {
         if (!authUser?.id) {
+            const hadAuthUser = hadAuthUserRef.current;
+            hadAuthUserRef.current = false;
             authSyncUserIdRef.current = null;
             setUser(null);
             setAvailableOrders([]);
@@ -462,16 +465,19 @@ const DashboardContent = ({ navigation }) => {
                 clearTimeout(filterDebounceRef.current);
                 filterDebounceRef.current = null;
             }
-            perfRef.current.criticalLoadSeq += 1;
-            perfRef.current.accountLoadSeq += 1;
-            perfRef.current.poolLoadSeq += 1;
-            perfRef.current.pageLoadSeq += 1;
+            if (hadAuthUser) {
+                perfRef.current.criticalLoadSeq += 1;
+                perfRef.current.accountLoadSeq += 1;
+                perfRef.current.poolLoadSeq += 1;
+                perfRef.current.pageLoadSeq += 1;
+            }
             perfRef.current.accountLoaded = false;
             perfRef.current.accountLoadedAt = 0;
             perfRef.current.filtersInitialized = false;
             perfRef.current.lastFilterKey = '';
             return;
         }
+        hadAuthUserRef.current = true;
         setUser((prev) => {
             if (prev?.id === authUser.id) return { ...prev, ...authUser };
             return authUser;

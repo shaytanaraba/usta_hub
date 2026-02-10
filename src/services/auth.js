@@ -7,11 +7,17 @@ import { supabase } from '../lib/supabase';
 
 const LOG_PREFIX = '[AuthService]';
 const isDebug = process?.env?.EXPO_PUBLIC_ENABLE_AUTH_LOGS === '1';
+const AUTH_SESSION_POLICY = process?.env?.EXPO_PUBLIC_AUTH_SESSION_POLICY === 'single' ? 'single' : 'multi';
+const AUTH_DIAG_ENABLED = process?.env?.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS === '1';
+const PROFILE_LIST_CACHE_TTL_MS = Number(process?.env?.EXPO_PUBLIC_PROFILE_LIST_CACHE_TTL_MS || 12000);
 const debug = (...args) => {
   if (isDebug) console.log(...args);
 };
 const debugWarn = (...args) => {
   if (isDebug) console.warn(...args);
+};
+const authDiag = (...args) => {
+  if (AUTH_DIAG_ENABLED) console.log('[AuthService][Diag]', ...args);
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -62,6 +68,7 @@ const DISPATCHER_LIST_FIELDS = [
   'full_name',
   'role',
   'is_active',
+  'is_verified',
   'created_at'
 ].join(', ');
 
@@ -130,6 +137,110 @@ class AuthService {
       master: 'MasterDashboard',
       client: null, // Clients cannot login in v5 (dispatcher-mediated)
     };
+    this.authSessionPolicy = AUTH_SESSION_POLICY;
+    this.profileListCache = new Map();
+    this.profileListInflight = new Map();
+    this.profileListCacheTtlMs = Number.isFinite(PROFILE_LIST_CACHE_TTL_MS) && PROFILE_LIST_CACHE_TTL_MS >= 0
+      ? PROFILE_LIST_CACHE_TTL_MS
+      : 12000;
+    authDiag('policy_initialized', { authSessionPolicy: this.authSessionPolicy });
+  }
+
+  resolveSignOutScope(options = {}) {
+    if (options.scope) return options.scope;
+    return this.authSessionPolicy === 'single' ? 'global' : 'local';
+  }
+
+  invalidateProfileListCache() {
+    this.profileListCache.clear();
+    this.profileListInflight.clear();
+    authDiag('profile_list_cache_invalidated');
+  }
+
+  normalizeProfileListOptions(options = {}) {
+    return {
+      page: Number.isInteger(options.page) && options.page >= 0 ? options.page : null,
+      pageSize: Number.isInteger(options.pageSize) && options.pageSize > 0 ? options.pageSize : null,
+      force: options.force === true,
+    };
+  }
+
+  buildProfileListCacheKey(role, options = {}) {
+    const opts = this.normalizeProfileListOptions(options);
+    return JSON.stringify({
+      role,
+      page: opts.page,
+      pageSize: opts.pageSize,
+    });
+  }
+
+  async runProfileListQuery(role, selectFields, options = {}) {
+    const opts = this.normalizeProfileListOptions(options);
+    debug(`${LOG_PREFIX} Fetching ${role} list...`);
+    let query = supabase
+      .from('profiles')
+      .select(selectFields)
+      .eq('role', role)
+      .order('created_at', { ascending: false });
+
+    if (opts.page !== null && opts.pageSize !== null) {
+      const start = opts.page * opts.pageSize;
+      const end = start + opts.pageSize - 1;
+      query = query.range(start, end);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  }
+
+  async fetchProfileListWithCache(role, selectFields, options = {}) {
+    const opts = this.normalizeProfileListOptions(options);
+    const cacheKey = this.buildProfileListCacheKey(role, opts);
+    const now = Date.now();
+
+    if (!opts.force) {
+      const cached = this.profileListCache.get(cacheKey);
+      if (cached && (now - cached.ts) < this.profileListCacheTtlMs) {
+        authDiag('profile_list_cache_hit', { role, cacheKey, ageMs: now - cached.ts });
+        return cached.data;
+      }
+      const inFlight = this.profileListInflight.get(cacheKey);
+      if (inFlight) {
+        authDiag('profile_list_inflight_join', { role, cacheKey });
+        return inFlight;
+      }
+    }
+
+    authDiag('profile_list_cache_miss', { role, cacheKey, force: opts.force });
+    const task = (async () => {
+      const data = await this.runProfileListQuery(role, selectFields, opts);
+      this.profileListCache.set(cacheKey, { ts: Date.now(), data });
+      return data;
+    })();
+    this.profileListInflight.set(cacheKey, task);
+    try {
+      return await task;
+    } finally {
+      if (this.profileListInflight.get(cacheKey) === task) {
+        this.profileListInflight.delete(cacheKey);
+      }
+    }
+  }
+
+  async enforceSessionPolicyOnLogin() {
+    if (this.authSessionPolicy !== 'single') return;
+    try {
+      // Revoke other sessions while keeping current one for single-session policy.
+      const { error } = await supabase.auth.signOut({ scope: 'others' });
+      if (error) {
+        console.warn(`${LOG_PREFIX} single-session policy: failed to revoke other sessions`, error?.message || error);
+        return;
+      }
+      authDiag('single_session_policy_applied', { revoked: 'others' });
+    } catch (error) {
+      console.warn(`${LOG_PREFIX} single-session policy enforcement failed`, error?.message || error);
+    }
   }
 
   /**
@@ -137,6 +248,7 @@ class AuthService {
    */
   async loginUser(email, password) {
     debug(`${LOG_PREFIX} Attempting login for: ${email}`);
+    authDiag('login_attempt', { authSessionPolicy: this.authSessionPolicy });
 
     try {
       if (!email?.trim() || !password) {
@@ -206,6 +318,13 @@ class AuthService {
         throw new Error('Account deactivated. Contact administrator.');
       }
 
+      // Dispatcher access is controlled by verification status.
+      if (profile.role === 'dispatcher' && profile.is_verified !== true) {
+        debugWarn(`${LOG_PREFIX} Dispatcher access disabled (not verified):`, profile.id);
+        await this.logoutUser({ scope: 'local' });
+        throw new Error('Dispatcher account is unverified. Contact administrator.');
+      }
+
       // Block client logins in v5 (dispatcher-mediated architecture)
       if (profile.role === 'client') {
         debugWarn(`${LOG_PREFIX} Client login blocked:`, profile.id);
@@ -221,6 +340,7 @@ class AuthService {
       }
 
       debug(`${LOG_PREFIX} Login successful. Role: ${profile.role}`);
+      await this.enforceSessionPolicyOnLogin();
 
       return {
         success: true,
@@ -276,6 +396,10 @@ class AuthService {
             await supabase.auth.signOut({ scope: 'local' });
             return null;
           }
+          if (profile.role === 'dispatcher' && profile.is_verified !== true) {
+            await supabase.auth.signOut({ scope: 'local' });
+            return null;
+          }
           if (profile.role === 'client') {
             await supabase.auth.signOut({ scope: 'local' });
             return null;
@@ -320,7 +444,8 @@ class AuthService {
     debug(`${LOG_PREFIX} Logging out...`);
 
     try {
-      const scope = options.scope || 'local';
+      const scope = this.resolveSignOutScope(options);
+      authDiag('logout_scope_resolved', { scope, authSessionPolicy: this.authSessionPolicy });
       const { error } = await supabase.auth.signOut({ scope });
       if (error) throw error;
       debug(`${LOG_PREFIX} Logout successful`);
@@ -361,24 +486,8 @@ class AuthService {
    * Get all masters (admin/dispatcher)
    */
   async getAllMasters(options = {}) {
-    debug(`${LOG_PREFIX} Fetching all masters...`);
-
     try {
-      let query = supabase
-        .from('profiles')
-        .select(MASTER_LIST_FIELDS)
-        .eq('role', 'master')
-        .order('created_at', { ascending: false });
-
-      if (Number.isInteger(options.page) && Number.isInteger(options.pageSize)) {
-        const start = options.page * options.pageSize;
-        const end = start + options.pageSize - 1;
-        query = query.range(start, end);
-      }
-
-      const { data, error } = await query;
-
-      if (error) throw error;
+      const data = await this.fetchProfileListWithCache('master', MASTER_LIST_FIELDS, options);
       debug(`${LOG_PREFIX} Found ${data.length} masters`);
       return data;
     } catch (error) {
@@ -391,24 +500,8 @@ class AuthService {
    * Get all dispatchers (admin)
    */
   async getAllDispatchers(options = {}) {
-    debug(`${LOG_PREFIX} Fetching all dispatchers...`);
-
     try {
-      let query = supabase
-        .from('profiles')
-        .select(DISPATCHER_LIST_FIELDS)
-        .eq('role', 'dispatcher')
-        .order('created_at', { ascending: false });
-
-      if (Number.isInteger(options.page) && Number.isInteger(options.pageSize)) {
-        const start = options.page * options.pageSize;
-        const end = start + options.pageSize - 1;
-        query = query.range(start, end);
-      }
-
-      const { data, error } = await query;
-
-      if (error) throw error;
+      const data = await this.fetchProfileListWithCache('dispatcher', DISPATCHER_LIST_FIELDS, options);
       return data;
     } catch (error) {
       console.error(`${LOG_PREFIX} getAllDispatchers error:`, error);
@@ -420,24 +513,8 @@ class AuthService {
    * Get all admins (admin only)
    */
   async getAllAdmins(options = {}) {
-    debug(`${LOG_PREFIX} Fetching all admins...`);
-
     try {
-      let query = supabase
-        .from('profiles')
-        .select(DISPATCHER_LIST_FIELDS)
-        .eq('role', 'admin')
-        .order('created_at', { ascending: false });
-
-      if (Number.isInteger(options.page) && Number.isInteger(options.pageSize)) {
-        const start = options.page * options.pageSize;
-        const end = start + options.pageSize - 1;
-        query = query.range(start, end);
-      }
-
-      const { data, error } = await query;
-
-      if (error) throw error;
+      const data = await this.fetchProfileListWithCache('admin', DISPATCHER_LIST_FIELDS, options);
       return data;
     } catch (error) {
       console.error(`${LOG_PREFIX} getAllAdmins error:`, error);
@@ -462,6 +539,7 @@ class AuthService {
 
       if (error) throw error;
       debug(`${LOG_PREFIX} Master verified successfully`);
+      this.invalidateProfileListCache();
       return { success: true, message: 'Master verified' };
     } catch (error) {
       console.error(`${LOG_PREFIX} verifyMaster error:`, error);
@@ -485,6 +563,7 @@ class AuthService {
         .single();
 
       if (error) throw error;
+      this.invalidateProfileListCache();
       return { success: true, message: 'Master unverified' };
     } catch (error) {
       console.error(`${LOG_PREFIX} unverifyMaster error:`, error);
@@ -517,6 +596,7 @@ class AuthService {
         .single();
 
       if (error) throw error;
+      this.invalidateProfileListCache();
       return { success: true, message: 'Profile updated', user: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} updateProfile error:`, error);
@@ -632,6 +712,7 @@ class AuthService {
       if (profileError) {
         console.error(`${LOG_PREFIX} Profile update error:`, profileError);
         // User created but profile update failed - still return success with warning
+        this.invalidateProfileListCache();
         return {
           success: true,
           message: 'User created but profile update failed. Refresh to see changes.',
@@ -640,6 +721,7 @@ class AuthService {
       }
 
       debug(`${LOG_PREFIX} User created successfully: ${profile.full_name}`);
+      this.invalidateProfileListCache();
       return {
         success: true,
         message: `${userData.role === 'master' ? 'Master' : 'Dispatcher'} created successfully`,
@@ -650,6 +732,46 @@ class AuthService {
       return { success: false, message: error.message };
     } finally {
       await restoreOriginalSession();
+    }
+  }
+
+  /**
+   * Verify dispatcher (admin only)
+   */
+  async verifyDispatcher(dispatcherId) {
+    debug(`${LOG_PREFIX} Verifying dispatcher: ${dispatcherId}`);
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ is_verified: true, is_active: true })
+        .eq('id', dispatcherId)
+        .eq('role', 'dispatcher');
+      if (error) throw error;
+      this.invalidateProfileListCache();
+      return { success: true, message: 'Dispatcher verified' };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} verifyDispatcher error:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Unverify dispatcher (admin only)
+   */
+  async unverifyDispatcher(dispatcherId) {
+    debug(`${LOG_PREFIX} Unverifying dispatcher: ${dispatcherId}`);
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ is_verified: false, is_active: false })
+        .eq('id', dispatcherId)
+        .eq('role', 'dispatcher');
+      if (error) throw error;
+      this.invalidateProfileListCache();
+      return { success: true, message: 'Dispatcher unverified' };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} unverifyDispatcher error:`, error);
+      return { success: false, message: error.message };
     }
   }
 
@@ -768,6 +890,7 @@ class AuthService {
       }
 
       debug(`${LOG_PREFIX} Dispatcher status updated:`, data);
+      this.invalidateProfileListCache();
       return {
         success: true,
         message: `${data.dispatcher_name} ${newStatus ? 'activated' : 'deactivated'}`,

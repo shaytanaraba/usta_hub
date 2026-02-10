@@ -717,6 +717,7 @@ export {
     CANCELED_STATUSES,
     isReopenableStatus,
     getAnalyticsColumns,
+    getPointerPos,
     AnalyticsMetricCard,
     AnalyticsListCard,
     InfoTip,

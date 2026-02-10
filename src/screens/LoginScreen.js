@@ -127,13 +127,9 @@ function LoginContent({ navigation }) {
         }
         showToast?.(t('loginSuccess'), 'success');
         if (result.redirectScreen) {
-          navigation.reset({
-            index: 0,
-            routes: [{
-              name: result.redirectScreen,
-              params: { user: result.user }
-            }],
-          });
+          if (__DEV__) {
+            console.log(`${LOG_PREFIX} Waiting for auth state route sync -> ${result.redirectScreen}`);
+          }
         } else {
           setError(t('loginErrorGeneric'));
           showToast?.(t('loginErrorGeneric'), 'error');
