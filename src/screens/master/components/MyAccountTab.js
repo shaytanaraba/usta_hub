@@ -1,10 +1,25 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { FlatList, Image, Linking, RefreshControl, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { FlatList, Image, Linking, Platform, RefreshControl, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { AlertCircle, ChevronLeft, ChevronRight, ClipboardList, MessageCircle, Phone, Send, Settings, ShieldCheck, User, Wallet } from 'lucide-react-native';
 import { useLocalization } from '../../../contexts/LocalizationContext';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { getOrderStatusLabel, getServiceLabel } from '../../../utils/orderHelpers';
 import { ACCOUNT_VIEWS } from '../constants/domain';
+
+const THEME_OPTIONS = [
+    { id: 'light', icon: '\u2600', labelKey: 'settingsThemeLight', fallback: 'Light' },
+    { id: 'dark', icon: '\u263E', labelKey: 'settingsThemeDark', fallback: 'Dark' },
+];
+
+const normalizeLabelCasing = (value) => {
+    if (typeof value !== 'string') return value;
+    const letters = Array.from(value).filter((char) => char.toLocaleLowerCase() !== char.toLocaleUpperCase());
+    if (!letters.length) return value;
+    const isAllUpper = letters.every((char) => char === char.toLocaleUpperCase());
+    if (!isAllUpper) return value;
+    const lower = value.toLocaleLowerCase();
+    return lower.charAt(0).toLocaleUpperCase() + lower.slice(1);
+};
 
 const MyAccountTab = ({
     user,
@@ -35,6 +50,11 @@ const MyAccountTab = ({
     const supportPhone = '+996500105415';
     const supportWhatsApp = 'https://wa.me/996500105415';
     const supportTelegram = 'https://t.me/konevor';
+    const isVerified = user?.is_verified === true;
+    const statusLabel = normalizeLabelCasing(isVerified
+        ? (safeT('verified', 'Verified'))
+        : (safeT('unverified', 'Unverified')));
+    const themeMode = isDark ? 'dark' : 'light';
     const openSupportLink = (url) => {
         if (!url) return;
         Linking.openURL(url);
@@ -448,17 +468,45 @@ const MyAccountTab = ({
                         </View>
                     </View>
                     <View style={[styles.settingsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
+                        <Text style={[styles.settingsTitle, { color: theme.textPrimary }]}>{safeT('status', 'Status')}</Text>
+                        <View style={[styles.settingsStatusRow, { borderColor: theme.borderPrimary, backgroundColor: theme.bgSecondary }]}>
+                            <View style={[styles.settingsStatusDot, { backgroundColor: isVerified ? theme.accentSuccess : theme.accentDanger }]} />
+                            <Text style={[styles.settingsStatusValue, { color: theme.textPrimary }]}>{statusLabel}</Text>
+                        </View>
+                    </View>
+                    <View style={[styles.settingsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
                         <View style={styles.settingsToggleRow}>
                             <View>
                                 <Text style={[styles.settingsTitle, { color: theme.textPrimary }]}>{t('settingsTheme') || 'Theme'}</Text>
                                 <Text style={{ color: theme.textMuted, fontSize: 11 }}>{t('settingsThemeHint') || 'Adjust appearance'}</Text>
                             </View>
-                            <TouchableOpacity
-                                style={[styles.settingsToggle, { backgroundColor: isDark ? theme.accentIndigo : theme.borderSecondary }]}
-                                onPress={toggleTheme}
-                            >
-                                <View style={[styles.settingsToggleThumb, { left: isDark ? 22 : 3 }]} />
-                            </TouchableOpacity>
+                            <View style={[styles.settingsThemeSwitch, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
+                                {THEME_OPTIONS.map((option) => {
+                                    const isActive = themeMode === option.id;
+                                    return (
+                                        <TouchableOpacity
+                                            key={option.id}
+                                            style={[
+                                                styles.settingsThemeOption,
+                                                { backgroundColor: isActive ? theme.accentIndigo : 'transparent' },
+                                            ]}
+                                            onPress={() => {
+                                                const nextIsDark = option.id === 'dark';
+                                                if (nextIsDark !== isDark) {
+                                                    toggleTheme();
+                                                }
+                                            }}
+                                        >
+                                            <Text style={[styles.settingsThemeOptionIcon, { color: isActive ? '#fff' : theme.textMuted }]}>
+                                                {option.icon}
+                                            </Text>
+                                            <Text style={[styles.settingsThemeOptionText, { color: isActive ? '#fff' : theme.textSecondary }]}>
+                                                {safeT(option.labelKey, option.fallback)}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
                         </View>
                     </View>
                     <View style={[styles.settingsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>

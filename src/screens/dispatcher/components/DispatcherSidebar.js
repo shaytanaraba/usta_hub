@@ -59,7 +59,7 @@ export default function DispatcherSidebar({
               onPress={() => onSelectTab('create')}
             >
               <Text style={[styles.sidebarNavText, activeTab === 'create' && styles.sidebarNavTextActive]}>
-                + {translations[language].createOrder}
+                {translations[language].createOrder}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity

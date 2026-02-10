@@ -631,11 +631,17 @@ export default function AdminDashboard({ navigation }) {
             label: getServiceLabel(label, t),
             count,
         })));
+        const urgencyPriority = { emergency: 3, urgent: 2, planned: 1 };
         const urgencyItems = [
-            { label: TRANSLATIONS.urgencyEmergency || 'Emergency', count: urgencyCounts.emergency },
-            { label: TRANSLATIONS.urgencyUrgent || 'Urgent', count: urgencyCounts.urgent },
-            { label: TRANSLATIONS.urgencyPlanned || 'Planned', count: urgencyCounts.planned },
-        ];
+            { key: 'emergency', label: TRANSLATIONS.urgencyEmergency || 'Emergency', count: urgencyCounts.emergency },
+            { key: 'urgent', label: TRANSLATIONS.urgencyUrgent || 'Urgent', count: urgencyCounts.urgent },
+            { key: 'planned', label: TRANSLATIONS.urgencyPlanned || 'Planned', count: urgencyCounts.planned },
+        ].sort((a, b) => {
+            if (b.count !== a.count) return b.count - a.count;
+            const aPriority = urgencyPriority[a.key] || 0;
+            const bPriority = urgencyPriority[b.key] || 0;
+            return bPriority - aPriority;
+        });
         const maxUrgency = Math.max(...urgencyItems.map(item => item.count), 1);
         const urgencyMix = urgencyItems.map(item => ({
             label: item.label,
@@ -3761,6 +3767,18 @@ export default function AdminDashboard({ navigation }) {
                                     <View style={styles.peopleInfo}>
                                         <Text style={[styles.itemTitle, !isDark && styles.textDark]} numberOfLines={1}>{item.full_name}</Text>
                                         <Text style={styles.itemSubtitle} numberOfLines={1}>{item.phone}</Text>
+                                        <View style={styles.peopleMetaRow}>
+                                            <View style={[styles.peopleMetaChip, !isDark && styles.peopleMetaChipLight]}>
+                                                <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
+                                                    {(item.is_verified ? (TRANSLATIONS.verified || 'Verified') : (TRANSLATIONS.unverified || 'Unverified')).toUpperCase()}
+                                                </Text>
+                                            </View>
+                                            <View style={[styles.peopleMetaChip, !isDark && styles.peopleMetaChipLight]}>
+                                                <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
+                                                    {(TRANSLATIONS.completed || 'Completed')}: {formatNumber(Number(item.completed_jobs_count || 0))}
+                                                </Text>
+                                            </View>
+                                        </View>
                                     </View>
                                 </TouchableOpacity>
                                 <View style={styles.peopleRight}>
@@ -3849,6 +3867,18 @@ export default function AdminDashboard({ navigation }) {
                                     <View style={styles.peopleInfo}>
                                         <Text style={[styles.itemTitle, !isDark && styles.textDark]} numberOfLines={1}>{item.full_name}</Text>
                                         <Text style={styles.itemSubtitle} numberOfLines={1}>{item.phone || item.email}</Text>
+                                        <View style={styles.peopleMetaRow}>
+                                            <View style={[styles.peopleMetaChip, !isDark && styles.peopleMetaChipLight]}>
+                                                <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
+                                                    {(TRANSLATIONS.dispatcherRole || 'Dispatcher').toUpperCase()}
+                                                </Text>
+                                            </View>
+                                            <View style={[styles.peopleMetaChip, !isDark && styles.peopleMetaChipLight]}>
+                                                <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
+                                                    {(item.is_verified ? (TRANSLATIONS.verified || 'Verified') : (TRANSLATIONS.unverified || 'Unverified')).toUpperCase()}
+                                                </Text>
+                                            </View>
+                                        </View>
                                     </View>
                                 </TouchableOpacity>
                                 <View style={styles.peopleRight}>

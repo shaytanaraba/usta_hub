@@ -1,6 +1,27 @@
 import React from 'react';
-import { Linking, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Linking, Text, TouchableOpacity, View } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
+
+const LANGUAGE_FLAGS = {
+  en: '\uD83C\uDDEC\uD83C\uDDE7',
+  ru: '\uD83C\uDDF7\uD83C\uDDFA',
+  kg: '\uD83C\uDDF0\uD83C\uDDEC',
+};
+
+const THEME_OPTIONS = [
+  { id: 'light', icon: '\u2600', labelKey: 'settingsThemeLight', fallback: 'Light' },
+  { id: 'dark', icon: '\u263E', labelKey: 'settingsThemeDark', fallback: 'Dark' },
+];
+
+const normalizeLabelCasing = (value) => {
+  if (typeof value !== 'string') return value;
+  const letters = Array.from(value).filter((char) => char.toLocaleLowerCase() !== char.toLocaleUpperCase());
+  if (letters.length === 0) return value;
+  const isAllUpper = letters.every((char) => char === char.toLocaleUpperCase());
+  if (!isAllUpper) return value;
+  const lower = value.toLocaleLowerCase();
+  return lower.charAt(0).toLocaleUpperCase() + lower.slice(1);
+};
 
 export default function DispatcherSettingsTab({
   styles,
@@ -10,6 +31,8 @@ export default function DispatcherSettingsTab({
   user,
   setLanguage,
   setIsDark,
+  loading,
+  skeletonPulse,
 }) {
   const TRANSLATIONS = translations;
   const profileName = user?.full_name || 'Dispatcher';
@@ -17,9 +40,11 @@ export default function DispatcherSettingsTab({
   const profileEmail = user?.email || '-';
   const profileRole = TRANSLATIONS[language].dispatcherRole || 'Dispatcher';
   const isEnabled = user?.is_verified === true;
-  const accessLabel = isEnabled
+  const accessLabelRaw = isEnabled
     ? (TRANSLATIONS[language].verified || 'Verified')
     : (TRANSLATIONS[language].unverified || 'Unverified');
+  const accessLabel = normalizeLabelCasing(accessLabelRaw);
+  const themeMode = isDark ? 'dark' : 'light';
   const initials = profileName
     .split(' ')
     .filter(Boolean)
@@ -31,38 +56,53 @@ export default function DispatcherSettingsTab({
   const handleSupport = () => Linking.openURL('tel:+996500105415');
   const handleWhatsApp = () => Linking.openURL('https://wa.me/996500105415');
   const handleTelegram = () => Linking.openURL('https://t.me/konevor');
+  const renderValueSkeleton = (style) => (
+    <Animated.View style={[style, { opacity: skeletonPulse }]} />
+  );
 
   return (
     <View style={styles.settingsContainer}>
       <View style={[styles.settingsCard, !isDark && styles.cardLight]}>
         <Text style={[styles.settingsTitle, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].sectionProfile || 'Profile'}</Text>
         <View style={styles.settingsProfileRow}>
-          <View style={styles.settingsAvatar}>
-            <Text style={styles.settingsAvatarText}>{initials}</Text>
+          <View style={[styles.settingsAvatar, loading && styles.settingsAvatarSkeleton]}>
+            {!loading && <Text style={styles.settingsAvatarText}>{initials}</Text>}
           </View>
           <View style={styles.settingsProfileInfo}>
-            <Text style={[styles.settingsValue, !isDark && styles.textDark]}>{profileName}</Text>
+            {loading
+              ? renderValueSkeleton(styles.settingsValueSkeleton)
+              : <Text style={[styles.settingsValue, !isDark && styles.textDark]}>{profileName}</Text>}
             <View style={[styles.settingsRoleChip, !isDark && styles.settingsRoleChipLight]}>
-              <Text style={[styles.settingsRoleText, !isDark && styles.settingsRoleTextLight]}>
-                {profileRole}
-              </Text>
+              {loading
+                ? renderValueSkeleton(styles.settingsRoleSkeleton)
+                : (
+                  <Text style={[styles.settingsRoleText, !isDark && styles.settingsRoleTextLight]}>
+                    {profileRole}
+                  </Text>
+                )}
             </View>
           </View>
         </View>
-        <Text style={[styles.settingsMeta, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].phone}: {profilePhone}</Text>
-        <Text style={[styles.settingsMeta, !isDark && styles.textSecondary]}>{profileEmail}</Text>
-        <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        {loading
+          ? renderValueSkeleton(styles.settingsMetaSkeleton)
+          : <Text style={[styles.settingsMeta, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].phone}: {profilePhone}</Text>}
+        {loading
+          ? renderValueSkeleton(styles.settingsMetaSkeletonShort)
+          : <Text style={[styles.settingsMeta, !isDark && styles.textSecondary]}>{profileEmail}</Text>}
+      </View>
+
+      <View style={[styles.settingsCard, !isDark && styles.cardLight]}>
+        <Text style={[styles.settingsTitle, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].status || 'Status'}</Text>
+        <View style={[styles.settingsStatusRow, !isDark && styles.settingsStatusRowLight]}>
           <View
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: 999,
-              backgroundColor: isEnabled ? '#22c55e' : '#ef4444',
-            }}
+            style={[
+              styles.settingsStatusDot,
+              { backgroundColor: loading ? (isDark ? '#64748b' : '#cbd5e1') : (isEnabled ? '#22c55e' : '#ef4444') },
+            ]}
           />
-          <Text style={[styles.settingsMeta, !isDark && styles.textSecondary]}>
-            {(TRANSLATIONS[language].status || 'Status')}: {accessLabel}
-          </Text>
+          {loading
+            ? renderValueSkeleton(styles.settingsStatusSkeleton)
+            : <Text style={[styles.settingsStatusValue, !isDark && styles.settingsStatusValueLight]}>{accessLabel}</Text>}
         </View>
       </View>
 
@@ -86,13 +126,11 @@ export default function DispatcherSettingsTab({
             >
               <Text
                 style={[
-                  styles.settingsOptionText,
-                  language === code && styles.settingsOptionTextActive,
-                  !isDark && styles.settingsOptionTextLight,
-                  !isDark && language === code && styles.settingsOptionTextActiveLight,
+                  styles.settingsFlag,
+                  language === code && styles.settingsFlagActive,
                 ]}
               >
-                {code.toUpperCase()}
+                {LANGUAGE_FLAGS[code] || code.toUpperCase()}
               </Text>
             </TouchableOpacity>
           ))}
@@ -105,12 +143,44 @@ export default function DispatcherSettingsTab({
             <Text style={[styles.settingsTitle, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].settingsTheme || 'Theme'}</Text>
             <Text style={[styles.settingsHint, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].settingsThemeHint || 'Adjust appearance'}</Text>
           </View>
-          <TouchableOpacity
-            style={[styles.settingsToggle, { backgroundColor: isDark ? '#2563eb' : '#e2e8f0' }]}
-            onPress={() => setIsDark(!isDark)}
-          >
-            <View style={[styles.settingsToggleThumb, { left: isDark ? 22 : 3 }]} />
-          </TouchableOpacity>
+          <View style={[styles.settingsThemeSwitch, !isDark && styles.settingsThemeSwitchLight]}>
+            {THEME_OPTIONS.map((option) => {
+              const isActive = themeMode === option.id;
+              return (
+                <TouchableOpacity
+                  key={option.id}
+                  style={[
+                    styles.settingsThemeOption,
+                    isActive && styles.settingsThemeOptionActive,
+                    !isDark && styles.settingsThemeOptionLight,
+                    !isDark && isActive && styles.settingsThemeOptionActiveLight,
+                  ]}
+                  onPress={() => setIsDark(option.id === 'dark')}
+                >
+                  <Text
+                    style={[
+                      styles.settingsThemeOptionIcon,
+                      isActive && styles.settingsThemeOptionIconActive,
+                      !isDark && styles.settingsThemeOptionIconLight,
+                      !isDark && isActive && styles.settingsThemeOptionIconActiveLight,
+                    ]}
+                  >
+                    {option.icon}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.settingsThemeOptionText,
+                      isActive && styles.settingsThemeOptionTextActive,
+                      !isDark && styles.settingsThemeOptionTextLight,
+                      !isDark && isActive && styles.settingsThemeOptionTextActiveLight,
+                    ]}
+                  >
+                    {TRANSLATIONS[language][option.labelKey] || option.fallback}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
       </View>
 

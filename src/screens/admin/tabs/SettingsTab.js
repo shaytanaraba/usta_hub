@@ -63,6 +63,19 @@ export default function AdminSettingsTab(props) {
                 .some(val => String(val).toLowerCase().includes(cq))
         );
     const isNarrow = SCREEN_WIDTH < 640;
+    const toggleSection = (sectionKey) => {
+        const currentlyOpen = (
+            (sectionKey === 'configuration' && !configurationCollapsed)
+            || (sectionKey === 'districts' && !districtsCollapsed)
+            || (sectionKey === 'cancellationReasons' && !cancellationReasonsCollapsed)
+            || (sectionKey === 'serviceTypes' && !serviceTypesCollapsed)
+        );
+        const nextOpen = currentlyOpen ? null : sectionKey;
+        setConfigurationCollapsed(nextOpen !== 'configuration');
+        setDistrictsCollapsed(nextOpen !== 'districts');
+        setCancellationReasonsCollapsed(nextOpen !== 'cancellationReasons');
+        setServiceTypesCollapsed(nextOpen !== 'serviceTypes');
+    };
 
     return (
         <View style={{ flex: 1 }}>
@@ -153,7 +166,7 @@ export default function AdminSettingsTab(props) {
                                     </TouchableOpacity>
                                 )}
                                 <TouchableOpacity
-                                    onPress={() => setConfigurationCollapsed(prev => !prev)}
+                                    onPress={() => toggleSection('configuration')}
                                     style={[styles.collapseBtn, !isDark && styles.collapseBtnLight]}
                                 >
                                     <Ionicons name={configurationCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />
@@ -314,7 +327,7 @@ export default function AdminSettingsTab(props) {
                                     <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.addDistrict || 'Add District'}</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
-                                    onPress={() => setDistrictsCollapsed(prev => !prev)}
+                                    onPress={() => toggleSection('districts')}
                                     style={[styles.collapseBtn, !isDark && styles.collapseBtnLight]}
                                 >
                                     <Ionicons name={districtsCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />
@@ -413,7 +426,7 @@ export default function AdminSettingsTab(props) {
                                     <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.addCancellationReason || 'Add Reason'}</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
-                                    onPress={() => setCancellationReasonsCollapsed(prev => !prev)}
+                                    onPress={() => toggleSection('cancellationReasons')}
                                     style={[styles.collapseBtn, !isDark && styles.collapseBtnLight]}
                                 >
                                     <Ionicons name={cancellationReasonsCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />
@@ -519,7 +532,7 @@ export default function AdminSettingsTab(props) {
                                     <Text style={[styles.settingsBtnText, { color: '#fff' }]}>{TRANSLATIONS.addServiceType || 'Add Service Type'}</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
-                                    onPress={() => setServiceTypesCollapsed(prev => !prev)}
+                                    onPress={() => toggleSection('serviceTypes')}
                                     style={[styles.collapseBtn, !isDark && styles.collapseBtnLight]}
                                 >
                                     <Ionicons name={serviceTypesCollapsed ? "chevron-down" : "chevron-up"} size={18} color={isDark ? '#94a3b8' : '#64748b'} />

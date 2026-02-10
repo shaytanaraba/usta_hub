@@ -8,7 +8,7 @@ export const normalizeAdminTab = (tab) => {
 
 export const buildAdminMenuItems = (translations = {}) => ([
   { key: 'analytics', label: translations.analytics || 'Analytics', icon: 'analytics' },
-  { key: 'people', label: translations.people || 'People', icon: 'people' },
+  { key: 'people', label: translations.team || translations.tabTeam || 'Team', icon: 'people' },
   { key: 'create_order', label: translations.createOrder || 'Create Order', icon: 'add' },
   { key: 'orders', label: translations.ordersQueue || translations.orders || 'Order Queue', icon: 'list' },
   { key: 'settings', label: translations.settings || 'Settings', icon: 'settings' },

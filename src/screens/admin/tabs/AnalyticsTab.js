@@ -101,7 +101,9 @@ export default function AdminAnalyticsTab(props) {
         updateAnalyticsTrendTooltipPos,
         updatePriceDistTooltipPos,
     } = props;
-const columns = getAnalyticsColumns();
+    const [statusMixTooltip, setStatusMixTooltip] = React.useState(null);
+    const [priceDistMetricTooltip, setPriceDistMetricTooltip] = React.useState(null);
+    const columns = getAnalyticsColumns();
         const cardWidth = columns === 1 ? '100%' : columns === 2 ? '48%' : '31%';
         const listWidth = columns === 1 ? '100%' : '48%';
         const showClearFilters = analyticsFilters.urgency !== 'all' || analyticsFilters.service !== 'all' || analyticsFilters.area !== 'all';
@@ -166,62 +168,87 @@ const columns = getAnalyticsColumns();
             if (cv < 0.6) return TRANSLATIONS.analyticsPriceDistributionStabilityModerate || 'Moderate stability';
             return TRANSLATIONS.analyticsPriceDistributionStabilityLow || 'Low stability';
         };
+        const priceDistStatTips = {
+            n: TRANSLATIONS.analyticsPriceDistributionNTip || 'Number of orders in this range and scope.',
+            median: TRANSLATIONS.analyticsPriceDistributionMedianTip || 'Middle price (50th percentile). Half of orders are below, half above.',
+            p25: TRANSLATIONS.analyticsPriceDistributionP25Tip || '25th percentile. 25% of orders are below this value.',
+            p75: TRANSLATIONS.analyticsPriceDistributionP75Tip || '75th percentile. 75% of orders are below this value.',
+            top10: TRANSLATIONS.analyticsPriceDistributionTop10Tip || '90th percentile (top 10% threshold).',
+            mean: TRANSLATIONS.analyticsPriceDistributionMeanTip || 'Average order price.',
+            std: TRANSLATIONS.analyticsPriceDistributionStdTip || 'Standard deviation. Higher values mean prices vary more.',
+            iqr: TRANSLATIONS.analyticsPriceDistributionIQRTip || 'Interquartile range (P75 - P25). Core spread of typical prices.',
+            min: TRANSLATIONS.analyticsPriceDistributionMinTip || 'Lowest order price in this range.',
+            max: TRANSLATIONS.analyticsPriceDistributionMaxTip || 'Highest order price in this range.',
+            p90: TRANSLATIONS.analyticsPriceDistributionP90Tip || '90th percentile. Most orders are below this value.',
+            stability: TRANSLATIONS.analyticsPriceDistributionStabilityTip || 'Derived from coefficient of variation (STD / mean). Lower is more stable.',
+        };
         const priceDistStatItems = [
             {
                 key: 'n',
                 label: TRANSLATIONS.analyticsPriceDistributionN || 'N',
                 value: formatNumber(priceDistSummary.n),
+                infoText: priceDistStatTips.n,
             },
             {
                 key: 'median',
                 label: TRANSLATIONS.analyticsPriceDistributionMedian || 'Median',
                 value: formatPriceDistStat(priceDistSummary.p50),
                 primary: true,
+                infoText: priceDistStatTips.median,
             },
             {
                 key: 'p25',
                 label: TRANSLATIONS.analyticsPriceDistributionP25 || 'P25',
                 value: formatPriceDistStat(priceDistSummary.p25),
+                infoText: priceDistStatTips.p25,
             },
             {
                 key: 'p75',
                 label: TRANSLATIONS.analyticsPriceDistributionP75 || 'P75',
                 value: formatPriceDistStat(priceDistSummary.p75),
+                infoText: priceDistStatTips.p75,
             },
             {
                 key: 'top10',
                 label: TRANSLATIONS.analyticsPriceDistributionTop10Label || 'Top 10% jobs',
                 value: formatPriceDistStat(priceDistSummary.p90),
+                infoText: priceDistStatTips.top10,
             },
             {
                 key: 'mean',
                 label: TRANSLATIONS.analyticsPriceDistributionMean || 'Mean',
                 value: formatPriceDistStat(priceDistSummary.mean),
+                infoText: priceDistStatTips.mean,
             },
             {
                 key: 'std',
                 label: TRANSLATIONS.analyticsPriceDistributionStd || 'STD',
                 value: formatPriceDistStat(priceDistSummary.std),
+                infoText: priceDistStatTips.std,
             },
             {
                 key: 'iqr',
                 label: TRANSLATIONS.analyticsPriceDistributionIQR || 'IQR',
                 value: formatPriceDistStat(priceDistSummary.iqr),
+                infoText: priceDistStatTips.iqr,
             },
             {
                 key: 'min',
                 label: TRANSLATIONS.analyticsPriceDistributionMin || 'Min',
                 value: formatPriceDistStat(priceDistSummary.min),
+                infoText: priceDistStatTips.min,
             },
             {
                 key: 'max',
                 label: TRANSLATIONS.analyticsPriceDistributionMax || 'Max',
                 value: formatPriceDistStat(priceDistSummary.max),
+                infoText: priceDistStatTips.max,
             },
             {
                 key: 'p90',
                 label: TRANSLATIONS.analyticsPriceDistributionP90 || 'P90',
                 value: formatPriceDistStat(priceDistSummary.p90),
+                infoText: priceDistStatTips.p90,
             },
             {
                 key: 'stability',
@@ -229,8 +256,90 @@ const columns = getAnalyticsColumns();
                 value: priceDistSummary.n
                     ? `${getVolatilityLabel(priceDistSummary.cv)} (${formatPercent(priceDistSummary.cv)})`
                     : '-',
+                infoText: priceDistStatTips.stability,
             },
         ];
+        const overviewStatusSegments = [
+            { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: analyticsStats.statusBreakdown.open, color: '#38bdf8' },
+            { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: analyticsStats.statusBreakdown.active, color: '#3b82f6' },
+            { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: analyticsStats.statusBreakdown.completed, color: '#22c55e' },
+            { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: analyticsStats.statusBreakdown.canceled, color: '#ef4444' },
+        ];
+        const dispatcherStatusSegments = [
+            { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: dispatcherStatusBreakdown.open, color: '#38bdf8' },
+            { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: dispatcherStatusBreakdown.active, color: '#3b82f6' },
+            { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: dispatcherStatusBreakdown.completed, color: '#22c55e' },
+            { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: dispatcherStatusBreakdown.canceled, color: '#ef4444' },
+        ];
+        const masterStatusSegments = [
+            { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: masterStatusBreakdown.open, color: '#38bdf8' },
+            { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: masterStatusBreakdown.active, color: '#3b82f6' },
+            { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: masterStatusBreakdown.completed, color: '#22c55e' },
+            { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: masterStatusBreakdown.canceled, color: '#ef4444' },
+        ];
+        const resolveFloatingTooltipStyle = React.useCallback((x, y, tooltipW, tooltipH) => {
+            if (Platform.OS !== 'web' || x == null || y == null) {
+                return { right: 16, bottom: 16 };
+            }
+            const edgePad = 8;
+            const cursorPad = 12;
+            const viewportW = typeof window !== 'undefined' ? window.innerWidth : SCREEN_WIDTH;
+            const viewportH = typeof window !== 'undefined' ? window.innerHeight : 600;
+            let left = x + cursorPad;
+            if (left + tooltipW + edgePad > viewportW) {
+                left = x - tooltipW - cursorPad;
+            }
+            let top = y + cursorPad;
+            if (top + tooltipH + edgePad > viewportH) {
+                top = y - tooltipH - cursorPad;
+            }
+            left = Math.max(edgePad, Math.min(left, viewportW - tooltipW - edgePad));
+            top = Math.max(edgePad, Math.min(top, viewportH - tooltipH - edgePad));
+            return { position: 'fixed', left, top, width: tooltipW };
+        }, []);
+        const showStatusMixTooltip = React.useCallback((segment, event) => {
+            if (!segment?.label) return;
+            const pos = event ? getPointerPos(event) : { x: null, y: null };
+            setStatusMixTooltip({
+                ...segment,
+                x: pos.x,
+                y: pos.y,
+            });
+        }, []);
+        const updateStatusMixTooltipPos = React.useCallback((segment, event) => {
+            if (!event) return;
+            const pos = getPointerPos(event);
+            setStatusMixTooltip(prev => {
+                if (!prev) return prev;
+                return {
+                    ...(segment?.label ? { ...prev, ...segment } : prev),
+                    x: pos.x,
+                    y: pos.y,
+                };
+            });
+        }, []);
+        const hideStatusMixTooltip = React.useCallback(() => {
+            setStatusMixTooltip(null);
+        }, []);
+        const showPriceDistMetricTooltip = React.useCallback((item, event) => {
+            if (!item?.label) return;
+            const pos = event ? getPointerPos(event) : { x: null, y: null };
+            setPriceDistMetricTooltip({
+                title: item.label,
+                value: item.value,
+                infoText: item.infoText,
+                x: pos.x,
+                y: pos.y,
+            });
+        }, []);
+        const updatePriceDistMetricTooltipPos = React.useCallback((event) => {
+            if (!event) return;
+            const pos = getPointerPos(event);
+            setPriceDistMetricTooltip(prev => (prev ? { ...prev, x: pos.x, y: pos.y } : prev));
+        }, []);
+        const hidePriceDistMetricTooltip = React.useCallback(() => {
+            setPriceDistMetricTooltip(null);
+        }, []);
         const handlePriceDistHover = (bucket, event) => {
             if (!bucket?.stats?.n) return;
             const stats = bucket.stats;
@@ -875,13 +984,11 @@ const columns = getAnalyticsColumns();
                                 />
                             </View>
                             <StatusStrip
-                                segments={[
-                                    { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: dispatcherStatusBreakdown.open, color: '#38bdf8' },
-                                    { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: dispatcherStatusBreakdown.active, color: '#3b82f6' },
-                                    { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: dispatcherStatusBreakdown.completed, color: '#22c55e' },
-                                    { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: dispatcherStatusBreakdown.canceled, color: '#ef4444' },
-                                ]}
+                                segments={dispatcherStatusSegments}
                                 isDark={isDark}
+                                onSegmentHover={showStatusMixTooltip}
+                                onSegmentMove={updateStatusMixTooltipPos}
+                                onSegmentLeave={hideStatusMixTooltip}
                             />
 
                             <View style={styles.analyticsMetricGrid}>
@@ -1050,13 +1157,11 @@ const columns = getAnalyticsColumns();
                                 />
                             </View>
                             <StatusStrip
-                                segments={[
-                                    { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: masterStatusBreakdown.open, color: '#38bdf8' },
-                                    { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: masterStatusBreakdown.active, color: '#3b82f6' },
-                                    { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: masterStatusBreakdown.completed, color: '#22c55e' },
-                                    { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: masterStatusBreakdown.canceled, color: '#ef4444' },
-                                ]}
+                                segments={masterStatusSegments}
                                 isDark={isDark}
+                                onSegmentHover={showStatusMixTooltip}
+                                onSegmentMove={updateStatusMixTooltipPos}
+                                onSegmentLeave={hideStatusMixTooltip}
                             />
 
                             <View style={styles.analyticsMetricGrid}>
@@ -1183,13 +1288,11 @@ const columns = getAnalyticsColumns();
                                     {TRANSLATIONS.analyticsStatusMix || 'Status Mix'}
                                 </Text>
                                 <StatusStrip
-                                    segments={[
-                                        { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: analyticsStats.statusBreakdown.open, color: '#38bdf8' },
-                                        { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: analyticsStats.statusBreakdown.active, color: '#3b82f6' },
-                                        { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: analyticsStats.statusBreakdown.completed, color: '#22c55e' },
-                                        { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: analyticsStats.statusBreakdown.canceled, color: '#ef4444' },
-                                    ]}
+                                    segments={overviewStatusSegments}
                                     isDark={isDark}
+                                    onSegmentHover={showStatusMixTooltip}
+                                    onSegmentMove={updateStatusMixTooltipPos}
+                                    onSegmentLeave={hideStatusMixTooltip}
                                 />
                             </View>
                         </View>
@@ -1205,13 +1308,11 @@ const columns = getAnalyticsColumns();
                                 </Text>
                                 <StatusPie
                                     size={190}
-                                    segments={[
-                                        { label: TRANSLATIONS.analyticsOpenOrders || 'Open', value: analyticsStats.statusBreakdown.open, color: '#38bdf8' },
-                                        { label: TRANSLATIONS.analyticsActiveJobs || 'Active', value: analyticsStats.statusBreakdown.active, color: '#3b82f6' },
-                                        { label: TRANSLATIONS.analyticsCompleted || 'Completed', value: analyticsStats.statusBreakdown.completed, color: '#22c55e' },
-                                        { label: TRANSLATIONS.analyticsCanceled || 'Canceled', value: analyticsStats.statusBreakdown.canceled, color: '#ef4444' },
-                                    ]}
+                                    segments={overviewStatusSegments}
                                     isDark={isDark}
+                                    onSegmentHover={showStatusMixTooltip}
+                                    onSegmentMove={updateStatusMixTooltipPos}
+                                    onSegmentLeave={hideStatusMixTooltip}
                                 />
                             </View>
                         </View>
@@ -1469,14 +1570,20 @@ const columns = getAnalyticsColumns();
                                         </Text>
                                         <View style={styles.analyticsPriceDistStatsGrid}>
                                             {priceDistStatItems.map(item => (
-                                                <View
+                                                <TouchableOpacity
                                                     key={item.key}
                                                     style={[
                                                         styles.analyticsPriceDistStat,
                                                         item.primary && styles.analyticsPriceDistStatPrimary,
                                                         !isDark && styles.analyticsPriceDistStatLight,
                                                         item.primary && !isDark && styles.analyticsPriceDistStatPrimaryLight,
+                                                        Platform.OS === 'web' ? styles.analyticsPriceDistStatHoverable : null,
                                                     ]}
+                                                    activeOpacity={1}
+                                                    onPress={Platform.OS !== 'web' ? () => showPriceDistMetricTooltip(item) : undefined}
+                                                    onMouseEnter={Platform.OS === 'web' ? (event) => showPriceDistMetricTooltip(item, event) : undefined}
+                                                    onMouseMove={Platform.OS === 'web' ? updatePriceDistMetricTooltipPos : undefined}
+                                                    onMouseLeave={Platform.OS === 'web' ? hidePriceDistMetricTooltip : undefined}
                                                 >
                                                     <Text style={[styles.analyticsPriceDistStatLabel, !isDark && styles.textSecondary]}>
                                                         {item.label}
@@ -1489,7 +1596,7 @@ const columns = getAnalyticsColumns();
                                                     ]}>
                                                         {item.value}
                                                     </Text>
-                                                </View>
+                                                </TouchableOpacity>
                                             ))}
                                         </View>
                                     </View>
@@ -1660,26 +1767,7 @@ const columns = getAnalyticsColumns();
                         style={[
                             styles.analyticsTooltip,
                             !isDark && styles.analyticsTooltipLight,
-                            analyticsTooltip?.x != null && analyticsTooltip?.y != null
-                                ? (() => {
-                                    if (Platform.OS !== 'web') {
-                                        return { left: 16, right: 16, bottom: 16 };
-                                    }
-                                    const tooltipW = 240;
-                                    const tooltipH = 120;
-                                    const edgePad = 4;
-                                    const cursorPad = 4;
-                                    const viewportW = typeof window !== 'undefined' ? window.innerWidth : SCREEN_WIDTH;
-                                    const viewportH = typeof window !== 'undefined' ? window.innerHeight : 600;
-                                    let left = analyticsTooltip.x + cursorPad;
-                                    let top = analyticsTooltip.y + cursorPad;
-                                    const maxLeft = viewportW - tooltipW - edgePad;
-                                    const maxTop = viewportH - tooltipH - edgePad;
-                                    left = Math.max(edgePad, Math.min(left, maxLeft));
-                                    top = Math.max(edgePad, Math.min(top, maxTop));
-                                    return { position: 'fixed', left, top, width: tooltipW };
-                                })()
-                                : { right: 16, bottom: 16 },
+                            resolveFloatingTooltipStyle(analyticsTooltip?.x, analyticsTooltip?.y, 260, 130),
                             { pointerEvents: 'none' }
                         ]}
                     >
@@ -1694,26 +1782,7 @@ const columns = getAnalyticsColumns();
                         style={[
                             styles.analyticsTrendTooltip,
                             !isDark && styles.analyticsTrendTooltipLight,
-                            analyticsTrendTooltip?.x != null && analyticsTrendTooltip?.y != null
-                                ? (() => {
-                                    if (Platform.OS !== 'web') {
-                                        return { left: 16, right: 16, bottom: 16 };
-                                    }
-                                    const tooltipW = 220;
-                                    const tooltipH = 120;
-                                    const edgePad = 4;
-                                    const cursorPad = 4;
-                                    const viewportW = typeof window !== 'undefined' ? window.innerWidth : SCREEN_WIDTH;
-                                    const viewportH = typeof window !== 'undefined' ? window.innerHeight : 600;
-                                    let left = analyticsTrendTooltip.x + cursorPad;
-                                    let top = analyticsTrendTooltip.y + cursorPad;
-                                    const maxLeft = viewportW - tooltipW - edgePad;
-                                    const maxTop = viewportH - tooltipH - edgePad;
-                                    left = Math.max(edgePad, Math.min(left, maxLeft));
-                                    top = Math.max(edgePad, Math.min(top, maxTop));
-                                    return { position: 'fixed', left, top, width: tooltipW };
-                                })()
-                                : { right: 16, bottom: 16 },
+                            resolveFloatingTooltipStyle(analyticsTrendTooltip?.x, analyticsTrendTooltip?.y, 240, 130),
                             { pointerEvents: 'none' }
                         ]}
                     >
@@ -1734,26 +1803,7 @@ const columns = getAnalyticsColumns();
                         style={[
                             styles.analyticsPriceDistTooltip,
                             !isDark && styles.analyticsPriceDistTooltipLight,
-                            priceDistTooltip?.x != null && priceDistTooltip?.y != null
-                                ? (() => {
-                                    if (Platform.OS !== 'web') {
-                                        return { left: 16, right: 16, bottom: 16 };
-                                    }
-                                    const tooltipW = 240;
-                                    const tooltipH = 180;
-                                    const edgePad = 4;
-                                    const cursorPad = 4;
-                                    const viewportW = typeof window !== 'undefined' ? window.innerWidth : SCREEN_WIDTH;
-                                    const viewportH = typeof window !== 'undefined' ? window.innerHeight : 600;
-                                    let left = priceDistTooltip.x + cursorPad;
-                                    let top = priceDistTooltip.y + cursorPad;
-                                    const maxLeft = viewportW - tooltipW - edgePad;
-                                    const maxTop = viewportH - tooltipH - edgePad;
-                                    left = Math.max(edgePad, Math.min(left, maxLeft));
-                                    top = Math.max(edgePad, Math.min(top, maxTop));
-                                    return { position: 'fixed', left, top, width: tooltipW };
-                                })()
-                                : { right: 16, bottom: 16 },
+                            resolveFloatingTooltipStyle(priceDistTooltip?.x, priceDistTooltip?.y, 260, 300),
                             { pointerEvents: 'none' }
                         ]}
                     >
@@ -1785,6 +1835,49 @@ const columns = getAnalyticsColumns();
                                 {TRANSLATIONS.analyticsPriceDistributionSmallSample || 'Low sample (N<5)'}
                             </Text>
                         ) : null}
+                    </View>
+                )}
+                {statusMixTooltip && (
+                    <View
+                        style={[
+                            styles.analyticsStatusMixTooltip,
+                            !isDark && styles.analyticsStatusMixTooltipLight,
+                            resolveFloatingTooltipStyle(statusMixTooltip?.x, statusMixTooltip?.y, 220, 110),
+                            { pointerEvents: 'none' },
+                        ]}
+                    >
+                        <View style={styles.analyticsStatusMixTooltipHead}>
+                            <View style={[styles.analyticsStatusMixTooltipDot, { backgroundColor: statusMixTooltip.color || '#3b82f6' }]} />
+                            <Text style={[styles.analyticsStatusMixTooltipTitle, !isDark && styles.textDark]}>
+                                {statusMixTooltip.label}
+                            </Text>
+                        </View>
+                        <Text style={[styles.analyticsStatusMixTooltipText, !isDark && styles.textSecondary]}>
+                            {(TRANSLATIONS.analyticsCount || 'Count')}: {formatNumber(statusMixTooltip.value)}
+                        </Text>
+                        <Text style={[styles.analyticsStatusMixTooltipText, !isDark && styles.textSecondary]}>
+                            {(TRANSLATIONS.analyticsShare || 'Share')}: {formatPercent(statusMixTooltip.percent)}
+                        </Text>
+                    </View>
+                )}
+                {priceDistMetricTooltip && (
+                    <View
+                        style={[
+                            styles.analyticsPriceDistMetricTooltip,
+                            !isDark && styles.analyticsPriceDistMetricTooltipLight,
+                            resolveFloatingTooltipStyle(priceDistMetricTooltip?.x, priceDistMetricTooltip?.y, 300, 170),
+                            { pointerEvents: 'none' },
+                        ]}
+                    >
+                        <Text style={[styles.analyticsPriceDistMetricTooltipTitle, !isDark && styles.textDark]}>
+                            {priceDistMetricTooltip.title}
+                        </Text>
+                        <Text style={[styles.analyticsPriceDistMetricTooltipValue, !isDark && styles.textDark]}>
+                            {priceDistMetricTooltip.value}
+                        </Text>
+                        <Text style={[styles.analyticsPriceDistMetricTooltipText, !isDark && styles.textSecondary]}>
+                            {priceDistMetricTooltip.infoText}
+                        </Text>
                     </View>
                 )}
             </ScrollView>

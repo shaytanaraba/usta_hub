@@ -128,7 +128,15 @@ export const useMasterActions = ({
         success = true;
         showToast?.(actionSuccessMessage(fn, res.message), 'success');
         setModalState({ type: null, order: null });
-        if (res.order) {
+        const actionOrderId = args?.[0];
+        if (action === 'refuse' && actionOrderId !== undefined && actionOrderId !== null) {
+          setMyOrders((prev) => removeOrderById(prev, actionOrderId));
+          if (String(activeSheetOrder?.id || '') === String(actionOrderId)) {
+            setActiveSheetOrder(null);
+            setSheetSnap('peek');
+          }
+        }
+        if (res.order && action !== 'refuse') {
           const normalizedOrder = normalizeMasterOrder(res.order, ORDER_STATUS.CLAIMED);
           if (normalizedOrder) {
             setMyOrders((prev) => upsertOrderById(prev, normalizedOrder));
@@ -164,10 +172,12 @@ export const useMasterActions = ({
     perfNow,
     perfTargets.action,
     roundMs,
+    removeOrderById,
     safeT,
     setActiveSheetOrder,
     setModalState,
     setMyOrders,
+    setSheetSnap,
     showToast,
     timedCall,
     upsertOrderById,
@@ -291,4 +301,3 @@ export const useMasterActions = ({
     handlePoolPageChange,
   };
 };
-

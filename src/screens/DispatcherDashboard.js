@@ -693,6 +693,8 @@ export default function DispatcherDashboard({ navigation, route }) {
             getSeriesMeta={getSeriesMeta}
             formatShortDate={formatShortDate}
             SCREEN_WIDTH={SCREEN_WIDTH}
+            loading={loading}
+            skeletonPulse={skeletonPulse}
         />
     );
     const renderCreateOrder = () => (
@@ -728,6 +730,8 @@ export default function DispatcherDashboard({ navigation, route }) {
             confirmChecked={confirmChecked}
             setConfirmChecked={setConfirmChecked}
             handleCreateOrder={handleCreateOrder}
+            loading={loading}
+            skeletonPulse={skeletonPulse}
         />
     );
 
@@ -740,6 +744,8 @@ export default function DispatcherDashboard({ navigation, route }) {
             user={user}
             setLanguage={setLanguage}
             setIsDark={setIsDark}
+            loading={loading}
+            skeletonPulse={skeletonPulse}
         />
     );
     const renderDetailsDrawer = () => {
@@ -747,9 +753,21 @@ export default function DispatcherDashboard({ navigation, route }) {
         // NOTE: handleSaveEdit is defined earlier in the component (around line 1146)
         // with proper fee handling, area, orientir, etc.
         const calloutValue = detailsOrder.callout_fee;
+        const hasFinalPrice = detailsOrder.final_price !== null
+            && detailsOrder.final_price !== undefined
+            && detailsOrder.final_price !== '';
+        const mainPriceValue = hasFinalPrice ? detailsOrder.final_price : detailsOrder.initial_price;
+        const formatPriceValue = (value, fallback = '-') => {
+            if (value === null || value === undefined || value === '') return fallback;
+            const numeric = Number(value);
+            if (Number.isFinite(numeric)) return `${value}c`;
+            return String(value);
+        };
         const screenWidth = Dimensions.get('window').width;
         const drawerWidth = screenWidth <= 480 ? screenWidth : (screenWidth > 500 ? 400 : screenWidth * 0.85);
         const fullWidthDrawer = drawerWidth >= screenWidth;
+        const canAssignMaster = ['placed', 'reopened'].includes(detailsOrder.status);
+        const canCancelOrder = ['placed', 'reopened', 'expired', 'canceled_by_master'].includes(detailsOrder.status);
 
         const drawerBody = (
             <View style={styles.drawerOverlay}>
@@ -761,14 +779,10 @@ export default function DispatcherDashboard({ navigation, route }) {
                                 <Text style={styles.drawerDate}>{new Date(detailsOrder.created_at).toLocaleString()}</Text>
                             </View>
                             <View style={styles.drawerActions}>
-                                {/* Edit Button */}
-                                <TouchableOpacity
-                                    style={[styles.editBtn, isEditing && styles.editBtnActive]}
-                                    onPress={() => {
-                                        if (isEditing) {
-                                            // If canceling edit
-                                            setIsEditing(false);
-                                        } else {
+                                {!isEditing && (
+                                    <TouchableOpacity
+                                        style={styles.editBtn}
+                                        onPress={() => {
                                             // Start editing - explicitly copy all editable fields
                                             setEditForm({
                                                 ...detailsOrder,
@@ -783,16 +797,17 @@ export default function DispatcherDashboard({ navigation, route }) {
                                                 dispatcher_note: detailsOrder.dispatcher_note || '',
                                             });
                                             setIsEditing(true);
-                                        }
-                                    }}>
-                                    <Text style={[styles.editBtnText, isEditing && styles.editBtnTextActive]}>
-                                        {isEditing ? TRANSLATIONS[language].btnCancelEdit : TRANSLATIONS[language].btnEdit}
-                                    </Text>
-                                </TouchableOpacity>
+                                        }}>
+                                        <Text style={styles.editBtnText}>{TRANSLATIONS[language].btnEdit}</Text>
+                                    </TouchableOpacity>
+                                )}
 
-                                {/* Close Drawer Button (X) - Always visible and distinct */}
-                                <TouchableOpacity onPress={() => { setDetailsOrder(null); setIsEditing(false); }} style={{ padding: 8, marginLeft: 8 }}>
-                                    <Text style={[styles.drawerActionText, !isDark && styles.textDark, { fontSize: 24 }]}>X</Text>
+                                {/* Close Drawer Button */}
+                                <TouchableOpacity
+                                    onPress={() => { setDetailsOrder(null); setIsEditing(false); }}
+                                    style={[styles.drawerCloseBtn, !isDark && styles.drawerCloseBtnLight]}
+                                >
+                                    <Text style={[styles.drawerCloseText, !isDark && styles.drawerCloseTextLight]}>X</Text>
                                 </TouchableOpacity>
                             </View>
                         </View>
@@ -803,11 +818,6 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     <View style={[styles.drawerStatusBadge, { backgroundColor: STATUS_COLORS[detailsOrder.status] }]}>
                                         <Text style={styles.drawerStatusText}>{getOrderStatusLabel(detailsOrder.status, t)}</Text>
                                     </View>
-                                    {['placed', 'reopened'].includes(detailsOrder.status) && (
-                                        <TouchableOpacity style={styles.drawerBtn} onPress={() => openAssignModal(detailsOrder)}>
-                                            <Text style={styles.drawerBtnText}>{TRANSLATIONS[language].actionClaim}</Text>
-                                        </TouchableOpacity>
-                                    )}
                                     {detailsOrder.status === 'completed' && (
                                         <TouchableOpacity style={[styles.drawerBtn, { backgroundColor: '#22c55e' }]} onPress={() => {
                                             setPaymentOrder(detailsOrder); // Store order for payment modal
@@ -912,7 +922,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     {detailsOrder?.master && (
                                         <View style={styles.editActionRow}>
                                             <TouchableOpacity style={[styles.editActionBtn, styles.editActionPrimary]} onPress={() => openAssignModal(detailsOrder)}>
-                                                <Text style={styles.editActionText}>{TRANSLATIONS[language].actionAssign || 'Assign'}</Text>
+                                                <Text style={styles.editActionText}>{TRANSLATIONS[language].actionAssignMaster || TRANSLATIONS[language].actionAssign || 'Assign Master'}</Text>
                                             </TouchableOpacity>
                                             <TouchableOpacity style={[styles.editActionBtn, styles.editActionDanger]} onPress={handleRemoveMaster}>
                                                 <Text style={styles.editActionText}>{TRANSLATIONS[language].actionUnassign || 'Remove Master'}</Text>
@@ -921,12 +931,20 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     )}
 
 
-                                    <TouchableOpacity
-                                        style={[styles.saveEditBtn, actionLoading && styles.pointerEventsNone]}
-                                        onPress={actionLoading ? undefined : handleSaveEdit}
-                                    >
-                                        {actionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveEditText}>{TRANSLATIONS[language].btnSaveChanges}</Text>}
-                                    </TouchableOpacity>
+                                    <View style={styles.editFooterRow}>
+                                        <TouchableOpacity
+                                            style={[styles.editCancelBtn, actionLoading && styles.pointerEventsNone]}
+                                            onPress={actionLoading ? undefined : () => setIsEditing(false)}
+                                        >
+                                            <Text style={styles.editCancelText}>{TRANSLATIONS[language].btnCancelEdit}</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.saveEditBtn, actionLoading && styles.pointerEventsNone]}
+                                            onPress={actionLoading ? undefined : handleSaveEdit}
+                                        >
+                                            {actionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveEditText}>{TRANSLATIONS[language].btnSaveChanges}</Text>}
+                                        </TouchableOpacity>
+                                    </View>
                                 </View>
                             ) : (
                                 <View style={styles.drawerSections}>
@@ -987,13 +1005,13 @@ export default function DispatcherDashboard({ navigation, route }) {
                                         <View style={styles.finRow}>
                                             <Text style={styles.finLabel}>{TRANSLATIONS[language].labelCallout}</Text>
                                             <Text style={[styles.finValue, !isDark && styles.textDark]}>
-                                                {calloutValue ?? '-'}{calloutValue !== null && calloutValue !== undefined ? 'c' : ''}
+                                                {formatPriceValue(calloutValue)}
                                             </Text>
                                         </View>
                                         <View style={styles.finRow}>
-                                            <Text style={styles.finLabel}>{detailsOrder.final_price ? TRANSLATIONS[language].labelFinal : TRANSLATIONS[language].labelInitial}</Text>
-                                            <Text style={[styles.finValue, !isDark && styles.textDark, detailsOrder.final_price && { color: '#22c55e' }]}>
-                                                {detailsOrder.final_price || detailsOrder.initial_price || TRANSLATIONS[language].priceOpen}c
+                                            <Text style={styles.finLabel}>{hasFinalPrice ? TRANSLATIONS[language].labelFinal : TRANSLATIONS[language].labelInitial}</Text>
+                                            <Text style={[styles.finValue, !isDark && styles.textDark, hasFinalPrice && { color: '#22c55e' }]}>
+                                                {formatPriceValue(mainPriceValue, TRANSLATIONS[language].priceOpen)}
                                             </Text>
                                         </View>
                                     </View>
@@ -1010,10 +1028,21 @@ export default function DispatcherDashboard({ navigation, route }) {
                                             <Text style={styles.reopenText}>? {TRANSLATIONS[language].actionReopen}</Text>
                                         </TouchableOpacity>
                                     )}
-                                    {['placed', 'reopened', 'expired', 'canceled_by_master'].includes(detailsOrder.status) && (
-                                        <TouchableOpacity style={styles.cancelBtn} onPress={() => { handleCancel(detailsOrder.id); setDetailsOrder(null); }}>
-                                            <Text style={styles.cancelText}>{TRANSLATIONS[language].alertCancelTitle}</Text>
-                                        </TouchableOpacity>
+                                    {(canAssignMaster || canCancelOrder) && (
+                                        <View style={styles.drawerBottomActionsRow}>
+                                            {canAssignMaster && (
+                                                <TouchableOpacity style={[styles.drawerBottomActionBtn, styles.drawerBottomActionPrimary]} onPress={() => openAssignModal(detailsOrder)}>
+                                                    <Text style={styles.drawerBottomActionText}>
+                                                        {TRANSLATIONS[language].actionAssignMaster || TRANSLATIONS[language].forceAssignMaster || TRANSLATIONS[language].actionAssign || 'Assign Master'}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            )}
+                                            {canCancelOrder && (
+                                                <TouchableOpacity style={[styles.drawerBottomActionBtn, styles.drawerBottomActionDanger]} onPress={() => { handleCancel(detailsOrder.id); setDetailsOrder(null); }}>
+                                                    <Text style={styles.drawerBottomActionText}>{TRANSLATIONS[language].alertCancelTitle}</Text>
+                                                </TouchableOpacity>
+                                            )}
+                                        </View>
                                     )}
                                 </View>
                             )}
@@ -1113,8 +1142,8 @@ export default function DispatcherDashboard({ navigation, route }) {
                 <View style={styles.masterDetailsCard}>
                     <View style={styles.masterDetailsHeader}>
                         <Text style={styles.modalTitle}>{TRANSLATIONS[language].titleMasterDetails || 'Master Details'}</Text>
-                        <TouchableOpacity onPress={closeMasterDetails}>
-                            <Text style={styles.modalCancelText}>X</Text>
+                        <TouchableOpacity onPress={closeMasterDetails} style={styles.masterDetailsCloseBtn}>
+                            <Text style={styles.masterDetailsCloseText}>X</Text>
                         </TouchableOpacity>
                     </View>
                     {masterDetailsLoading ? (
@@ -1148,14 +1177,6 @@ export default function DispatcherDashboard({ navigation, route }) {
     // ============================================
     // MAIN RENDER
     // ============================================
-
-    if (loading && activeTab !== 'queue') {
-        return (
-            <LinearGradient colors={['#0f172a', '#1e293b']} style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color="#3b82f6" />
-            </LinearGradient>
-        );
-    }
 
     return (
         <LinearGradient colors={isDark ? ['#0f172a', '#1e293b'] : ['#f1f5f9', '#e2e8f0']} style={styles.container}>

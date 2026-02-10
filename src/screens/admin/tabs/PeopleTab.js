@@ -18,7 +18,7 @@ export default function AdminPeopleTab(props) {
 
     return (
         <View style={{ flex: 1, paddingHorizontal: 16 }}>
-            {renderHeader(TRANSLATIONS.tabPeople || 'People Management')}
+            {renderHeader(TRANSLATIONS.tabTeam || TRANSLATIONS.team || 'Team')}
 
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
                 <View style={{ flexDirection: 'row', backgroundColor: isDark ? '#0f172a' : '#e2e8f0', padding: 4, borderRadius: 100, borderWidth: 1, borderColor: isDark ? '#334155' : '#cbd5e1' }}>

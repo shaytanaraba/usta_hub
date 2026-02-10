@@ -14,18 +14,20 @@ const Header = ({ styles, user, financials, onLogout, onLanguageToggle, onThemeT
         <View style={[styles.header, { paddingTop: headerTopPadding }]}>
             <View style={styles.headerLeft}>
                 {user ? (
-                    <>
-                        {/* User name and balance mini badge */}
-                        <Text style={[styles.userName, { color: theme.textPrimary }]} numberOfLines={1}>{user.full_name || 'Master'}</Text>
+                    <View style={styles.headerIdentity}>
+                        <Text style={[styles.userName, { color: theme.textPrimary }]}>{user.full_name || 'Master'}</Text>
                         {financials && (
                             <View style={[styles.balanceMini, { backgroundColor: financials.balanceBlocked ? `${theme.accentDanger}15` : `${theme.accentIndigo}15` }]}>
                                 <Wallet size={12} color={financials.balanceBlocked ? theme.accentDanger : theme.accentIndigo} />
-                                <Text style={{ color: financials.balanceBlocked ? theme.accentDanger : theme.accentIndigo, fontSize: 11, fontWeight: '600' }}>
+                                <Text
+                                    style={{ color: financials.balanceBlocked ? theme.accentDanger : theme.accentIndigo, fontSize: 11, fontWeight: '600' }}
+                                    numberOfLines={1}
+                                >
                                     {financials.prepaidBalance?.toFixed(0) || 0}
                                 </Text>
                             </View>
                         )}
-                    </>
+                    </View>
                 ) : <View style={[styles.skeletonName, { backgroundColor: theme.borderSecondary }]} />}
             </View>
             <View style={styles.headerRight}>

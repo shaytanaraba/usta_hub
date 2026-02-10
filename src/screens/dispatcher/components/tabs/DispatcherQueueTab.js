@@ -369,29 +369,51 @@ export default function DispatcherQueueTab({
 
   const totalPages = Math.max(1, Math.ceil((queueTotalCount || 0) / pageSize));
   if (loading && !refreshing) {
-    const skeletonCount = viewMode === 'cards' ? 6 : 8;
+    const isCardsView = viewMode === 'cards';
+    const skeletonCount = isCardsView ? 6 : 8;
     return (
       <View style={styles.queueContainer}>
         {renderNeedsAttention()}
         {renderFilters()}
-        <View style={styles.listContent}>
+        <View style={[styles.listContent, isCardsView && styles.skeletonGrid]}>
           {Array.from({ length: skeletonCount }).map((_, index) => (
-            <Animated.View
-              key={`skeleton-${index}`}
-              style={[
-                styles.skeletonCard,
-                !isDark && styles.skeletonCardLight,
-                { opacity: skeletonPulse },
-              ]}
-            >
-              <View style={styles.skeletonHeaderRow}>
-                <View style={styles.skeletonLineWide} />
-                <View style={styles.skeletonLineShort} />
-              </View>
-              <View style={styles.skeletonLineMid} />
-              <View style={styles.skeletonLineFull} />
-              <View style={styles.skeletonAction} />
-            </Animated.View>
+            isCardsView ? (
+              <Animated.View
+                key={`skeleton-card-${index}`}
+                style={[
+                  styles.skeletonCard,
+                  styles.skeletonCardGrid,
+                  !isDark && styles.skeletonCardLight,
+                  { opacity: skeletonPulse },
+                ]}
+              >
+                <View style={styles.skeletonHeaderRow}>
+                  <View style={styles.skeletonLineWide} />
+                  <View style={styles.skeletonLineShort} />
+                </View>
+                <View style={styles.skeletonLineMid} />
+                <View style={styles.skeletonLineFull} />
+                <View style={styles.skeletonAction} />
+              </Animated.View>
+            ) : (
+              <Animated.View
+                key={`skeleton-row-${index}`}
+                style={[
+                  styles.skeletonCard,
+                  styles.skeletonCompactRow,
+                  !isDark && styles.skeletonCardLight,
+                  { opacity: skeletonPulse },
+                ]}
+              >
+                <View style={styles.skeletonCompactStatus} />
+                <View style={styles.skeletonCompactMain}>
+                  <View style={styles.skeletonCompactLinePrimary} />
+                  <View style={styles.skeletonCompactLineSecondary} />
+                  <View style={styles.skeletonCompactLineTertiary} />
+                </View>
+                <View style={styles.skeletonCompactMeta} />
+              </Animated.View>
+            )
           ))}
         </View>
       </View>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, Platform, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Modal, Platform, Text, TouchableOpacity, View } from 'react-native';
 
 export default function DispatcherStatsTab({
   styles,
@@ -32,6 +32,8 @@ export default function DispatcherStatsTab({
   getSeriesMeta,
   formatShortDate,
   SCREEN_WIDTH,
+  loading,
+  skeletonPulse,
 }) {
   const TRANSLATIONS = translations;
   const createdMeta = getSeriesMeta(createdSeries);
@@ -157,6 +159,63 @@ export default function DispatcherStatsTab({
       </View>
     </View>
   );
+
+  if (loading) {
+    return (
+      <View style={styles.statsContainer}>
+        <Animated.View
+          style={[
+            styles.skeletonCard,
+            !isDark && styles.skeletonCardLight,
+            { opacity: skeletonPulse },
+          ]}
+        >
+          <View style={styles.skeletonHeaderRow}>
+            <View style={styles.skeletonLineWide} />
+            <View style={styles.skeletonLineShort} />
+          </View>
+          <View style={styles.skeletonLineMid} />
+          <View style={styles.skeletonLineFull} />
+        </Animated.View>
+
+        <View style={styles.statsCards}>
+          {Array.from({ length: 6 }).map((_, index) => (
+            <Animated.View
+              key={`stats-skeleton-card-${index}`}
+              style={[
+                styles.statsCard,
+                !isDark && styles.cardLight,
+                { opacity: skeletonPulse },
+              ]}
+            >
+              <View style={styles.skeletonLineMid} />
+              <View style={[styles.skeletonLineWide, { marginTop: 10 }]} />
+              <View style={[styles.skeletonLineShort, { marginTop: 8 }]} />
+            </Animated.View>
+          ))}
+        </View>
+
+        {Array.from({ length: 2 }).map((_, index) => (
+          <Animated.View
+            key={`stats-skeleton-chart-${index}`}
+            style={[
+              styles.skeletonCard,
+              !isDark && styles.skeletonCardLight,
+              { opacity: skeletonPulse },
+            ]}
+          >
+            <View style={styles.skeletonHeaderRow}>
+              <View style={styles.skeletonLineWide} />
+              <View style={styles.skeletonLineShort} />
+            </View>
+            <View style={[styles.skeletonLineFull, { marginBottom: 8 }]} />
+            <View style={[styles.skeletonLineFull, { marginBottom: 8 }]} />
+            <View style={styles.skeletonLineFull} />
+          </Animated.View>
+        ))}
+      </View>
+    );
+  }
 
   return (
     <View style={styles.statsContainer}>

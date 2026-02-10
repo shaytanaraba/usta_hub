@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Platform,
   ScrollView,
   Text,
@@ -42,9 +43,48 @@ export default function DispatcherCreateOrderTab({
   confirmChecked,
   setConfirmChecked,
   handleCreateOrder,
+  loading,
+  skeletonPulse,
 }) {
   const TRANSLATIONS = translations;
   const publishDisabled = !confirmChecked || actionLoading;
+
+  const renderLoading = () => (
+    <View style={styles.createWrapper}>
+      <ScrollView
+        style={styles.createContainer}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.createScrollContent}
+      >
+        {Array.from({ length: 4 }).map((_, index) => (
+          <Animated.View
+            key={`create-skeleton-${index}`}
+            style={[
+              styles.skeletonCard,
+              !isDark && styles.skeletonCardLight,
+              { opacity: skeletonPulse },
+            ]}
+          >
+            <View style={styles.skeletonHeaderRow}>
+              <View style={styles.skeletonLineWide} />
+              <View style={styles.skeletonLineShort} />
+            </View>
+            <View style={styles.skeletonLineMid} />
+            <View style={styles.skeletonLineFull} />
+            <View style={styles.skeletonAction} />
+          </Animated.View>
+        ))}
+      </ScrollView>
+      <View style={[styles.fixedBottomBar, !isDark && styles.fixedBottomBarLight]}>
+        <Animated.View
+          style={[
+            styles.skeletonAction,
+            { opacity: skeletonPulse, marginTop: 0 },
+          ]}
+        />
+      </View>
+    </View>
+  );
 
   const renderSuccess = () => (
     <View style={styles.successContainer}>
@@ -376,6 +416,8 @@ export default function DispatcherCreateOrderTab({
       <View style={{ height: 120 }} />
     </View>
   );
+
+  if (loading && !creationSuccess) return renderLoading();
 
   return (
     <View style={styles.createWrapper}>

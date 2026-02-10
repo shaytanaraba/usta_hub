@@ -153,11 +153,26 @@ const AnalyticsListCard = ({ title, items, emptyLabel, onPress, isDark, actionLa
 
 const getPointerPos = (event) => {
     const native = event?.nativeEvent || {};
-    let x = native.clientX;
-    let y = native.clientY;
+    let x = Number.isFinite(native.clientX) ? native.clientX : null;
+    let y = Number.isFinite(native.clientY) ? native.clientY : null;
+    if ((x == null || y == null) && typeof window !== 'undefined' && Number.isFinite(native.pageX) && Number.isFinite(native.pageY)) {
+        x = native.pageX - (window.scrollX || 0);
+        y = native.pageY - (window.scrollY || 0);
+    }
     if ((x == null || y == null) && typeof window !== 'undefined') {
-        if (native.pageX != null) x = native.pageX - window.scrollX;
-        if (native.pageY != null) y = native.pageY - window.scrollY;
+        const target = event?.currentTarget || event?.target;
+        const rect = target?.getBoundingClientRect?.();
+        const localX = Number.isFinite(native.locationX) ? native.locationX : (Number.isFinite(native.offsetX) ? native.offsetX : null);
+        const localY = Number.isFinite(native.locationY) ? native.locationY : (Number.isFinite(native.offsetY) ? native.offsetY : null);
+        if (rect) {
+            if (localX != null && localY != null) {
+                x = rect.left + localX;
+                y = rect.top + localY;
+            } else {
+                x = rect.left + (rect.width / 2);
+                y = rect.top + (rect.height / 2);
+            }
+        }
     }
     if (x == null) x = native.locationX ?? 0;
     if (y == null) y = native.locationY ?? 0;
@@ -234,27 +249,52 @@ const MiniBars = ({ data = [], isDark, height = 34, barWidth = 8 }) => {
     );
 };
 
-const StatusLegend = ({ segments, total, hasData, isDark }) => (
+const StatusLegend = ({
+    segments,
+    total,
+    hasData,
+    isDark,
+    onItemHover,
+    onItemMove,
+    onItemLeave,
+}) => (
     <View style={styles.analyticsStatusLegend}>
-        {segments.map((seg) => (
-            <View key={`${seg.label}-legend`} style={styles.analyticsStatusLegendItem}>
-                <View style={[styles.analyticsStatusDot, { backgroundColor: seg.color, opacity: hasData ? 1 : 0.5 }]} />
-                <Text
-                    style={[styles.analyticsStatusLegendText, { color: isDark ? '#cbd5e1' : '#0f172a' }]}
-                    numberOfLines={2}
+        {segments.map((seg) => {
+            const payload = {
+                label: seg.label,
+                value: seg.value,
+                total,
+                percent: hasData ? seg.value / total : 0,
+                color: seg.color,
+            };
+            return (
+                <TouchableOpacity
+                    key={`${seg.label}-legend`}
+                    style={styles.analyticsStatusLegendItem}
+                    activeOpacity={0.85}
+                    onPress={Platform.OS !== 'web' ? () => onItemHover?.(payload) : undefined}
+                    onMouseEnter={Platform.OS === 'web' ? (event) => onItemHover?.(payload, event) : undefined}
+                    onMouseMove={Platform.OS === 'web' ? (event) => onItemMove?.(payload, event) : undefined}
+                    onMouseLeave={Platform.OS === 'web' ? onItemLeave : undefined}
                 >
-                    {seg.label}
-                </Text>
-                <View style={styles.analyticsStatusLegendMeta}>
-                    <Text style={[styles.analyticsStatusLegendCount, { color: isDark ? '#e2e8f0' : '#0f172a' }]}>
-                        {formatNumber(seg.value)}
+                    <View style={[styles.analyticsStatusDot, { backgroundColor: seg.color, opacity: hasData ? 1 : 0.5 }]} />
+                    <Text
+                        style={[styles.analyticsStatusLegendText, { color: isDark ? '#cbd5e1' : '#0f172a' }]}
+                        numberOfLines={2}
+                    >
+                        {seg.label}
                     </Text>
-                    <Text style={[styles.analyticsStatusLegendValue, { color: isDark ? '#94a3b8' : '#64748b' }]}>
-                        {hasData ? Math.round((seg.value / total) * 100) : 0}%
-                    </Text>
-                </View>
-            </View>
-        ))}
+                    <View style={styles.analyticsStatusLegendMeta}>
+                        <Text style={[styles.analyticsStatusLegendCount, { color: isDark ? '#e2e8f0' : '#0f172a' }]}>
+                            {formatNumber(seg.value)}
+                        </Text>
+                        <Text style={[styles.analyticsStatusLegendValue, { color: isDark ? '#94a3b8' : '#64748b' }]}>
+                            {hasData ? Math.round((seg.value / total) * 100) : 0}%
+                        </Text>
+                    </View>
+                </TouchableOpacity>
+            );
+        })}
     </View>
 );
 
@@ -278,7 +318,14 @@ const describeArc = (x, y, radius, startAngle, endAngle) => {
     ].join(' ');
 };
 
-const StatusPie = ({ segments = [], isDark, size = 140 }) => {
+const StatusPie = ({
+    segments = [],
+    isDark,
+    size = 140,
+    onSegmentHover,
+    onSegmentMove,
+    onSegmentLeave,
+}) => {
     const safeSegments = segments.map(seg => ({
         ...seg,
         value: Number.isFinite(seg.value) ? Math.max(0, seg.value) : 0,
@@ -298,19 +345,50 @@ const StatusPie = ({ segments = [], isDark, size = 140 }) => {
                         const angle = (seg.value / total) * 360;
                         const path = describeArc(radius, radius, radius, currentAngle, currentAngle + angle);
                         currentAngle += angle;
-                        return <Path key={seg.label} d={path} fill={seg.color} />;
+                        const payload = {
+                            label: seg.label,
+                            value: seg.value,
+                            total,
+                            percent: seg.value / total,
+                            color: seg.color,
+                        };
+                        return (
+                            <Path
+                                key={seg.label}
+                                d={path}
+                                fill={seg.color}
+                                onPress={Platform.OS !== 'web' ? () => onSegmentHover?.(payload) : undefined}
+                                onMouseEnter={Platform.OS === 'web' ? (event) => onSegmentHover?.(payload, event) : undefined}
+                                onMouseMove={Platform.OS === 'web' ? (event) => onSegmentMove?.(payload, event) : undefined}
+                                onMouseLeave={Platform.OS === 'web' ? onSegmentLeave : undefined}
+                            />
+                        );
                     }) : (
                         <Circle cx={radius} cy={radius} r={radius} fill={isDark ? 'rgba(148,163,184,0.2)' : '#e2e8f0'} />
                     )}
                     <Circle cx={radius} cy={radius} r={innerRadius} fill={isDark ? '#1e293b' : '#f8fafc'} />
                 </G>
             </Svg>
-            <StatusLegend segments={safeSegments} total={total || 1} hasData={hasData} isDark={isDark} />
+            <StatusLegend
+                segments={safeSegments}
+                total={total || 1}
+                hasData={hasData}
+                isDark={isDark}
+                onItemHover={onSegmentHover}
+                onItemMove={onSegmentMove}
+                onItemLeave={onSegmentLeave}
+            />
         </View>
     );
 };
 
-const StatusStrip = ({ segments = [], isDark }) => {
+const StatusStrip = ({
+    segments = [],
+    isDark,
+    onSegmentHover,
+    onSegmentMove,
+    onSegmentLeave,
+}) => {
     const safeSegments = segments.map(seg => ({
         ...seg,
         value: Number.isFinite(seg.value) ? Math.max(0, seg.value) : 0,
@@ -321,20 +399,41 @@ const StatusStrip = ({ segments = [], isDark }) => {
         <View>
             <View style={[styles.analyticsStatusStrip, !hasData && styles.analyticsStatusStripEmpty]}>
                 {hasData ? (
-                    safeSegments.map((seg) => (
-                        <View
+                    safeSegments.map((seg) => {
+                        const payload = {
+                            label: seg.label,
+                            value: seg.value,
+                            total,
+                            percent: seg.value / total,
+                            color: seg.color,
+                        };
+                        return (
+                        <TouchableOpacity
                             key={seg.label}
                             style={[
                                 styles.analyticsStatusSegment,
                                 { flex: seg.value, backgroundColor: seg.color },
                             ]}
+                            activeOpacity={1}
+                            onPress={Platform.OS !== 'web' ? () => onSegmentHover?.(payload) : undefined}
+                            onMouseEnter={Platform.OS === 'web' ? (event) => onSegmentHover?.(payload, event) : undefined}
+                            onMouseMove={Platform.OS === 'web' ? (event) => onSegmentMove?.(payload, event) : undefined}
+                            onMouseLeave={Platform.OS === 'web' ? onSegmentLeave : undefined}
                         />
-                    ))
+                    )})
                 ) : (
                     <View style={styles.analyticsStatusStripEmptyFill} />
                 )}
             </View>
-            <StatusLegend segments={safeSegments} total={total || 1} hasData={hasData} isDark={isDark} />
+            <StatusLegend
+                segments={safeSegments}
+                total={total || 1}
+                hasData={hasData}
+                isDark={isDark}
+                onItemHover={onSegmentHover}
+                onItemMove={onSegmentMove}
+                onItemLeave={onSegmentLeave}
+            />
         </View>
     );
 };

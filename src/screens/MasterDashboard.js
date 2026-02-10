@@ -568,7 +568,11 @@ const DashboardContent = ({ navigation }) => {
     useEffect(() => {
         if (!activeSheetOrder) return;
         const updated = myOrders.find(o => o.id === activeSheetOrder.id);
-        if (!updated) return;
+        if (!updated) {
+            setActiveSheetOrder(null);
+            setSheetSnap('peek');
+            return;
+        }
         if (updated.status !== activeSheetOrder.status) {
             if (TERMINAL_ORDER_STATUSES.includes(updated.status)) {
                 setActiveSheetOrder(null);
