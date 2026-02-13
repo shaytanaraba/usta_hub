@@ -220,7 +220,7 @@ const ADMIN_REALTIME_DEBOUNCE_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_REALT
 const ADMIN_REALTIME_MIN_INTERVAL_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_REALTIME_MIN_INTERVAL_MS, 2500);
 const ADMIN_CREATE_CONFIRM_RETRIES = parsePositiveInt(process?.env?.EXPO_PUBLIC_ADMIN_CREATE_CONFIRM_RETRIES, 4);
 const ADMIN_CREATE_CONFIRM_DELAY_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_CREATE_CONFIRM_DELAY_MS, 850);
-const ONLINE_RECENCY_MINUTES = parsePositiveInt(process?.env?.EXPO_PUBLIC_ONLINE_RECENCY_MINUTES, 15);
+const ONLINE_RECENCY_MINUTES = parsePositiveInt(process?.env?.EXPO_PUBLIC_ONLINE_RECENCY_MINUTES, 3);
 const ONLINE_RECENCY_MS = ONLINE_RECENCY_MINUTES * 60 * 1000;
 const ADMIN_DIAG_ENABLED = process?.env?.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS === '1';
 const DEFAULT_PAYMENT_CONFIRMATION_DATA = {
@@ -5163,7 +5163,6 @@ export default function AdminDashboard({ navigation }) {
                 const presenceCandidates = [
                     person.last_active_at,
                     person.last_seen_at,
-                    person.updated_at,
                     person.last_login_at,
                 ];
                 const latestPresenceTs = presenceCandidates.reduce((latest, value) => {
@@ -5172,7 +5171,16 @@ export default function AdminDashboard({ navigation }) {
                     if (!Number.isFinite(ts) || ts <= 0) return latest;
                     return ts > latest ? ts : latest;
                 }, 0);
-                isOnline = latestPresenceTs > 0 && (presenceNowTick - latestPresenceTs) <= ONLINE_RECENCY_MS;
+                if (latestPresenceTs > 0) {
+                    isOnline = (presenceNowTick - latestPresenceTs) <= ONLINE_RECENCY_MS;
+                } else {
+                    // Last-resort fallback for legacy payloads with no dedicated presence fields.
+                    const updatedTs = person.updated_at ? new Date(person.updated_at).getTime() : 0;
+                    const updatedFallbackWindowMs = Math.min(ONLINE_RECENCY_MS, 60 * 1000);
+                    isOnline = Number.isFinite(updatedTs)
+                        && updatedTs > 0
+                        && (presenceNowTick - updatedTs) <= updatedFallbackWindowMs;
+                }
             }
         }
 

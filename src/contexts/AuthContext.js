@@ -778,13 +778,35 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      const runResume = () => {
+        void handleAppResume();
+      };
       const handleVisibility = () => {
         if (document.visibilityState === 'visible') {
-          handleAppResume();
+          runResume();
         }
       };
+      const handlePageShow = () => runResume();
+      const handleWindowFocus = () => runResume();
+      const handleOnline = () => runResume();
+
       document.addEventListener('visibilitychange', handleVisibility);
-      return () => document.removeEventListener('visibilitychange', handleVisibility);
+      if (typeof window !== 'undefined') {
+        window.addEventListener('pageshow', handlePageShow);
+        window.addEventListener('focus', handleWindowFocus);
+        window.addEventListener('online', handleOnline);
+      }
+      if (document.visibilityState === 'visible') {
+        runResume();
+      }
+      return () => {
+        document.removeEventListener('visibilitychange', handleVisibility);
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('pageshow', handlePageShow);
+          window.removeEventListener('focus', handleWindowFocus);
+          window.removeEventListener('online', handleOnline);
+        }
+      };
     }
 
     const subscription = AppState.addEventListener('change', (state) => {

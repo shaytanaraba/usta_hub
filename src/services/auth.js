@@ -60,6 +60,7 @@ const PROFILE_SELECT_FIELDS = [
 
 const PROFILE_SELECT_FIELDS_LEGACY = PROFILE_SELECT_BASE_FIELDS.join(', ');
 const EMAIL_FORMAT_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PROFILE_LIST_PRESENCE_FIELDS = ['last_active_at', 'last_seen_at', 'is_online'];
 
 const MASTER_LIST_FIELDS = [
   'id',
@@ -77,7 +78,8 @@ const MASTER_LIST_FIELDS = [
   'completed_jobs_count',
   'created_at',
   'updated_at',
-  'last_login_at'
+  'last_login_at',
+  ...PROFILE_LIST_PRESENCE_FIELDS,
 ].join(', ');
 
 const DISPATCHER_LIST_FIELDS = [
@@ -90,7 +92,8 @@ const DISPATCHER_LIST_FIELDS = [
   'is_verified',
   'created_at',
   'updated_at',
-  'last_login_at'
+  'last_login_at',
+  ...PROFILE_LIST_PRESENCE_FIELDS,
 ].join(', ');
 
 const PARTNER_LIST_FIELDS = [
@@ -107,8 +110,27 @@ const PARTNER_LIST_FIELDS = [
   'partner_company_id',
   'created_at',
   'updated_at',
-  'last_login_at'
+  'last_login_at',
+  ...PROFILE_LIST_PRESENCE_FIELDS,
 ].join(', ');
+
+const isMissingOptionalPresenceColumnError = (error) => {
+  const code = String(error?.code || '');
+  if (code !== '42703') return false;
+  const text = `${String(error?.message || '')} ${String(error?.details || '')} ${String(error?.hint || '')}`.toLowerCase();
+  return PROFILE_LIST_PRESENCE_FIELDS.some((field) => (
+    text.includes(`profiles.${field}`) || text.includes(field)
+  ));
+};
+
+const stripOptionalPresenceFields = (selectFields = '') => (
+  selectFields
+    .split(',')
+    .map((field) => String(field || '').trim())
+    .filter(Boolean)
+    .filter((field) => !PROFILE_LIST_PRESENCE_FIELDS.includes(field))
+    .join(', ')
+);
 
 const isLegacyProfileSchemaError = (error) => {
   const code = String(error?.code || '');
@@ -248,28 +270,38 @@ class AuthService {
   async runProfileListQuery(role, selectFields, options = {}) {
     const opts = this.normalizeProfileListOptions(options);
     debug(`${LOG_PREFIX} Fetching ${role} list...`);
-    let query = supabase
-      .from('profiles')
-      .select(selectFields)
-      .eq('role', role);
+    const runWithSelect = async (fields) => {
+      let query = supabase
+        .from('profiles')
+        .select(fields)
+        .eq('role', role);
 
-    if (opts.search) {
-      const orFilter = buildPeopleSearchOrFilter(opts.search);
-      if (orFilter) {
-        query = query.or(orFilter);
+      if (opts.search) {
+        const orFilter = buildPeopleSearchOrFilter(opts.search);
+        if (orFilter) {
+          query = query.or(orFilter);
+        }
+        query = query.order('full_name', { ascending: true });
+      } else {
+        query = query.order('created_at', { ascending: false });
       }
-      query = query.order('full_name', { ascending: true });
-    } else {
-      query = query.order('created_at', { ascending: false });
-    }
 
-    if (opts.page !== null && opts.pageSize !== null) {
-      const start = opts.page * opts.pageSize;
-      const end = start + opts.pageSize - 1;
-      query = query.range(start, end);
-    }
+      if (opts.page !== null && opts.pageSize !== null) {
+        const start = opts.page * opts.pageSize;
+        const end = start + opts.pageSize - 1;
+        query = query.range(start, end);
+      }
+      return query;
+    };
 
-    const { data, error } = await query;
+    let { data, error } = await runWithSelect(selectFields);
+    if (error && isMissingOptionalPresenceColumnError(error)) {
+      const fallbackFields = stripOptionalPresenceFields(selectFields);
+      if (fallbackFields && fallbackFields !== selectFields) {
+        authDiag('profile_list_presence_fallback_legacy_schema', { role });
+        ({ data, error } = await runWithSelect(fallbackFields));
+      }
+    }
     if (error) throw error;
     return data || [];
   }
