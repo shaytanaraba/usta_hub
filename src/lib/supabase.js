@@ -18,13 +18,18 @@ const authDiag = (...args) => {
 };
 // Load from environment variables
 // In Expo, use EXPO_PUBLIC_ prefix for variables accessible in the app
-export const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://dpwdyvahtkvwvfpmhkhx.supabase.co';
-export const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRwd2R5dmFodGt2d3ZmcG1oa2h4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzY1NjEyMDQsImV4cCI6MjA1MjEzNzIwNH0.dNpvPQxCFzXhFqX-msHG2IIpSxRvRTOjTCAbTTe21J4';
-
-// Warn if using fallback values (development only)
-if (!process.env.EXPO_PUBLIC_SUPABASE_URL) {
-        debugWarn('[Supabase] EXPO_PUBLIC_SUPABASE_URL not found in environment, using fallback');
+const ENV_SUPABASE_URL = String(process.env.EXPO_PUBLIC_SUPABASE_URL || '').trim();
+const ENV_SUPABASE_ANON_KEY = String(process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '').trim();
+const missingSupabaseEnv = [];
+if (!ENV_SUPABASE_URL) missingSupabaseEnv.push('EXPO_PUBLIC_SUPABASE_URL');
+if (!ENV_SUPABASE_ANON_KEY) missingSupabaseEnv.push('EXPO_PUBLIC_SUPABASE_ANON_KEY');
+if (missingSupabaseEnv.length) {
+    const missingMessage = `[Supabase] Missing required environment variable(s): ${missingSupabaseEnv.join(', ')}`;
+    console.error(missingMessage);
+    throw new Error(missingMessage);
 }
+export const SUPABASE_URL = ENV_SUPABASE_URL;
+export const SUPABASE_ANON_KEY = ENV_SUPABASE_ANON_KEY;
 
 // Detect if running on web more reliably
 const isWeb = Platform.OS === 'web'

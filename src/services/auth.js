@@ -41,6 +41,7 @@ const PROFILE_SELECT_BASE_FIELDS = [
   'initial_deposit',
   'completed_jobs_count',
   'created_at',
+  'updated_at',
   'last_login_at'
 ];
 
@@ -75,6 +76,7 @@ const MASTER_LIST_FIELDS = [
   'initial_deposit',
   'completed_jobs_count',
   'created_at',
+  'updated_at',
   'last_login_at'
 ].join(', ');
 
@@ -87,6 +89,7 @@ const DISPATCHER_LIST_FIELDS = [
   'is_active',
   'is_verified',
   'created_at',
+  'updated_at',
   'last_login_at'
 ].join(', ');
 
@@ -103,6 +106,7 @@ const PARTNER_LIST_FIELDS = [
   'partner_min_payout',
   'partner_company_id',
   'created_at',
+  'updated_at',
   'last_login_at'
 ].join(', ');
 
@@ -444,6 +448,7 @@ class AuthService {
 
       debug(`${LOG_PREFIX} Login successful. Role: ${profile.role}`);
       await this.enforceSessionPolicyOnLogin();
+      this.invalidateProfileListCache();
 
       return {
         success: true,
@@ -532,6 +537,7 @@ class AuthService {
    */
   async logoutUser(options = {}) {
     debug(`${LOG_PREFIX} Logging out...`);
+    this.invalidateProfileListCache();
 
     try {
       const scope = this.resolveSignOutScope(options);
@@ -549,6 +555,7 @@ class AuthService {
           console.error(`${LOG_PREFIX} Logout local fallback error:`, localError);
         }
       }
+      this.invalidateProfileListCache();
       return { success: false, message: error.message };
     }
   }

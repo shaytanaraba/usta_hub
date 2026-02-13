@@ -220,6 +220,8 @@ const ADMIN_REALTIME_DEBOUNCE_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_REALT
 const ADMIN_REALTIME_MIN_INTERVAL_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_REALTIME_MIN_INTERVAL_MS, 2500);
 const ADMIN_CREATE_CONFIRM_RETRIES = parsePositiveInt(process?.env?.EXPO_PUBLIC_ADMIN_CREATE_CONFIRM_RETRIES, 4);
 const ADMIN_CREATE_CONFIRM_DELAY_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_CREATE_CONFIRM_DELAY_MS, 850);
+const ONLINE_RECENCY_MINUTES = parsePositiveInt(process?.env?.EXPO_PUBLIC_ONLINE_RECENCY_MINUTES, 15);
+const ONLINE_RECENCY_MS = ONLINE_RECENCY_MINUTES * 60 * 1000;
 const ADMIN_DIAG_ENABLED = process?.env?.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS === '1';
 const DEFAULT_PAYMENT_CONFIRMATION_DATA = {
     finalAmount: '',
@@ -293,6 +295,7 @@ export default function AdminDashboard({ navigation }) {
     const [analyticsTrendTooltip, setAnalyticsTrendTooltip] = useState(null);
     const analyticsTrendTooltipTimer = useRef(null);
     const [analyticsNowTick, setAnalyticsNowTick] = useState(Date.now());
+    const [presenceNowTick, setPresenceNowTick] = useState(Date.now());
     const authSyncUserIdRef = useRef(null);
     const [priceDistRange, setPriceDistRange] = useState('30d');
     const [priceDistGrouping, setPriceDistGrouping] = useState('week');
@@ -2304,6 +2307,18 @@ export default function AdminDashboard({ navigation }) {
         if (activeTab !== 'analytics') return undefined;
         const interval = setInterval(() => {
             setAnalyticsNowTick(Date.now());
+        }, 60000);
+        return () => clearInterval(interval);
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (activeTab !== 'people') return undefined;
+        const interval = setInterval(() => {
+            setPresenceNowTick(Date.now());
+            const ensureLatest = ensureTabDataLatestRef.current;
+            if (typeof ensureLatest === 'function') {
+                void ensureLatest('people', { force: false, reason: 'presence_poll' });
+            }
         }, 60000);
         return () => clearInterval(interval);
     }, [activeTab]);
@@ -5120,6 +5135,62 @@ export default function AdminDashboard({ navigation }) {
         return date.toLocaleString();
     }, [TRANSLATIONS.noData]);
 
+    const getPresenceMeta = useCallback((person) => {
+        const offlineLabel = TRANSLATIONS.offline || 'Offline';
+        const onlineLabel = TRANSLATIONS.online || 'Online';
+        if (!person) {
+            return {
+                isOnline: false,
+                label: offlineLabel,
+                dotColor: '#ef4444',
+                chipBg: 'rgba(239,68,68,0.14)',
+                chipBorder: 'rgba(239,68,68,0.35)',
+                lightChipBg: '#fee2e2',
+                lightChipBorder: '#fca5a5',
+            };
+        }
+
+        let isOnline = false;
+        if (typeof person.is_online === 'boolean') {
+            isOnline = person.is_online;
+        } else {
+            const rawFlag = String(person?.is_online || '').trim().toLowerCase();
+            if (rawFlag === 'true' || rawFlag === '1') {
+                isOnline = true;
+            } else if (rawFlag === 'false' || rawFlag === '0') {
+                isOnline = false;
+            } else {
+                const presenceCandidates = [
+                    person.last_active_at,
+                    person.last_seen_at,
+                    person.updated_at,
+                    person.last_login_at,
+                ];
+                const latestPresenceTs = presenceCandidates.reduce((latest, value) => {
+                    if (!value) return latest;
+                    const ts = new Date(value).getTime();
+                    if (!Number.isFinite(ts) || ts <= 0) return latest;
+                    return ts > latest ? ts : latest;
+                }, 0);
+                isOnline = latestPresenceTs > 0 && (presenceNowTick - latestPresenceTs) <= ONLINE_RECENCY_MS;
+            }
+        }
+
+        if (String(person?.id || '') && String(person?.id || '') === String(authUser?.id || '')) {
+            isOnline = true;
+        }
+
+        return {
+            isOnline,
+            label: isOnline ? onlineLabel : offlineLabel,
+            dotColor: isOnline ? '#f59e0b' : '#ef4444',
+            chipBg: isOnline ? 'rgba(245,158,11,0.14)' : 'rgba(239,68,68,0.14)',
+            chipBorder: isOnline ? 'rgba(245,158,11,0.35)' : 'rgba(239,68,68,0.35)',
+            lightChipBg: isOnline ? '#fef3c7' : '#fee2e2',
+            lightChipBorder: isOnline ? '#fcd34d' : '#fca5a5',
+        };
+    }, [TRANSLATIONS.offline, TRANSLATIONS.online, presenceNowTick, authUser?.id]);
+
     const buildPersonCurrentActivity = useCallback((personType, personId) => {
         if (!personType || !personId) return null;
         const targetId = String(personId);
@@ -5184,6 +5255,11 @@ export default function AdminDashboard({ navigation }) {
             ? buildPersonCurrentActivity('partner', detailsPerson.id)
             : null
     ), [detailsPerson?.id, detailsPerson?.type, buildPersonCurrentActivity]);
+
+    const detailsPersonPresence = useMemo(
+        () => getPresenceMeta(detailsPerson),
+        [detailsPerson, getPresenceMeta]
+    );
 
     const partnerPendingRequestsCount = useMemo(() => (
         (partnerPayoutRequests || []).filter((item) => String(item?.status || '').toLowerCase() === 'requested').length
@@ -6121,7 +6197,9 @@ export default function AdminDashboard({ navigation }) {
                     keyExtractor={item => String(item.id)}
                     contentContainerStyle={{ gap: 8, paddingBottom: 20 }}
                     ListEmptyComponent={<Text style={{ color: '#64748b', textAlign: 'center', marginTop: 20 }}>{TRANSLATIONS.noMastersFound || 'No masters found'}</Text>}
-                    renderItem={({ item }) => (
+                    renderItem={({ item }) => {
+                        const presence = getPresenceMeta(item);
+                        return (
                         <View style={[styles.listItemCard, !isDark && styles.listItemCardLight]}>
                             <View style={styles.peopleRow}>
                                 <TouchableOpacity
@@ -6151,6 +6229,26 @@ export default function AdminDashboard({ navigation }) {
                                                 <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
                                                     {(item.is_verified ? (TRANSLATIONS.verified || 'Verified') : (TRANSLATIONS.unverified || 'Unverified')).toUpperCase()}
                                                 </Text>
+                                            </View>
+                                            <View style={[
+                                                styles.peopleMetaChip,
+                                                {
+                                                    backgroundColor: presence.chipBg,
+                                                    borderColor: presence.chipBorder,
+                                                    paddingVertical: 2,
+                                                    paddingHorizontal: 7,
+                                                },
+                                                !isDark && {
+                                                    backgroundColor: presence.lightChipBg,
+                                                    borderColor: presence.lightChipBorder,
+                                                },
+                                            ]}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                                    <View style={[styles.statusDot, { backgroundColor: presence.dotColor }]} />
+                                                    <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
+                                                        {String(presence.label || '').toUpperCase()}
+                                                    </Text>
+                                                </View>
                                             </View>
                                         </View>
                                     </View>
@@ -6184,7 +6282,7 @@ export default function AdminDashboard({ navigation }) {
                                     </View>
                             </View>
                         </View>
-                    )}
+                    )}}
                 />
             </View>
         );
@@ -6216,7 +6314,9 @@ export default function AdminDashboard({ navigation }) {
                     keyExtractor={item => String(item.id)}
                     contentContainerStyle={{ gap: 8, paddingBottom: 20 }}
                     ListEmptyComponent={<Text style={{ color: '#64748b', textAlign: 'center', marginTop: 20 }}>{TRANSLATIONS.noDispatchersFound || 'No dispatchers found'}</Text>}
-                    renderItem={({ item }) => (
+                    renderItem={({ item }) => {
+                        const presence = getPresenceMeta(item);
+                        return (
                         <View style={[styles.listItemCard, !isDark && styles.listItemCardLight]}>
                             <View style={styles.peopleRow}>
                                 <TouchableOpacity
@@ -6247,6 +6347,26 @@ export default function AdminDashboard({ navigation }) {
                                                     {(item.is_verified ? (TRANSLATIONS.verified || 'Verified') : (TRANSLATIONS.unverified || 'Unverified')).toUpperCase()}
                                                 </Text>
                                             </View>
+                                            <View style={[
+                                                styles.peopleMetaChip,
+                                                {
+                                                    backgroundColor: presence.chipBg,
+                                                    borderColor: presence.chipBorder,
+                                                    paddingVertical: 2,
+                                                    paddingHorizontal: 7,
+                                                },
+                                                !isDark && {
+                                                    backgroundColor: presence.lightChipBg,
+                                                    borderColor: presence.lightChipBorder,
+                                                },
+                                            ]}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                                    <View style={[styles.statusDot, { backgroundColor: presence.dotColor }]} />
+                                                    <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
+                                                        {String(presence.label || '').toUpperCase()}
+                                                    </Text>
+                                                </View>
+                                            </View>
                                         </View>
                                     </View>
                                 </TouchableOpacity>
@@ -6262,7 +6382,7 @@ export default function AdminDashboard({ navigation }) {
                                 </View>
                             </View>
                         </View>
-                    )}
+                    )}}
                 />
             </View>
         );
@@ -6296,6 +6416,7 @@ export default function AdminDashboard({ navigation }) {
                     renderItem={({ item }) => {
                         const commissionPercent = Number(item.partner_commission_rate || 0) * 100;
                         const balanceValue = Number(item.partner_balance || 0);
+                        const presence = getPresenceMeta(item);
                         return (
                             <View style={[styles.listItemCard, !isDark && styles.listItemCardLight]}>
                                 <View style={styles.peopleRow}>
@@ -6326,6 +6447,26 @@ export default function AdminDashboard({ navigation }) {
                                                 <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
                                                     {(item.is_verified ? (TRANSLATIONS.verified || 'Verified') : (TRANSLATIONS.unverified || 'Unverified')).toUpperCase()}
                                                 </Text>
+                                            </View>
+                                            <View style={[
+                                                styles.peopleMetaChip,
+                                                {
+                                                    backgroundColor: presence.chipBg,
+                                                    borderColor: presence.chipBorder,
+                                                    paddingVertical: 2,
+                                                    paddingHorizontal: 7,
+                                                },
+                                                !isDark && {
+                                                    backgroundColor: presence.lightChipBg,
+                                                    borderColor: presence.lightChipBorder,
+                                                },
+                                            ]}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                                    <View style={[styles.statusDot, { backgroundColor: presence.dotColor }]} />
+                                                    <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
+                                                        {String(presence.label || '').toUpperCase()}
+                                                    </Text>
+                                                </View>
                                             </View>
                                             <View style={[styles.peopleMetaChip, !isDark && styles.peopleMetaChipLight]}>
                                                 <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
@@ -8230,10 +8371,35 @@ export default function AdminDashboard({ navigation }) {
                                 </View>
                                 <View>
                                     <Text style={[styles.pageTitle, !isDark && styles.textDark]}>{detailsPerson?.full_name}</Text>
-                                    <View style={[styles.statusBadge, { backgroundColor: detailsPerson?.is_verified ? '#22c55e' : '#ef4444', alignSelf: 'flex-start', marginTop: 4, paddingVertical: 3, paddingHorizontal: 7 }]}>
-                                        <Text style={[styles.statusText, { fontSize: 9 }]}>
-                                            {detailsPerson?.is_verified ? (TRANSLATIONS.verified || 'VERIFIED') : (TRANSLATIONS.unverified || 'UNVERIFIED')}
-                                        </Text>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                                        <View style={[styles.statusBadge, { backgroundColor: detailsPerson?.is_verified ? '#22c55e' : '#ef4444', alignSelf: 'flex-start', paddingVertical: 3, paddingHorizontal: 7 }]}>
+                                            <Text style={[styles.statusText, { fontSize: 9 }]}>
+                                                {detailsPerson?.is_verified ? (TRANSLATIONS.verified || 'VERIFIED') : (TRANSLATIONS.unverified || 'UNVERIFIED')}
+                                            </Text>
+                                        </View>
+                                        <View
+                                            style={[
+                                                styles.peopleMetaChip,
+                                                {
+                                                    alignSelf: 'flex-start',
+                                                    paddingVertical: 3,
+                                                    paddingHorizontal: 7,
+                                                    backgroundColor: detailsPersonPresence.chipBg,
+                                                    borderColor: detailsPersonPresence.chipBorder,
+                                                },
+                                                !isDark && {
+                                                    backgroundColor: detailsPersonPresence.lightChipBg,
+                                                    borderColor: detailsPersonPresence.lightChipBorder,
+                                                },
+                                            ]}
+                                        >
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                                <View style={[styles.statusDot, { backgroundColor: detailsPersonPresence.dotColor }]} />
+                                                <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
+                                                    {String(detailsPersonPresence.label || '').toUpperCase()}
+                                                </Text>
+                                            </View>
+                                        </View>
                                     </View>
                                 </View>
                             </View>

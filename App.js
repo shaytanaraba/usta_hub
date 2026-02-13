@@ -25,6 +25,7 @@ const Stack = createNativeStackNavigator();
 const LOADING_TIMEOUT_MS = 10000;
 const PROFILE_RESOLUTION_RETRY_INTERVAL_MS = 3000;
 const PROFILE_RESOLUTION_MAX_RETRIES = 4;
+const PROFILE_RECOVERY_RESET_TIMEOUT_MS = 9000;
 const APP_AUTH_DIAG_ENABLED = process?.env?.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS === '1';
 const appAuthDiag = (...args) => {
   if (APP_AUTH_DIAG_ENABLED) {
@@ -69,15 +70,16 @@ function AppNavigator() {
   const { user, session, loading, refreshSession, resetAppData } = useAuth();
   const { navRef, onStateChange, resetHistory } = useNavHistory();
   const [loadingTimeout, setLoadingTimeout] = useState(false);
+  const [profileBootstrapFailed, setProfileBootstrapFailed] = useState(false);
   const profileRetryCountRef = useRef(0);
   const profileRefreshInFlightRef = useRef(false);
   const profileResetTriggeredRef = useRef(false);
-  const waitingForProfile = !loading && !!session?.user && !user;
+  const waitingForProfile = !loading && !!session?.user && !user && !profileBootstrapFailed;
   const isBootstrapping = loading || waitingForProfile;
 
   const syncRoute = () => {
     if (!navRef.isReady()) return;
-    if (session?.user && !user) return;
+    if (session?.user && !user && !profileBootstrapFailed) return;
     const target = user?.role === 'master'
       ? 'MasterDashboard'
       : user?.role === 'dispatcher'
@@ -104,7 +106,13 @@ function AppNavigator() {
 
   useEffect(() => {
     syncRoute();
-  }, [session, user]);
+  }, [profileBootstrapFailed, session, user]);
+
+  useEffect(() => {
+    if (!loading && (!session?.user || !!user)) {
+      setProfileBootstrapFailed(false);
+    }
+  }, [loading, session?.user, user]);
 
   useEffect(() => {
     if (!isBootstrapping) {
@@ -130,13 +138,20 @@ function AppNavigator() {
     const forceResetAfterRetries = async (reason, error = null) => {
       if (canceled || profileResetTriggeredRef.current) return;
       profileResetTriggeredRef.current = true;
+      setProfileBootstrapFailed(true);
       console.error('[AppNavigator] Profile resolution exceeded retry cap, resetting auth state', {
         reason,
         attempts: profileRetryCountRef.current,
         error: error?.message || null,
       });
       try {
-        await resetAppData();
+        const resetResult = await Promise.race([
+          resetAppData().then(() => 'ok'),
+          new Promise((resolve) => setTimeout(() => resolve('__reset_timeout__'), PROFILE_RECOVERY_RESET_TIMEOUT_MS)),
+        ]);
+        if (resetResult === '__reset_timeout__') {
+          console.warn('[AppNavigator] resetAppData timed out; continuing with login fallback');
+        }
       } catch (resetError) {
         console.error('[AppNavigator] resetAppData failed after profile retry cap', resetError);
       }
@@ -176,6 +191,7 @@ function AppNavigator() {
   }, [refreshSession, resetAppData, waitingForProfile]);
 
   const handleRetry = async () => {
+    setProfileBootstrapFailed(false);
     profileRetryCountRef.current = 0;
     profileResetTriggeredRef.current = false;
     setLoadingTimeout(false);
@@ -183,6 +199,7 @@ function AppNavigator() {
   };
 
   const handleReset = async () => {
+    setProfileBootstrapFailed(false);
     await resetAppData();
   };
 

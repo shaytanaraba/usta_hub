@@ -92,6 +92,24 @@ const isTimeoutError = (error) => {
     || message.includes('the operation was aborted')
     || message.includes('aborterror');
 };
+const isMissingColumnError = (error, columnName) => {
+  const code = String(error?.code || '');
+  const message = String(error?.message || '').toLowerCase();
+  const details = String(error?.details || '').toLowerCase();
+  const hint = String(error?.hint || '').toLowerCase();
+  const column = String(columnName || '').toLowerCase();
+  const hasColumn = column && (message.includes(column) || details.includes(column) || hint.includes(column));
+  return code === '42703'
+    || (hasColumn && message.includes('does not exist'))
+    || (hasColumn && message.includes('column'));
+};
+const isRlsDeniedError = (error) => {
+  const code = String(error?.code || '');
+  const message = String(error?.message || '').toLowerCase();
+  return code === '42501'
+    || message.includes('row-level security')
+    || message.includes('permission denied');
+};
 const toAuthIssueKey = (error) => {
   const message = error?.message?.toLowerCase?.() || '';
   if (isAuthInvalidError(error)) return 'session_expired';
@@ -108,13 +126,18 @@ const clearSupabaseWebStorage = async () => {
   if (!isWeb) return;
   try {
     const storages = getWebStorageCandidates();
+    const memoryAuthKeys = Array.from(memoryStorage.keys())
+      .filter((key) => key && key.startsWith('sb-') && key.endsWith('-auth-token'));
+    memoryAuthKeys.forEach((key) => memoryStorage.delete(key));
     storages.forEach((storage) => {
+      const keysToRemove = [];
       for (let i = 0; i < storage.length; i += 1) {
         const key = storage.key(i);
         if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
-          storage.removeItem(key);
+          keysToRemove.push(key);
         }
       }
+      keysToRemove.forEach((key) => storage.removeItem(key));
     });
   } catch (error) {
     console.warn('[Auth] Failed to clear Supabase web storage', error);
@@ -186,7 +209,9 @@ export function AuthProvider({ children }) {
   const refreshTimeoutHitsRef = useRef({ promise: null, hits: 0 });
   const lastActivityRef = useRef(Date.now());
   const lastInteractionRefreshRef = useRef(0);
+  const presenceWriteModeRef = useRef('last_active_at');
   const lastAuthIssueToastRef = useRef({ key: '', at: 0 });
+  const authStateQueueRef = useRef(Promise.resolve());
 
   useEffect(() => {
     latestUserRef.current = user;
@@ -243,6 +268,11 @@ export function AuthProvider({ children }) {
     } catch (error) {
       console.warn('[Auth] Failed clearing last activity key', error);
     }
+    try {
+      authService.invalidateProfileListCache?.();
+    } catch (error) {
+      console.warn('[Auth] Failed invalidating auth cache', error);
+    }
     await clearSupabaseWebStorage();
     await clearSupabaseNativeStorage();
   }, []);
@@ -279,6 +309,15 @@ export function AuthProvider({ children }) {
       );
     }
   }, [showToast, t]);
+
+  const enqueueAuthStateWork = useCallback((work) => {
+    authStateQueueRef.current = authStateQueueRef.current
+      .then(() => work())
+      .catch((error) => {
+        console.error('[Auth] auth state handler failed', error);
+      });
+    return authStateQueueRef.current;
+  }, []);
 
   const refreshSession = useCallback(async (options = {}) => {
     const minIntervalMs = Number.isInteger(options.minIntervalMs) ? options.minIntervalMs : 0;
@@ -587,11 +626,49 @@ export function AuthProvider({ children }) {
     lastInteractionRefreshRef.current = now;
     try {
       await activityStorage.setItem(LAST_ACTIVE_KEY, String(now));
+      const activeUserId = user?.id ? String(user.id) : '';
+      if (activeUserId && presenceWriteModeRef.current !== 'disabled') {
+        const isoNow = new Date(now).toISOString();
+        let targetField = presenceWriteModeRef.current === 'updated_at'
+          ? 'updated_at'
+          : 'last_active_at';
+        let payload = targetField === 'updated_at'
+          ? { updated_at: isoNow }
+          : { last_active_at: isoNow };
+
+        let { error: profileWriteError } = await supabase
+          .from('profiles')
+          .update(payload)
+          .eq('id', activeUserId);
+
+        if (profileWriteError && targetField === 'last_active_at' && isMissingColumnError(profileWriteError, 'last_active_at')) {
+          presenceWriteModeRef.current = 'updated_at';
+          targetField = 'updated_at';
+          payload = { updated_at: isoNow };
+          ({ error: profileWriteError } = await supabase
+            .from('profiles')
+            .update(payload)
+            .eq('id', activeUserId));
+        }
+
+        if (profileWriteError) {
+          if (isRlsDeniedError(profileWriteError)) {
+            presenceWriteModeRef.current = 'disabled';
+          }
+          authDiag('presence_write_failed', {
+            field: targetField,
+            code: profileWriteError?.code || null,
+            message: profileWriteError?.message || null,
+          });
+        } else {
+          authDiag('presence_written', { field: targetField, force, at: now });
+        }
+      }
       authDiag('activity_written', { force, at: now });
     } catch (error) {
       console.warn('[Auth] recordActivity failed', error);
     }
-  }, []);
+  }, [user?.id]);
 
   const checkInactivity = useCallback(async () => {
     try {
@@ -654,46 +731,50 @@ export function AuthProvider({ children }) {
 
     initialize();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, nextSession) => {
-      authDiag('auth_state_change', { event, hasSession: !!nextSession?.user });
-      setSession(nextSession || null);
-      if (event === 'SIGNED_OUT') {
-        refreshVersionRef.current += 1;
-        refreshInFlight.current = null;
-        refreshTimeoutHitsRef.current = { promise: null, hits: 0 };
-        lastProfileSyncAtRef.current = 0;
-        profileMissStreakRef.current = 0;
-        setUser(null);
-        await clearPersistedSessionArtifacts();
-        return;
-      }
-      if (!nextSession?.user) return;
-
-      if (event === 'TOKEN_REFRESHED') {
-        await recordActivity({ force: false });
-        // Avoid profile fetch churn on every token refresh; bootstrap path still resolves profile if needed.
-        if (!latestUserRef.current?.id) {
-          await refreshSession({ retries: 0, retryDelayMs: 300, minIntervalMs: 0, forceProfile: true });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      const safeSession = nextSession || null;
+      authDiag('auth_state_change', { event, hasSession: !!safeSession?.user });
+      setSession(safeSession);
+      void enqueueAuthStateWork(async () => {
+        if (!mounted) return;
+        if (event === 'SIGNED_OUT') {
+          refreshVersionRef.current += 1;
+          refreshInFlight.current = null;
+          refreshTimeoutHitsRef.current = { promise: null, hits: 0 };
+          lastProfileSyncAtRef.current = 0;
+          profileMissStreakRef.current = 0;
+          setUser(null);
+          await clearPersistedSessionArtifacts();
+          return;
         }
-        return;
-      }
+        if (!safeSession?.user) return;
 
-      if (event === 'SIGNED_IN'
-        && latestUserRef.current?.id
-        && String(latestUserRef.current.id) === String(nextSession.user.id)) {
-        await recordActivity({ force: false });
-        return;
-      }
+        if (event === 'TOKEN_REFRESHED') {
+          await recordActivity({ force: false });
+          // Avoid profile fetch churn on every token refresh; bootstrap path still resolves profile if needed.
+          if (!latestUserRef.current?.id) {
+            await refreshSession({ retries: 0, retryDelayMs: 300, minIntervalMs: 0, forceProfile: true });
+          }
+          return;
+        }
 
-      await recordActivity({ force: true });
-      await refreshSession({ retries: 0, retryDelayMs: 300, minIntervalMs: REFRESH_MIN_INTERVAL_MS });
+        if (event === 'SIGNED_IN'
+          && latestUserRef.current?.id
+          && String(latestUserRef.current.id) === String(safeSession.user.id)) {
+          await recordActivity({ force: false });
+          return;
+        }
+
+        await recordActivity({ force: true });
+        await refreshSession({ retries: 0, retryDelayMs: 300, minIntervalMs: REFRESH_MIN_INTERVAL_MS });
+      });
     });
 
     return () => {
       mounted = false;
       subscription?.unsubscribe();
     };
-  }, [checkInactivity, clearPersistedSessionArtifacts, notifyAuthIssue, recordActivity, refreshSession]);
+  }, [checkInactivity, clearPersistedSessionArtifacts, enqueueAuthStateWork, notifyAuthIssue, recordActivity, refreshSession]);
 
   useEffect(() => {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
@@ -742,12 +823,13 @@ export function AuthProvider({ children }) {
       if (Platform.OS === 'web' && typeof document !== 'undefined' && document.visibilityState !== 'visible') {
         return;
       }
+      void recordActivity({ force: false });
       refreshSession({ retries: 1, retryDelayMs: 300, minIntervalMs: REFRESH_MIN_INTERVAL_MS });
     };
 
     const interval = setInterval(heartbeat, SESSION_HEARTBEAT_MS);
     return () => clearInterval(interval);
-  }, [refreshSession, user?.id]);
+  }, [recordActivity, refreshSession, user?.id]);
 
   const value = useMemo(() => ({
     user,
