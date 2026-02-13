@@ -86,6 +86,8 @@ BEGIN
     LEFT JOIN public.profiles d ON d.id = o.dispatcher_id
     LEFT JOIN public.profiles ad ON ad.id = o.assigned_dispatcher_id
     WHERE
+      COALESCE(o.is_disputed, FALSE) = FALSE
+      AND
       (p_dispatcher = 'all'
         OR (p_dispatcher = 'unassigned' AND o.dispatcher_id IS NULL AND o.assigned_dispatcher_id IS NULL)
         OR (p_dispatcher NOT IN ('all', 'unassigned')
@@ -115,8 +117,7 @@ BEGIN
     SELECT *
     FROM scoped s
     WHERE
-      COALESCE(s.is_disputed, FALSE) = TRUE
-      OR s.status = 'completed'
+      s.status = 'completed'
       OR s.status = 'canceled_by_master'
       OR (s.status = 'placed' AND NOW() - s.created_at > INTERVAL '15 minutes')
       OR (s.status = 'claimed' AND NOW() - COALESCE(s.updated_at, s.created_at) > INTERVAL '30 minutes')
@@ -191,4 +192,3 @@ GRANT EXECUTE ON FUNCTION public.get_admin_orders_page TO authenticated;
 -- ============================================================================
 -- END PATCH
 -- ============================================================================
-

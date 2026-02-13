@@ -48,6 +48,7 @@ const POOL_RPC_NAME = 'get_available_orders_pool';
 const DISPATCHER_QUEUE_RPC_NAME = 'get_dispatcher_orders_page';
 const DISPATCHER_STATS_RPC_NAME = 'get_dispatcher_stats_summary';
 const ADMIN_QUEUE_RPC_NAME = 'get_admin_orders_page';
+const AVAILABLE_MASTERS_SEARCH_RPC_NAME = 'search_available_masters';
 const normalizePoolFilters = (filters = {}) => ({
   urgency: filters?.urgency && filters.urgency !== '' ? filters.urgency : 'all',
   service: filters?.service && filters.service !== '' ? filters.service : 'all',
@@ -101,7 +102,8 @@ const countDispatcherScopeOrders = async (dispatcherId, options = {}) => {
     let query = supabase
       .from('orders')
       .select('id', { head: true, count: 'exact' })
-      .or(`assigned_dispatcher_id.eq.${dispatcherId},dispatcher_id.eq.${dispatcherId}`);
+      .or(`assigned_dispatcher_id.eq.${dispatcherId},dispatcher_id.eq.${dispatcherId}`)
+      .eq('is_disputed', false);
 
     if (opts.status && opts.status !== 'all') {
       query = query.in('status', mapDispatcherQueueStatusToStatuses(opts.status));
@@ -148,6 +150,44 @@ const normalizeAdminQueueOptions = (options = {}) => ({
   sort: options.sort === 'oldest' ? 'oldest' : 'newest',
 });
 
+const normalizeAvailableMastersOptions = (options = {}) => ({
+  search: String(options.search || options.query || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+  limit: Number.isInteger(options.limit) && options.limit > 0 ? options.limit : null,
+  offset: Number.isInteger(options.offset) && options.offset >= 0 ? options.offset : 0,
+  force: options.force === true,
+});
+
+const getAvailableMasterSearchScore = (master, needleLower, needleDigits) => {
+  const fullName = String(master?.full_name || master?.name || '').toLowerCase();
+  const phone = String(master?.phone || '');
+  const phoneDigits = phone.replace(/\D/g, '');
+  const serviceArea = String(master?.service_area || '').toLowerCase();
+  const haystack = `${fullName} ${phone.toLowerCase()} ${serviceArea}`.trim();
+
+  if (needleLower && fullName.startsWith(needleLower)) return 0;
+  if (needleDigits && phoneDigits.startsWith(needleDigits)) return 1;
+  if (needleLower && haystack.includes(needleLower)) return 2;
+  if (needleDigits && phoneDigits.includes(needleDigits)) return 3;
+  return 99;
+};
+
+const filterAvailableMastersLocally = (masters = [], searchText = '') => {
+  const needle = String(searchText || '').trim().toLowerCase();
+  const needleDigits = needle.replace(/\D/g, '');
+  if (!needle && !needleDigits) return Array.isArray(masters) ? masters : [];
+
+  return (Array.isArray(masters) ? masters : [])
+    .map((master) => ({ master, score: getAvailableMasterSearchScore(master, needle, needleDigits) }))
+    .filter((entry) => entry.score < 99)
+    .sort((a, b) => {
+      if (a.score !== b.score) return a.score - b.score;
+      const aName = String(a.master?.full_name || a.master?.name || '');
+      const bName = String(b.master?.full_name || b.master?.name || '');
+      return aName.localeCompare(bName);
+    })
+    .map((entry) => entry.master);
+};
+
 const mapAdminQueueStatusToStatuses = (status) => {
   switch (String(status || 'Active')) {
     case 'Payment':
@@ -162,9 +202,13 @@ const mapAdminQueueStatusToStatuses = (status) => {
   }
 };
 
+const isQueueDisputedOrder = (order) => order?.is_disputed === true;
+
+const filterOutDisputedOrders = (orders = []) => (orders || []).filter((order) => !isQueueDisputedOrder(order));
+
 const computeAdminStatusCounts = (orders = []) => {
   const counts = { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 };
-  for (const order of orders) {
+  for (const order of filterOutDisputedOrders(orders)) {
     const status = String(order?.status || '');
     if (ACTIVE_ADMIN_STATUSES.includes(status)) counts.Active += 1;
     else if (status === ORDER_STATUS.COMPLETED) counts.Payment += 1;
@@ -176,10 +220,9 @@ const computeAdminStatusCounts = (orders = []) => {
 
 const computeAdminNeedsAttention = (orders = []) => {
   const now = Date.now();
-  return (orders || [])
+  return filterOutDisputedOrders(orders)
     .filter((o) => {
       const status = String(o?.status || '');
-      if (o?.is_disputed) return true;
       if (status === ORDER_STATUS.COMPLETED) return true;
       if (status === ORDER_STATUS.CANCELED_BY_CLIENT) return false;
       if (status === ORDER_STATUS.CANCELED_BY_MASTER) return true;
@@ -239,7 +282,7 @@ const matchesDispatcherSearch = (order, searchText = '') => {
 const filterDispatcherOrdersLocally = (orders = [], options = {}) => {
   const opts = normalizeDispatcherQueueOptions(options);
   const statusFilter = mapDispatcherQueueStatusToStatuses(opts.status);
-  let filtered = (orders || []).filter((order) => statusFilter.includes(order?.status));
+  let filtered = filterOutDisputedOrders(orders).filter((order) => statusFilter.includes(order?.status));
 
   if (opts.urgency !== 'all') {
     filtered = filtered.filter((o) => o?.urgency === opts.urgency);
@@ -260,7 +303,7 @@ const filterDispatcherOrdersLocally = (orders = [], options = {}) => {
 
 const computeDispatcherStatusCounts = (orders = []) => {
   const counts = { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 };
-  for (const order of orders) {
+  for (const order of filterOutDisputedOrders(orders)) {
     const status = String(order?.status || '');
     if (ACTIVE_DISPATCHER_STATUSES.includes(status)) {
       counts.Active += 1;
@@ -277,10 +320,9 @@ const computeDispatcherStatusCounts = (orders = []) => {
 
 const computeDispatcherNeedsAttention = (orders = []) => {
   const now = Date.now();
-  return (orders || [])
+  return filterOutDisputedOrders(orders)
     .filter((order) => {
       const status = order?.status;
-      if (order?.is_disputed) return true;
       if (status === ORDER_STATUS.COMPLETED) return true;
       if (status === ORDER_STATUS.CANCELED_BY_CLIENT) return false;
       if (status === ORDER_STATUS.CANCELED_BY_MASTER) return true;
@@ -393,9 +435,22 @@ class OrdersService {
 
   adminQueueInflightTtlMs = Number(process?.env?.EXPO_PUBLIC_ADMIN_QUEUE_INFLIGHT_TTL_MS || 15000);
 
+  availableMastersCache = new Map();
+
+  availableMastersInflight = new Map();
+
+  availableMastersCacheTtlMs = Number(process?.env?.EXPO_PUBLIC_AVAILABLE_MASTERS_CACHE_TTL_MS || 10000);
+
+  availableMastersInflightTtlMs = Number(process?.env?.EXPO_PUBLIC_AVAILABLE_MASTERS_INFLIGHT_TTL_MS || 15000);
+
   invalidateAdminQueueCache = () => {
     this.adminQueueCache.clear();
     this.adminQueueInflight.clear();
+  }
+
+  invalidateAvailableMastersCache = () => {
+    this.availableMastersCache.clear();
+    this.availableMastersInflight.clear();
   }
 
   // ============================================
@@ -673,7 +728,7 @@ class OrdersService {
   }
 
   /**
-   * Start job (master) - Transition: claimed в†’ started
+   * Start job (master) - Transition: claimed -> started
    */
   startJob = async (orderId, masterId) => {
       try {
@@ -1622,23 +1677,85 @@ class OrdersService {
   /**
  * Get available masters for assignment (uses RPC function)
  */
-  getAvailableMasters = async () => {
-    serviceLog(`${LOG_PREFIX} Fetching available masters for assignment...`);
+  getAvailableMasters = async (options = {}) => {
+    const opts = normalizeAvailableMastersOptions(options);
+    const cacheKey = JSON.stringify({
+      search: opts.search,
+      limit: opts.limit,
+      offset: opts.offset,
+    });
+    const now = Date.now();
 
-    try {
-      const { data, error } = await supabase.rpc('get_available_masters');
-
-      if (error) {
-        console.error(`${LOG_PREFIX} getAvailableMasters RPC error:`, error);
-        throw error;
+    if (!opts.force) {
+      const cached = this.availableMastersCache.get(cacheKey);
+      if (cached && (now - cached.ts) < this.availableMastersCacheTtlMs) {
+        return cached.data;
       }
-
-      serviceLog(`${LOG_PREFIX} Found ${data?.length || 0} available masters`);
-      return data || [];
-    } catch (error) {
-      console.error(`${LOG_PREFIX} getAvailableMasters failed:`, error);
-      return [];
+      const inFlight = this.availableMastersInflight.get(cacheKey);
+      if (inFlight?.promise) {
+        const ageMs = now - (inFlight.startedAt || now);
+        if (ageMs < this.availableMastersInflightTtlMs) {
+          return inFlight.promise;
+        }
+        this.availableMastersInflight.delete(cacheKey);
+      }
     }
+
+    const task = (async () => {
+      serviceLog(`${LOG_PREFIX} Fetching available masters for assignment...`, opts);
+      try {
+        let payload = [];
+        if (opts.search) {
+          const searchLimit = opts.limit || 80;
+          const { data: searchData, error: searchError } = await callWithRetry(() => supabase.rpc(AVAILABLE_MASTERS_SEARCH_RPC_NAME, {
+            p_search: opts.search,
+            p_limit: searchLimit,
+            p_offset: opts.offset || 0,
+          }));
+
+          if (!searchError) {
+            payload = Array.isArray(searchData) ? searchData : [];
+          } else {
+            if (!isMissingRpcFunction(searchError, AVAILABLE_MASTERS_SEARCH_RPC_NAME)) {
+              console.warn(`${LOG_PREFIX} ${AVAILABLE_MASTERS_SEARCH_RPC_NAME} failed, using local fallback:`, searchError?.message || searchError);
+            }
+            const baseList = await this.getAvailableMasters({ force: opts.force });
+            payload = filterAvailableMastersLocally(baseList, opts.search);
+            if (opts.limit !== null) {
+              payload = payload.slice(opts.offset, opts.offset + opts.limit);
+            } else if (opts.offset > 0) {
+              payload = payload.slice(opts.offset);
+            }
+          }
+        } else {
+          const { data, error } = await callWithRetry(() => supabase.rpc('get_available_masters'));
+          if (error) {
+            console.error(`${LOG_PREFIX} getAvailableMasters RPC error:`, error);
+            throw error;
+          }
+          payload = Array.isArray(data) ? data : [];
+          if (opts.limit !== null) {
+            payload = payload.slice(opts.offset, opts.offset + opts.limit);
+          } else if (opts.offset > 0) {
+            payload = payload.slice(opts.offset);
+          }
+        }
+
+        this.availableMastersCache.set(cacheKey, { ts: Date.now(), data: payload });
+        serviceLog(`${LOG_PREFIX} Found ${payload?.length || 0} available masters`, { source: opts.search ? 'search' : 'base' });
+        return payload;
+      } catch (error) {
+        console.error(`${LOG_PREFIX} getAvailableMasters failed:`, error);
+        return [];
+      } finally {
+        if (this.availableMastersInflight.get(cacheKey)?.promise === task) {
+          this.availableMastersInflight.delete(cacheKey);
+        }
+      }
+    })();
+
+    this.availableMastersInflight.set(cacheKey, { promise: task, startedAt: Date.now() });
+    return task;
   }
 
   /**
@@ -1665,7 +1782,8 @@ class OrdersService {
         return { success: false, message: data?.message, error: errorCode };
       }
 
-      serviceLog(`${LOG_PREFIX} Master assigned successfully:`, data);
+        serviceLog(`${LOG_PREFIX} Master assigned successfully:`, data);
+      this.invalidateAvailableMastersCache();
       return { success: true, message: 'Master assigned!', ...data };
     } catch (error) {
       console.error(`${LOG_PREFIX} forceAssignMaster failed:`, error);
@@ -1681,11 +1799,22 @@ class OrdersService {
 
   /**
    * Confirm payment (admin) - Transition: completed -> confirmed
+   * Supports final amount override from confirmation modal.
    */
-  confirmPaymentAdmin = async (orderId, paymentMethod = 'cash', paymentProofUrl = null) => {
+  confirmPaymentAdmin = async (orderId, payload = {}) => {
     serviceLog(`${LOG_PREFIX} Admin confirming payment for order: ${orderId}`);
 
     try {
+      const normalizedPayload = (payload && typeof payload === 'object' && !Array.isArray(payload))
+        ? payload
+        : { finalAmount: null };
+      const rawFinalAmount = normalizedPayload?.finalAmount;
+      const hasFinalAmount = rawFinalAmount !== null && rawFinalAmount !== undefined && rawFinalAmount !== '';
+      const parsedFinalAmount = hasFinalAmount ? Number(rawFinalAmount) : null;
+      if (hasFinalAmount && (!Number.isFinite(parsedFinalAmount) || parsedFinalAmount <= 0)) {
+        return { success: false, message: 'Invalid final amount' };
+      }
+
       const { data: authData, error: authError } = await supabase.auth.getUser();
       if (authError) throw authError;
       const adminId = authData?.user?.id;
@@ -1694,16 +1823,23 @@ class OrdersService {
       }
 
       const confirmedAt = new Date().toISOString();
+      const updatePayload = {
+        status: ORDER_STATUS.CONFIRMED,
+        confirmed_at: confirmedAt,
+        payment_method: 'other',
+        payment_proof_url: null,
+        payment_confirmed_by: adminId,
+        payment_confirmed_at: confirmedAt,
+        is_disputed: false,
+        requires_review: false,
+        updated_at: confirmedAt,
+      };
+      if (hasFinalAmount) {
+        updatePayload.final_price = parsedFinalAmount;
+      }
       const { data, error } = await supabase
         .from('orders')
-        .update({
-          status: ORDER_STATUS.CONFIRMED,
-          confirmed_at: confirmedAt,
-          payment_method: paymentMethod,
-          payment_proof_url: paymentProofUrl || null,
-          payment_confirmed_by: adminId,
-          payment_confirmed_at: confirmedAt,
-        })
+        .update(updatePayload)
         .eq('id', orderId)
         .eq('status', ORDER_STATUS.COMPLETED)
         .select()
@@ -1714,10 +1850,127 @@ class OrdersService {
         throw error;
       }
 
+      const { error: disputeCloseError } = await supabase
+        .from('disputes')
+        .update({
+          status: 'resolved',
+          resolved_at: confirmedAt,
+          resolved_by: adminId,
+          resolution_notes: 'Resolved during payment confirmation.',
+          updated_at: confirmedAt,
+        })
+        .eq('order_id', orderId)
+        .in('status', ['open', 'in_review']);
+      if (disputeCloseError) {
+        console.warn(`${LOG_PREFIX} confirmPaymentAdmin dispute close warning:`, disputeCloseError);
+      }
+
       serviceLog(`${LOG_PREFIX} Admin payment confirmed for order:`, data?.id);
+      this.invalidateAdminQueueCache();
       return { success: true, message: 'Payment confirmed!', order: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} confirmPaymentAdmin failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Resolve disputed completed order (admin only):
+   * - sets final amount (if provided)
+   * - clears order dispute flags
+   * - returns order to completed status (back to payment queue)
+   * - closes active disputes for this order
+   */
+  resolveDisputedOrderAdmin = async (orderId, payload = {}) => {
+    serviceLog(`${LOG_PREFIX} Admin resolving dispute for order: ${orderId}`);
+
+    try {
+      if (!orderId) {
+        return { success: false, message: 'Order is required' };
+      }
+
+      const normalizedPayload = (payload && typeof payload === 'object' && !Array.isArray(payload))
+        ? payload
+        : {};
+      const rawFinalAmount = normalizedPayload?.finalAmount;
+      const hasFinalAmount = rawFinalAmount !== null && rawFinalAmount !== undefined && rawFinalAmount !== '';
+      const parsedFinalAmount = hasFinalAmount ? Number(rawFinalAmount) : null;
+      if (hasFinalAmount && (!Number.isFinite(parsedFinalAmount) || parsedFinalAmount <= 0)) {
+        return { success: false, message: 'Invalid final amount' };
+      }
+
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+      const adminId = authData?.user?.id;
+      if (!adminId) {
+        throw new Error('Unauthorized');
+      }
+
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', adminId)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      if (String(profileData?.role || '') !== 'admin') {
+        return { success: false, message: 'Forbidden' };
+      }
+
+      const currentOrder = await this.getOrderById(orderId);
+      if (!currentOrder?.id) {
+        return { success: false, message: 'Order not found' };
+      }
+      if (!currentOrder?.is_disputed) {
+        return { success: false, message: 'Order has no active dispute' };
+      }
+      if (currentOrder?.status !== ORDER_STATUS.COMPLETED) {
+        return { success: false, message: 'Only completed orders can be resolved' };
+      }
+
+      const nowIso = new Date().toISOString();
+      const updatePayload = {
+        status: ORDER_STATUS.COMPLETED,
+        is_disputed: false,
+        requires_review: false,
+        updated_at: nowIso,
+      };
+      if (hasFinalAmount) {
+        updatePayload.final_price = parsedFinalAmount;
+      }
+
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .update(updatePayload)
+        .eq('id', orderId)
+        .eq('is_disputed', true)
+        .select()
+        .single();
+      if (orderError) throw orderError;
+      if (!orderData) {
+        return { success: false, message: 'Failed to resolve disputed order' };
+      }
+
+      const resolutionNotes = String(normalizedPayload?.resolutionNotes || '').trim();
+      const fallbackResolution = hasFinalAmount
+        ? `Resolved in payment confirmation. final_amount=${parsedFinalAmount}`
+        : 'Resolved in payment confirmation.';
+      const { error: disputeError } = await supabase
+        .from('disputes')
+        .update({
+          status: 'resolved',
+          resolved_at: nowIso,
+          resolved_by: adminId,
+          resolution_notes: resolutionNotes || fallbackResolution,
+          updated_at: nowIso,
+        })
+        .eq('order_id', orderId)
+        .in('status', ['open', 'in_review']);
+      if (disputeError) throw disputeError;
+
+      this.invalidateAdminQueueCache();
+      return { success: true, message: 'Dispute resolved', order: orderData };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} resolveDisputedOrderAdmin failed:`, error);
       return { success: false, message: error.message };
     }
   }
@@ -1755,7 +2008,7 @@ class OrdersService {
   // with proper fee handling and debug logging
 
   /**
-   * Confirm payment (dispatcher) - Transition: completed в†’ confirmed
+   * Confirm payment (dispatcher) - Transition: completed -> confirmed
    * Called after client pays the master for completed work
    */
   /**
@@ -1860,6 +2113,9 @@ class OrdersService {
       const statusCounts = rpcData?.status_counts || { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 };
       const attentionItems = Array.isArray(rpcData?.attention_items) ? rpcData.attention_items : [];
       const attentionCount = Number(rpcData?.attention_count || attentionItems.length || 0);
+      if (items.some(isQueueDisputedOrder) || attentionItems.some(isQueueDisputedOrder)) {
+        throw new Error('DISPATCHER_QUEUE_RPC_CONTAINS_DISPUTED');
+      }
 
       const shouldRunSanityFallback = opts.page === 1
         && totalCount === 0
@@ -1881,11 +2137,12 @@ class OrdersService {
     } catch (rpcFallbackError) {
       try {
         const allOrders = await this.getDispatcherOrders(dispatcherId);
-        const filtered = filterDispatcherOrdersLocally(allOrders, opts);
+        const queueScopeOrders = filterOutDisputedOrders(allOrders);
+        const filtered = filterDispatcherOrdersLocally(queueScopeOrders, opts);
         const offset = (opts.page - 1) * opts.limit;
         const paged = filtered.slice(offset, offset + opts.limit);
-        const attentionItems = computeDispatcherNeedsAttention(allOrders).slice(0, 20);
-        const statusCounts = computeDispatcherStatusCounts(allOrders);
+        const attentionItems = computeDispatcherNeedsAttention(queueScopeOrders).slice(0, 20);
+        const statusCounts = computeDispatcherStatusCounts(queueScopeOrders);
         perfLog(`[OrdersService][PERF] dispatcher_queue_done`, {
           ms: Date.now() - perfStart,
           rows: paged.length,
@@ -2007,6 +2264,9 @@ class OrdersService {
           attentionCount: Number(rpcData?.attention_count || 0),
           source: 'rpc',
         };
+        if (payload.data.some(isQueueDisputedOrder) || payload.attentionItems.some(isQueueDisputedOrder)) {
+          throw new Error('ADMIN_QUEUE_RPC_CONTAINS_DISPUTED');
+        }
         perfLog(`[OrdersService][PERF] admin_queue_done`, {
           ms: Date.now() - perfStart,
           rows: payload.data.length,
@@ -2018,8 +2278,9 @@ class OrdersService {
       } catch (rpcFallbackError) {
         try {
           const allOrders = await this.getAllOrders();
+          const queueScopeOrders = filterOutDisputedOrders(allOrders);
           const statusFilter = mapAdminQueueStatusToStatuses(opts.status);
-          let filtered = (allOrders || []).filter((order) => statusFilter.includes(order?.status));
+          let filtered = queueScopeOrders.filter((order) => statusFilter.includes(order?.status));
 
           if (opts.dispatcher === 'unassigned') {
             filtered = filtered.filter((o) => !(o?.dispatcher_id || o?.assigned_dispatcher_id));
@@ -2043,11 +2304,11 @@ class OrdersService {
 
           const offset = (opts.page - 1) * opts.limit;
           const paged = filtered.slice(offset, offset + opts.limit);
-          const attentionItems = computeAdminNeedsAttention(allOrders).slice(0, 30);
+          const attentionItems = computeAdminNeedsAttention(queueScopeOrders).slice(0, 30);
           const payload = {
             data: paged,
             count: filtered.length,
-            statusCounts: computeAdminStatusCounts(allOrders),
+            statusCounts: computeAdminStatusCounts(queueScopeOrders),
             attentionItems,
             attentionCount: attentionItems.length,
             source: 'fallback',
@@ -2336,26 +2597,80 @@ class OrdersService {
   }
 
   /**
-   * Confirm payment for a completed order (Dispatcher action)
-   * Transitions order from 'completed' to 'confirmed'
+   * Get single order by id (lightweight read-confirm helper)
    */
-  confirmPayment = async (orderId, dispatcherId, paymentDetails) => {
+  getOrderById = async (orderId) => {
+    try {
+      if (!orderId) return null;
+      const { data, error } = await callWithRetry(() => supabase
+        .from('orders')
+        .select(`
+          *,
+          client:client_id(id, full_name, phone, email),
+          master:master_id(id, full_name, phone, rating, total_commission_owed),
+          dispatcher:dispatcher_id(id, full_name, phone, email),
+          assigned_dispatcher:assigned_dispatcher_id(id, full_name, phone, email)
+        `)
+        .eq('id', orderId)
+        .maybeSingle());
+      if (error) throw error;
+      return data || null;
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getOrderById failed:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Confirm payment for a completed order (dispatcher/partner action)
+   * Transitions order from 'completed' to 'confirmed'
+   * Supports final amount override from confirmation modal.
+   */
+  confirmPayment = async (orderId, _actorId, payload = {}) => {
     serviceLog(`${LOG_PREFIX} Confirming payment for order: ${orderId}`);
 
     try {
-      const { paymentMethod, paymentProofUrl } = paymentDetails;
+      const normalizedPayload = (payload && typeof payload === 'object' && !Array.isArray(payload))
+        ? payload
+        : {};
+      const rawFinalAmount = normalizedPayload?.finalAmount;
+      const hasFinalAmount = rawFinalAmount !== null && rawFinalAmount !== undefined && rawFinalAmount !== '';
+      const parsedFinalAmount = hasFinalAmount ? Number(rawFinalAmount) : null;
+      if (hasFinalAmount && (!Number.isFinite(parsedFinalAmount) || parsedFinalAmount <= 0)) {
+        return { success: false, message: 'Invalid final amount' };
+      }
 
-      // Update order status to confirmed and record payment details
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+      const confirmerId = authData?.user?.id;
+      if (!confirmerId) {
+        throw new Error('Unauthorized');
+      }
+      const currentOrder = await this.getOrderById(orderId);
+      if (!currentOrder?.id) {
+        return { success: false, message: 'Order not found' };
+      }
+      if (currentOrder?.is_disputed) {
+        return { success: false, message: 'Disputed orders must be confirmed by admin' };
+      }
+
+      const confirmedAt = new Date().toISOString();
+      const updatePayload = {
+        status: ORDER_STATUS.CONFIRMED,
+        confirmed_at: confirmedAt,
+        payment_method: 'other',
+        payment_proof_url: null,
+        payment_confirmed_at: confirmedAt,
+        payment_confirmed_by: confirmerId,
+        updated_at: confirmedAt,
+      };
+      if (hasFinalAmount) {
+        updatePayload.final_price = parsedFinalAmount;
+      }
+
       const { data, error } = await supabase
         .from('orders')
-        .update({
-          status: ORDER_STATUS.CONFIRMED,
-          payment_method: paymentMethod,
-          payment_proof_url: paymentProofUrl,
-          payment_confirmed_at: new Date().toISOString(),
-          payment_confirmed_by: dispatcherId,
-          updated_at: new Date().toISOString()
-        })
+        .update(updatePayload)
         .eq('id', orderId)
         .eq('status', ORDER_STATUS.COMPLETED) // Only confirm if status is completed
         .select()
@@ -2368,10 +2683,217 @@ class OrdersService {
       }
 
       serviceLog(`${LOG_PREFIX} Payment confirmed successfully for order ${orderId}`);
-      return { success: true, message: 'Payment confirmed!', data };
+      this.invalidateAdminQueueCache();
+      return { success: true, message: 'Payment confirmed!', order: data };
     } catch (error) {
       console.error(`${LOG_PREFIX} confirmPayment failed:`, error);
       return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Report a master dispute during payment confirmation flow.
+   * If RPC is unavailable, falls back to direct table writes.
+   */
+  reportPaymentDispute = async (orderId, disputeData = {}) => {
+    serviceLog(`${LOG_PREFIX} Reporting payment dispute for order: ${orderId}`);
+    try {
+      if (!orderId) {
+        return { success: false, message: 'Order is required' };
+      }
+
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+      const reporterId = authData?.user?.id;
+      if (!reporterId) {
+        throw new Error('Unauthorized');
+      }
+
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', reporterId)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      const reporterRole = String(profileData?.role || '').trim().toLowerCase();
+      if (!['admin', 'dispatcher', 'partner'].includes(reporterRole)) {
+        return { success: false, message: 'Forbidden' };
+      }
+
+      const allowedTypes = ['price_disagreement', 'quality_issue', 'timeline_issue', 'scope_mismatch', 'other'];
+      const rawType = String(disputeData?.disputeType || 'price_disagreement').trim();
+      const disputeType = allowedTypes.includes(rawType) ? rawType : 'other';
+      const reason = String(disputeData?.reason || '').trim();
+      if (!reason) {
+        return { success: false, message: 'Reason is required' };
+      }
+
+      const toNumberOrNull = (value) => {
+        if (value === '' || value === null || value === undefined) return null;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      };
+      const reportedFinalAmount = toNumberOrNull(disputeData?.reportedFinalAmount);
+      const masterFinalAmount = toNumberOrNull(disputeData?.masterFinalAmount);
+      const hoursWorked = toNumberOrNull(disputeData?.hoursWorked);
+      const source = String(disputeData?.source || 'payment_confirmation').trim();
+      const workPerformed = String(disputeData?.workPerformed || '').trim();
+      const order = await this.getOrderById(orderId);
+      if (!order?.id) {
+        return { success: false, message: 'Order not found' };
+      }
+      if (order.status !== ORDER_STATUS.COMPLETED) {
+        return { success: false, message: 'Only completed orders can be reported' };
+      }
+      if (!order.master_id) {
+        return { success: false, message: 'Order has no assigned master' };
+      }
+      if (order?.is_disputed) {
+        return { success: false, message: 'Order already has an active dispute' };
+      }
+      if (reporterRole === 'dispatcher') {
+        const assignedDispatcherId = order.assigned_dispatcher_id || order.dispatcher_id;
+        const ownsOrder = String(assignedDispatcherId || '') === String(reporterId)
+          || String(order.dispatcher_id || '') === String(reporterId);
+        if (!ownsOrder) {
+          return { success: false, message: 'Not your order' };
+        }
+      }
+      if (reporterRole === 'partner' && String(order.dispatcher_id || '') !== String(reporterId)) {
+        return { success: false, message: 'Not your order' };
+      }
+      const { data: existingDispute, error: existingDisputeError } = await supabase
+        .from('disputes')
+        .select('id, status')
+        .eq('order_id', order.id)
+        .in('status', ['open', 'in_review'])
+        .limit(1)
+        .maybeSingle();
+      if (existingDisputeError) throw existingDisputeError;
+      if (existingDispute?.id) {
+        return { success: false, message: 'Order already has an active dispute' };
+      }
+
+      const rpcPayload = {
+        p_order_id: orderId,
+        p_dispute_type: disputeType,
+        p_reason: reason,
+        p_client_notes: String(disputeData?.clientNotes || '').trim() || null,
+        p_source: source || null,
+        p_reported_final_amount: reportedFinalAmount,
+        p_master_final_amount: masterFinalAmount,
+        p_work_performed: workPerformed || null,
+        p_hours_worked: hoursWorked,
+      };
+      const rpcName = 'report_payment_dispute';
+      const { data: rpcData, error: rpcError } = await supabase.rpc(rpcName, rpcPayload);
+      if (!rpcError) {
+        this.invalidateAdminQueueCache();
+        if (rpcData && typeof rpcData === 'object' && Object.prototype.hasOwnProperty.call(rpcData, 'success')) {
+          return rpcData;
+        }
+        return { success: true, dispute: rpcData || null };
+      }
+      if (!isMissingRpcFunction(rpcError, rpcName)) {
+        throw rpcError;
+      }
+
+      const fallbackClientId = order.client_id || reporterId;
+      const fallbackDispatcherId = ['dispatcher', 'partner'].includes(reporterRole)
+        ? reporterId
+        : (order.assigned_dispatcher_id || order.dispatcher_id || null);
+      const metadataBits = [
+        source ? `source=${source}` : null,
+        reportedFinalAmount !== null ? `reported_final_amount=${reportedFinalAmount}` : null,
+        masterFinalAmount !== null ? `master_final_amount=${masterFinalAmount}` : null,
+        hoursWorked !== null ? `hours_worked=${hoursWorked}` : null,
+        workPerformed ? `work_performed=${workPerformed}` : null,
+        `reported_by=${reporterId}`,
+        reporterRole ? `reporter_role=${reporterRole}` : null,
+      ].filter(Boolean);
+
+      const insertPayload = {
+        order_id: order.id,
+        client_id: fallbackClientId,
+        master_id: order.master_id,
+        dispatcher_id: fallbackDispatcherId,
+        dispute_type: disputeType,
+        reason,
+        client_notes: metadataBits.length ? metadataBits.join('; ') : null,
+      };
+      const { data: dispute, error: insertError } = await supabase
+        .from('disputes')
+        .insert(insertPayload)
+        .select()
+        .single();
+      if (insertError) throw insertError;
+
+      const { error: orderUpdateError } = await supabase
+        .from('orders')
+        .update({
+          is_disputed: true,
+          requires_review: true,
+        })
+        .eq('id', order.id);
+      if (orderUpdateError) throw orderUpdateError;
+
+      this.invalidateAdminQueueCache();
+      return { success: true, dispute };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} reportPaymentDispute failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Get disputes list for admin dashboard review.
+   */
+  getDisputesAdmin = async ({ status = 'all', limit = 200 } = {}) => {
+    try {
+      const safeLimit = Math.max(1, Math.min(500, Number(limit) || 200));
+      let query = supabase
+        .from('disputes')
+        .select(`
+          id,
+          order_id,
+          dispute_type,
+          reason,
+          client_notes,
+          status,
+          resolution_notes,
+          created_at,
+          updated_at,
+          resolved_at,
+          order:order_id(
+            id,
+            status,
+            is_disputed,
+            final_price,
+            initial_price,
+            work_performed,
+            hours_worked,
+            full_address,
+            service_type,
+            created_at
+          ),
+          master:master_id(id, full_name, phone),
+          dispatcher:dispatcher_id(id, full_name, phone),
+          client:client_id(id, full_name, phone),
+          resolved_by_profile:resolved_by(id, full_name)
+        `)
+        .order('created_at', { ascending: false })
+        .limit(safeLimit);
+
+      if (status && status !== 'all') {
+        query = query.eq('status', status);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getDisputesAdmin failed:`, error);
+      return [];
     }
   }
 
@@ -2826,5 +3348,6 @@ class OrdersService {
 }
 const ordersService = new OrdersService();
 export default ordersService;
+
 
 

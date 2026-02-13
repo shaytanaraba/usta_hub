@@ -108,7 +108,20 @@ const formatPlannedDateTime = (preferredDate, preferredTime, language = 'en') =>
 // ============================================
 // ORDER CARD COMPONENT
 // ============================================
-const OrderCardBase = ({ order, isPool, isSelected, canClaim, actionLoading, onClaim, onStart, onComplete, onRefuse, onCopyAddress, onOpen }) => {
+const OrderCardBase = ({
+    order,
+    isPool,
+    isSelected,
+    canClaim,
+    actionLoading,
+    onClaim,
+    onStart,
+    onComplete,
+    onRefuse,
+    onCopyAddress,
+    onOpen,
+    getAreaLabel,
+}) => {
     const { t, language } = useLocalization();
     const { theme } = useTheme();
     const { width } = Dimensions.get('window');
@@ -118,7 +131,8 @@ const OrderCardBase = ({ order, isPool, isSelected, canClaim, actionLoading, onC
     const isStarted = order.status === 'started';
     const isClaimed = order.status === 'claimed';
     const isCompleted = order.status === 'completed';
-    const districtText = order.area || order.district || '-';
+    const rawDistrict = order.area || order.district || '-';
+    const districtText = getAreaLabel ? getAreaLabel(rawDistrict) : rawDistrict;
     const landmarkText = order.orientir || order.landmark || order.landmark_orientir || '';
     const normalizeLabel = (label, fallback, key) => {
         const raw = label && label !== key ? label : fallback;
@@ -696,8 +710,53 @@ const DashboardContent = ({ navigation }) => {
     const maxImmediateOrders = Number(user?.max_immediate_orders || 1);
     const maxPendingOrders = Number(user?.max_pending_confirmation || 3);
     const totalPages = useMemo(() => Math.max(1, Math.ceil(totalPool / PAGE_LIMIT)), [totalPool]);
+    const districtLabelByCode = useMemo(() => {
+        const map = {};
+        (districts || []).forEach((district) => {
+            if (!district) return;
+            const localized = language === 'ru'
+                ? (district.name_ru || district.name_en || district.name_kg || district.code || district.id || '')
+                : language === 'kg'
+                    ? (district.name_kg || district.name_ru || district.name_en || district.code || district.id || '')
+                    : (district.name_en || district.name_ru || district.name_kg || district.code || district.id || '');
+            const aliases = [
+                district.code,
+                district.id,
+                district.name_en,
+                district.name_ru,
+                district.name_kg,
+                district.label,
+            ];
+            aliases
+                .filter(Boolean)
+                .map((value) => String(value).trim().toLowerCase())
+                .forEach((key) => {
+                    if (key && !map[key]) {
+                        map[key] = localized;
+                    }
+                });
+        });
+        return map;
+    }, [districts, language]);
+    const getAreaLabel = useCallback((area) => {
+        if (!area) return '-';
+        const raw = String(area).trim();
+        const normalized = raw.toLowerCase();
+        if (districtLabelByCode[normalized]) {
+            return districtLabelByCode[normalized];
+        }
+        const parts = raw.split(/[—-]/).map((part) => part.trim()).filter(Boolean);
+        if (parts.length > 1) {
+            const tail = parts[parts.length - 1].toLowerCase();
+            if (districtLabelByCode[tail]) {
+                return `${parts.slice(0, -1).join(' - ')} - ${districtLabelByCode[tail]}`;
+            }
+        }
+        return raw;
+    }, [districtLabelByCode]);
     const sheetAddress = activeSheetOrder?.full_address || activeSheetOrder?.address || '';
-    const sheetArea = activeSheetOrder?.area || '';
+    const sheetAreaRaw = activeSheetOrder?.area || '';
+    const sheetArea = sheetAreaRaw ? getAreaLabel(sheetAreaRaw) : '';
     const sheetOrientir = activeSheetOrder?.orientir || activeSheetOrder?.landmark || '';
     const sheetClientName = activeSheetOrder?.client_name || activeSheetOrder?.client?.full_name || '';
     const sheetClientPhone = activeSheetOrder?.client_phone || activeSheetOrder?.client?.phone || '';
@@ -844,11 +903,11 @@ const DashboardContent = ({ navigation }) => {
     const areaOptionLabels = useMemo(() => {
         const labels = {};
         areaOptions.forEach(opt => {
-            const baseLabel = opt === 'all' ? t('filterAll') : opt;
+            const baseLabel = opt === 'all' ? t('filterAll') : getAreaLabel(opt);
             labels[opt] = `${baseLabel} (${getMetaCount('area', opt)})`;
         });
         return labels;
-    }, [areaOptions, getMetaCount, language]);
+    }, [areaOptions, getMetaCount, getAreaLabel, language]);
 
 
     const {
@@ -1100,6 +1159,7 @@ const DashboardContent = ({ navigation }) => {
                             onComplete={handleOpenComplete}
                             onRefuse={handleOpenRefuse}
                             onOpen={handleOpenOrderSheet}
+                            getAreaLabel={getAreaLabel}
                         />
                     )}
                     ListFooterComponent={

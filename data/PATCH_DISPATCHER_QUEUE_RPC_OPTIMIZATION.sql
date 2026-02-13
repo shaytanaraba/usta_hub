@@ -133,8 +133,11 @@ BEGIN
     LEFT JOIN public.profiles m ON m.id = o.master_id
     LEFT JOIN public.profiles d ON d.id = o.dispatcher_id
     LEFT JOIN public.profiles ad ON ad.id = o.assigned_dispatcher_id
-    WHERE o.dispatcher_id = v_effective_dispatcher
-       OR o.assigned_dispatcher_id = v_effective_dispatcher
+    WHERE COALESCE(o.is_disputed, FALSE) = FALSE
+      AND (
+        o.dispatcher_id = v_effective_dispatcher
+        OR o.assigned_dispatcher_id = v_effective_dispatcher
+      )
   ),
   filtered AS (
     SELECT *
@@ -189,8 +192,7 @@ BEGIN
     SELECT *
     FROM base_scope
     WHERE
-      is_disputed = TRUE
-      OR status = 'completed'
+      status = 'completed'
       OR status = 'canceled_by_master'
       OR (status = 'placed' AND created_at < NOW() - INTERVAL '15 minutes')
       OR (status = 'claimed' AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '30 minutes')
@@ -448,4 +450,3 @@ GRANT EXECUTE ON FUNCTION public.get_dispatcher_stats_summary TO authenticated;
 -- ============================================================================
 -- END PATCH
 -- ============================================================================
-

@@ -2,11 +2,19 @@ import { useCallback } from 'react';
 import { Alert, Linking, Platform } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import authService from '../../../services/auth';
 import ordersService, { ORDER_STATUS } from '../../../services/orders';
 import earningsService from '../../../services/earnings';
 import { normalizeKyrgyzPhone, isValidKyrgyzPhone } from '../../../utils/phone';
 import { STORAGE_KEYS } from '../constants';
 import { dispatcherError } from '../utils/logger';
+
+const DEFAULT_PAYMENT_CONFIRMATION_DATA = {
+  finalAmount: '',
+  reportReason: '',
+  workPerformed: '',
+  hoursWorked: '',
+};
 
 export default function useDispatcherOrderActions({
   language,
@@ -197,42 +205,56 @@ export default function useDispatcherOrderActions({
     }
   }, []);
 
+  const resetPaymentConfirmationState = useCallback(() => {
+    setShowPaymentModal(false);
+    setPaymentOrder(null);
+    setPaymentData({ ...DEFAULT_PAYMENT_CONFIRMATION_DATA });
+  }, [setPaymentData, setPaymentOrder, setShowPaymentModal]);
+
   const handleConfirmPayment = useCallback(async () => {
-    if (!paymentData.method) {
-      showToast?.(translations[language].toastSelectPaymentMethod, 'error');
-      return;
-    }
-    if (paymentData.method === 'transfer' && !paymentData.proofUrl) {
-      showToast?.(translations[language].toastProofRequired, 'error');
-      return;
-    }
     if (!paymentOrder?.id) {
       showToast?.(translations[language].toastNoOrderSelected, 'error');
+      return;
+    }
+    if (paymentOrder?.is_disputed) {
+      showToast?.(translations[language].toastOnlyAdminCanConfirmDisputed || 'Disputed orders can only be confirmed by admin', 'error');
+      return;
+    }
+    const rawFinalAmount = String(paymentData?.finalAmount ?? '').trim();
+    if (!rawFinalAmount) {
+      showToast?.(translations[language].labelFinalAmountRequired || 'Final amount is required', 'error');
+      return;
+    }
+    const parsedFinalAmount = Number(rawFinalAmount);
+    if (!Number.isFinite(parsedFinalAmount) || parsedFinalAmount <= 0) {
+      showToast?.(translations[language].labelFinalAmountInvalid || 'Final amount must be a positive number', 'error');
       return;
     }
 
     setActionLoading(true);
     try {
-      const result = await ordersService.confirmPayment(paymentOrder.id, user.id, {
-        paymentMethod: paymentData.method,
-        paymentProofUrl: paymentData.proofUrl || null,
-      });
+      const result = await ordersService.confirmPayment(paymentOrder.id, user.id, { finalAmount: parsedFinalAmount });
       if (result.success) {
         showToast?.(translations[language].toastPaymentConfirmed, 'success');
-        setShowPaymentModal(false);
-        setPaymentOrder(null);
-        setPaymentData({ method: 'cash', proofUrl: '' });
+        const confirmedAt = result?.order?.confirmed_at || new Date().toISOString();
+        resetPaymentConfirmationState();
         patchOrderInState(paymentOrder.id, {
           status: ORDER_STATUS.CONFIRMED,
-          confirmed_at: new Date().toISOString(),
-          payment_method: paymentData.method,
+          confirmed_at: confirmedAt,
+          final_price: parsedFinalAmount,
+          payment_method: 'other',
+          payment_confirmed_at: confirmedAt,
+          payment_confirmed_by: user?.id || null,
         });
         scheduleBackgroundRefresh((ctx) => loadQueueData({ reason: ctx?.reason || 'confirm_payment' }));
         if (activeTab === 'stats') {
           loadStatsSummary(statsWindowDays, 'stats_after_confirm_payment');
         }
       } else {
-        showToast?.(translations[language].toastFailedPrefix + (translations[language].errorGeneric || 'Error'), 'error');
+        showToast?.(
+          result?.message || (translations[language].toastFailedPrefix + (translations[language].errorGeneric || 'Error')),
+          'error',
+        );
       }
     } catch (error) {
       dispatcherError('Actions', 'handleConfirmPayment failed', error);
@@ -248,15 +270,80 @@ export default function useDispatcherOrderActions({
     patchOrderInState,
     paymentData,
     paymentOrder,
+    resetPaymentConfirmationState,
     scheduleBackgroundRefresh,
     setActionLoading,
-    setPaymentData,
-    setPaymentOrder,
-    setShowPaymentModal,
     showToast,
     statsWindowDays,
     translations,
     user?.id,
+  ]);
+
+  const handleReportMaster = useCallback(async () => {
+    if (!paymentOrder?.id) {
+      showToast?.(translations[language].toastNoOrderSelected || 'No order selected', 'error');
+      return;
+    }
+    if (paymentOrder?.is_disputed) {
+      showToast?.(translations[language].toastMasterAlreadyReported || 'Order already has a dispute report', 'info');
+      return;
+    }
+    const reason = String(paymentData?.reportReason || '').trim();
+    if (!reason) {
+      showToast?.(translations[language].labelReportReasonRequired || 'Please add a report reason', 'error');
+      return;
+    }
+
+    const parsedFinalAmount = Number(String(paymentData?.finalAmount ?? '').trim());
+    const normalizedFinalAmount = Number.isFinite(parsedFinalAmount) && parsedFinalAmount > 0
+      ? parsedFinalAmount
+      : null;
+
+    setActionLoading(true);
+    try {
+      const result = await ordersService.reportPaymentDispute(paymentOrder.id, {
+        reason,
+        disputeType: 'price_disagreement',
+        source: 'payment_confirmation',
+        reportedFinalAmount: normalizedFinalAmount,
+        masterFinalAmount: paymentOrder?.final_price ?? paymentOrder?.initial_price ?? null,
+        workPerformed: paymentOrder?.work_performed || paymentData?.workPerformed || null,
+        hoursWorked: paymentOrder?.hours_worked ?? paymentData?.hoursWorked ?? null,
+      });
+      if (result.success) {
+        showToast?.(translations[language].toastMasterReported || 'Master reported for review', 'success');
+        resetPaymentConfirmationState();
+        patchOrderInState(paymentOrder.id, {
+          is_disputed: true,
+          requires_review: true,
+        });
+        scheduleBackgroundRefresh((ctx) => loadQueueData({ reason: ctx?.reason || 'report_master' }));
+        if (activeTab === 'stats') {
+          loadStatsSummary(statsWindowDays, 'stats_after_report_master');
+        }
+      } else {
+        showToast?.(result.message || translations[language].toastFailedPrefix + (translations[language].errorGeneric || 'Error'), 'error');
+      }
+    } catch (error) {
+      dispatcherError('Actions', 'handleReportMaster failed', error);
+      showToast?.(translations[language].toastFailedPrefix + (translations[language].errorGeneric || 'Error'), 'error');
+    } finally {
+      setActionLoading(false);
+    }
+  }, [
+    activeTab,
+    language,
+    loadQueueData,
+    loadStatsSummary,
+    patchOrderInState,
+    paymentData,
+    paymentOrder,
+    resetPaymentConfirmationState,
+    scheduleBackgroundRefresh,
+    setActionLoading,
+    showToast,
+    statsWindowDays,
+    translations,
   ]);
 
   const openAssignModal = useCallback((order) => {
@@ -266,27 +353,66 @@ export default function useDispatcherOrderActions({
     setShowAssignModal(true);
   }, [setAssignTarget, setDetailsOrder, setShowAssignModal]);
 
-  const handleTransferDispatcher = useCallback(async (order, targetDispatcherId) => {
+  const handleTransferDispatcher = useCallback(async (order, targetDispatcher) => {
+    const targetDispatcherId = typeof targetDispatcher === 'object' ? targetDispatcher?.id : targetDispatcher;
     if (!order?.id || !user?.id || !targetDispatcherId) return;
-    setActionLoading(true);
-    try {
-      const result = await ordersService.transferOrderToDispatcher(order.id, user.id, targetDispatcherId, user?.role);
-      if (result.success) {
-        showToast?.(translations[language].toastTransferSuccess || 'Order transferred', 'success');
-        removeOrderFromState(order.id);
-        setQueueTotalCount((prev) => Math.max(0, prev - 1));
-        setDetailsOrder(null);
-        scheduleBackgroundRefresh((ctx) => loadQueueData({ reason: ctx?.reason || 'transfer_dispatcher' }));
-      } else {
+    const targetId = String(targetDispatcherId);
+    const knownTarget = (dispatchers || []).find((dispatcher) => String(dispatcher?.id || '') === targetId);
+    const fallbackName = `${translations[language].pickerDispatcher || 'Dispatcher'} ${targetId.slice(0, 6)}`;
+    const targetLabel = (typeof targetDispatcher === 'object'
+      ? (
+        targetDispatcher?.label
+        || targetDispatcher?.full_name
+        || targetDispatcher?.email
+        || targetDispatcher?.phone
+      )
+      : null)
+      || knownTarget?.full_name
+      || knownTarget?.name
+      || knownTarget?.email
+      || knownTarget?.phone
+      || fallbackName;
+    const confirmTemplate = translations[language].alertTransferMsg || 'Transfer this order to {0}?';
+    const confirmMessage = String(confirmTemplate).includes('{0}')
+      ? String(confirmTemplate).replace('{0}', targetLabel)
+      : `${confirmTemplate}\n${targetLabel}`;
+    const executeTransfer = async () => {
+      setActionLoading(true);
+      try {
+        const result = await ordersService.transferOrderToDispatcher(order.id, user.id, targetId, user?.role);
+        if (result.success) {
+          showToast?.(translations[language].toastTransferSuccess || 'Order transferred', 'success');
+          removeOrderFromState(order.id);
+          setQueueTotalCount((prev) => Math.max(0, prev - 1));
+          setDetailsOrder(null);
+          scheduleBackgroundRefresh((ctx) => loadQueueData({ reason: ctx?.reason || 'transfer_dispatcher' }));
+        } else {
+          showToast?.(translations[language].toastTransferFailed || 'Transfer failed', 'error');
+        }
+      } catch (error) {
+        dispatcherError('Actions', 'handleTransferDispatcher failed', error);
         showToast?.(translations[language].toastTransferFailed || 'Transfer failed', 'error');
+      } finally {
+        setActionLoading(false);
       }
-    } catch (error) {
-      dispatcherError('Actions', 'handleTransferDispatcher failed', error);
-      showToast?.(translations[language].toastTransferFailed || 'Transfer failed', 'error');
-    } finally {
-      setActionLoading(false);
+    };
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+      if (window.confirm(confirmMessage)) {
+        await executeTransfer();
+      }
+      return;
     }
+    Alert.alert(
+      translations[language].transferOrder || 'Transfer Order',
+      confirmMessage,
+      [
+        { text: translations[language].cancel || 'Cancel', style: 'cancel' },
+        { text: translations[language].confirm || 'Confirm', onPress: () => { void executeTransfer(); } },
+      ],
+    );
   }, [
+    dispatchers,
     language,
     loadQueueData,
     removeOrderFromState,
@@ -302,22 +428,60 @@ export default function useDispatcherOrderActions({
 
   const openTransferPicker = useCallback((order) => {
     if (!order) return;
-    const options = (dispatchers || [])
+    const buildOptions = (rows = []) => (rows || [])
       .filter((dispatcher) => dispatcher?.id && dispatcher.id !== user?.id)
       .map((dispatcher) => ({
-        id: dispatcher.id,
+        id: String(dispatcher.id),
         label: dispatcher.full_name || dispatcher.email || dispatcher.phone || `Dispatcher ${String(dispatcher.id).slice(0, 6)}`,
+        full_name: dispatcher.full_name || dispatcher.name || '',
+        phone: dispatcher.phone || '',
+        email: dispatcher.email || '',
+        role: dispatcher.role || 'dispatcher',
+        subtitle: [
+          dispatcher.phone || '',
+          dispatcher.email || '',
+          (translations[language].dispatcherRole || 'Dispatcher'),
+        ].filter(Boolean).join(' | '),
       }));
+    const options = buildOptions(dispatchers);
     if (options.length === 0) {
       showToast?.(translations[language].noDispatchersFound || 'No other dispatchers found', 'info');
       return;
     }
+
+    const searchOptions = async (queryText) => {
+      const query = String(queryText || '').trim().toLowerCase();
+      if (!query || query.length < 2) {
+        return options;
+      }
+      const localMatches = options.filter((opt) => {
+        const text = `${opt.label || ''} ${opt.full_name || ''} ${opt.phone || ''} ${opt.email || ''}`.toLowerCase();
+        return text.includes(query);
+      });
+      try {
+        const remote = await authService.getAllDispatchers({ search: query, force: true, pageSize: 80 });
+        const remoteOptions = buildOptions(remote);
+        return remoteOptions.length > 0 ? remoteOptions : localMatches;
+      } catch (error) {
+        dispatcherError('Actions', 'transfer picker search failed', error);
+        return localMatches;
+      }
+    };
+
     setPickerModal({
       visible: true,
       title: translations[language].pickerDispatcher || 'Select dispatcher',
       options,
       value: '',
-      onChange: async (targetId) => handleTransferDispatcher(order, targetId),
+      onChange: async (targetId) => {
+        const selectedOption = options.find((opt) => String(opt?.id) === String(targetId));
+        await handleTransferDispatcher(order, selectedOption || targetId);
+      },
+      searchable: true,
+      searchFields: ['label', 'full_name', 'phone', 'email'],
+      searchPlaceholder: translations[language].placeholderSearch || 'Search by name, phone, email',
+      onSearch: searchOptions,
+      emptyText: translations[language].noDispatchersFound || 'No dispatchers found',
     });
   }, [dispatchers, handleTransferDispatcher, language, setPickerModal, showToast, translations, user?.id]);
 
@@ -686,6 +850,7 @@ export default function useDispatcherOrderActions({
     handlePastePhone,
     handleCall,
     handleConfirmPayment,
+    handleReportMaster,
     openAssignModal,
     openTransferPicker,
     handleTransferDispatcher,

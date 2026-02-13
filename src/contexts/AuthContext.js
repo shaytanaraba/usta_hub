@@ -26,14 +26,14 @@ const REFRESH_MIN_INTERVAL_MS = 30 * 1000; // 30 seconds
 // Keep sessions warm to avoid first-action stalls after long idle/sleep.
 const SESSION_HEARTBEAT_MS = 5 * 60 * 1000; // 5 minutes
 // Guard against rare unresolved auth promises that can freeze app bootstrap.
-const REFRESH_HARD_TIMEOUT_MS = parsePositiveInt(process?.env?.EXPO_PUBLIC_AUTH_REFRESH_HARD_TIMEOUT_MS, 65000);
+const REFRESH_HARD_TIMEOUT_MS = parsePositiveInt(process?.env?.EXPO_PUBLIC_AUTH_REFRESH_HARD_TIMEOUT_MS, 15000);
 const INITIAL_REFRESH_TIMEOUT_MS = parsePositiveInt(
   process?.env?.EXPO_PUBLIC_AUTH_INITIAL_TIMEOUT_MS,
-  Math.max(REFRESH_HARD_TIMEOUT_MS + 5000, 70000),
+  Math.max(REFRESH_HARD_TIMEOUT_MS + 5000, 22000),
 );
-const REFRESH_STUCK_TIMEOUT_HITS_LIMIT = parsePositiveInt(process?.env?.EXPO_PUBLIC_AUTH_TIMEOUT_HITS_LIMIT, 3);
+const REFRESH_STUCK_TIMEOUT_HITS_LIMIT = parsePositiveInt(process?.env?.EXPO_PUBLIC_AUTH_TIMEOUT_HITS_LIMIT, 1);
 const ACTIVITY_WRITE_THROTTLE_MS = Number(process?.env?.EXPO_PUBLIC_ACTIVITY_WRITE_THROTTLE_MS || 45000);
-const PROFILE_REVALIDATE_MS = parsePositiveInt(process?.env?.EXPO_PUBLIC_AUTH_PROFILE_REVALIDATE_MS, 10 * 60 * 1000);
+const PROFILE_REVALIDATE_MS = parsePositiveInt(process?.env?.EXPO_PUBLIC_AUTH_PROFILE_REVALIDATE_MS, 5 * 60 * 1000);
 // Break session-only deadlocks when profile resolution repeatedly fails.
 const PROFILE_RESOLUTION_MISS_LIMIT = 3;
 const AUTH_DIAG_ENABLED = process?.env?.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS === '1';
@@ -350,8 +350,7 @@ export function AuthProvider({ children }) {
             ? options.profileRevalidateMs
             : PROFILE_REVALIDATE_MS;
           const profileAgeMs = Date.now() - (lastProfileSyncAtRef.current || 0);
-          const isDispatcherUser = String(cachedUser?.role || '').toLowerCase() === 'dispatcher';
-          if (sameUser && !forceProfile && !isDispatcherUser && profileAgeMs < profileRevalidateMs) {
+          if (sameUser && !forceProfile && profileAgeMs < profileRevalidateMs) {
             authDiag('refresh_session_cached_user_hit', {
               refreshVersion,
               profileAgeMs,

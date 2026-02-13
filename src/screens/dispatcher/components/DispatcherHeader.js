@@ -4,6 +4,7 @@ import { View, TouchableOpacity, Text } from 'react-native';
 const getTitle = (activeTab, labels) => {
   if (activeTab === 'queue') return labels.ordersQueue;
   if (activeTab === 'stats') return labels.stats || 'Statistics';
+  if (activeTab === 'earnings') return labels.partnerEarnings || labels.sectionEarnings || 'Earnings';
   if (activeTab === 'settings') return labels.sectionSettings || 'Settings';
   return labels.createOrder;
 };

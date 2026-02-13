@@ -18,14 +18,26 @@ function reducer(state, action) {
 
 export default function useDispatcherUiState({ initialOrderState, generateIdempotencyKey }) {
   const initialState = useMemo(() => ({
-    pickerModal: { visible: false, options: [], value: '', onChange: null, title: '' },
+    pickerModal: {
+      visible: false,
+      options: [],
+      value: '',
+      onChange: null,
+      title: '',
+      searchable: false,
+      searchFields: ['label'],
+      searchPlaceholder: '',
+      onSearch: null,
+      emptyText: '',
+      closeOnSelect: true,
+    },
     showDatePicker: false,
     showTimePicker: false,
     detailsOrder: null,
     isEditing: false,
     editForm: {},
     showPaymentModal: false,
-    paymentData: { method: 'cash', proofUrl: '' },
+    paymentData: { finalAmount: '', reportReason: '', workPerformed: '', hoursWorked: '' },
     paymentOrder: null,
     showAssignModal: false,
     assignTarget: null,

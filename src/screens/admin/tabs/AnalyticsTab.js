@@ -67,6 +67,8 @@ export default function AdminAnalyticsTab(props) {
         masterRevenueSeries,
         masterStatusBreakdown,
         masterTrendWindow,
+        onSearchAnalyticsDispatchers,
+        onSearchAnalyticsMasters,
         openAnalyticsOrdersModal,
         priceDistChartWidth,
         priceDistData,
@@ -694,6 +696,15 @@ export default function AdminAnalyticsTab(props) {
                                     options: analyticsSection === 'dispatchers' ? analyticsDispatcherOptions : analyticsMasterOptions,
                                     value: analyticsSection === 'dispatchers' ? analyticsDispatcherId : analyticsMasterId,
                                     onChange: analyticsSection === 'dispatchers' ? setAnalyticsDispatcherId : setAnalyticsMasterId,
+                                    searchable: true,
+                                    searchFields: analyticsSection === 'dispatchers'
+                                        ? ['label', 'full_name', 'phone', 'email', 'role_label']
+                                        : ['label', 'full_name', 'phone', 'email'],
+                                    searchPlaceholder: TRANSLATIONS.placeholderSearch || 'Search by name, phone, email',
+                                    onSearch: analyticsSection === 'dispatchers' ? onSearchAnalyticsDispatchers : onSearchAnalyticsMasters,
+                                    emptyText: analyticsSection === 'dispatchers'
+                                        ? (TRANSLATIONS.noDispatchersFound || 'No dispatchers found')
+                                        : (TRANSLATIONS.noMastersFound || 'No masters found'),
                                 })}
                             >
                                 <View style={styles.analyticsFilterPillRow}>

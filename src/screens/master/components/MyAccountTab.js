@@ -92,11 +92,11 @@ const MyAccountTab = ({
         if (districtLabelByCode[normalized]) {
             return districtLabelByCode[normalized];
         }
-        const parts = raw.split(/вЂ”|-/).map(p => p.trim()).filter(Boolean);
+        const parts = raw.split(/[—-]/).map(p => p.trim()).filter(Boolean);
         if (parts.length > 1) {
             const tail = parts[parts.length - 1].toLowerCase();
             if (districtLabelByCode[tail]) {
-                return `${parts.slice(0, -1).join(' вЂ” ')} вЂ” ${districtLabelByCode[tail]}`;
+                return `${parts.slice(0, -1).join(' - ')} - ${districtLabelByCode[tail]}`;
             }
         }
         return raw;
@@ -215,7 +215,7 @@ const MyAccountTab = ({
                 <View style={[styles.historyCell, styles.historyCellAmount]}>
                     {isOrderNoAmount ? (
                         <Text style={{ color: theme.textMuted, fontWeight: '400', fontSize: 11 }}>
-                            {safeT('historyNoAmount', 'вЂ”')}
+                            {safeT('historyNoAmount', '-')}
                         </Text>
                     ) : (
                         <Text style={{ color: theme.accentSuccess, fontWeight: '400', fontSize: 11 }}>
@@ -437,7 +437,6 @@ const MyAccountTab = ({
                         <Text style={{ color: theme.textPrimary, fontWeight: '600', marginBottom: 8 }}>{t('professionalInfo')}</Text>
                         <View style={styles.infoRow}><Text style={{ color: theme.textMuted }}>{t('serviceArea')}:</Text><Text style={{ color: theme.textPrimary }}>{financials?.serviceArea || '-'}</Text></View>
                         <View style={styles.infoRow}><Text style={{ color: theme.textMuted }}>{t('license')}:</Text><Text style={{ color: theme.textPrimary }}>{financials?.licenseNumber || '-'}</Text></View>
-                        <View style={styles.infoRow}><Text style={{ color: theme.textMuted }}>{t('experience')}:</Text><Text style={{ color: theme.textPrimary }}>{financials?.experienceYears || 0} {t('years')}</Text></View>
                         <View style={styles.infoRow}><Text style={{ color: theme.textMuted }}>{t('specializations')}:</Text><Text style={{ color: theme.textPrimary }}>{financials?.specializations?.join(', ') || '-'}</Text></View>
                     </View>
                 </View>
@@ -445,26 +444,40 @@ const MyAccountTab = ({
             {accountView === ACCOUNT_VIEWS.SETTINGS && (
                 <View style={styles.settingsSection}>
                     <View style={[styles.settingsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>
-                        <Text style={[styles.settingsTitle, { color: theme.textPrimary }]}>{t('settingsLanguage') || 'Language'}</Text>
-                        <View style={styles.settingsOptionsRow}>
-                            {languageOptions.map(option => (
-                                <TouchableOpacity
-                                    key={option.code}
-                                    style={[
-                                        styles.settingsOption,
-                                        {
-                                            backgroundColor: language === option.code ? `${theme.accentIndigo}15` : theme.bgSecondary,
-                                            borderColor: language === option.code ? theme.accentIndigo : theme.borderPrimary
-                                        }
-                                    ]}
-                                    onPress={() => setLanguage(option.code)}
-                                >
-                                    <Text style={{ fontSize: 16 }}>{option.flag}</Text>
-                                    <Text style={{ color: language === option.code ? theme.accentIndigo : theme.textSecondary, fontWeight: '700', fontSize: 11 }}>
-                                        {option.label}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
+                        <View style={styles.settingsToggleRow}>
+                            <View style={{ flex: 1, paddingRight: 10 }}>
+                                <Text style={[styles.settingsTitle, { color: theme.textPrimary }]}>{t('settingsLanguage') || 'Language'}</Text>
+                                <Text style={{ color: theme.textMuted, fontSize: 11 }}>
+                                    {safeT('settingsLanguageHint', 'Choose app language')}
+                                </Text>
+                            </View>
+                            <View style={[styles.settingsThemeSwitch, { backgroundColor: theme.bgSecondary, borderColor: theme.borderPrimary }]}>
+                                {languageOptions.map((option) => {
+                                    const isActive = language === option.code;
+                                    return (
+                                        <TouchableOpacity
+                                            key={option.code}
+                                            style={[
+                                                styles.settingsThemeOption,
+                                                {
+                                                    paddingHorizontal: 8,
+                                                    paddingVertical: 6,
+                                                    gap: 4,
+                                                    backgroundColor: isActive ? theme.accentIndigo : 'transparent',
+                                                },
+                                            ]}
+                                            onPress={() => setLanguage(option.code)}
+                                        >
+                                            <Text style={[styles.settingsThemeOptionIcon, { color: isActive ? '#fff' : theme.textMuted }]}>
+                                                {option.flag}
+                                            </Text>
+                                            <Text style={[styles.settingsThemeOptionText, { color: isActive ? '#fff' : theme.textSecondary, fontSize: 11 }]}>
+                                                {option.label}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
                         </View>
                     </View>
                     <View style={[styles.settingsCard, { backgroundColor: theme.bgCard, borderColor: theme.borderPrimary }]}>

@@ -1,9 +1,10 @@
 /**
  * Auth Service - v5 Schema
- * Handles authentication with role-based access (admin/dispatcher/master/client)
+ * Handles authentication with role-based access (admin/dispatcher/partner/master/client)
  */
 
 import { supabase } from '../lib/supabase';
+import { normalizeKyrgyzPhone } from '../utils/phone';
 
 const LOG_PREFIX = '[AuthService]';
 const isDebug = process?.env?.EXPO_PUBLIC_ENABLE_AUTH_LOGS === '1';
@@ -22,8 +23,8 @@ const authDiag = (...args) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Profile columns used across auth + dashboards. Keep in sync with COMPLETE_SETUP_V2.sql.
-const PROFILE_SELECT_FIELDS = [
+// Profile columns used across auth + dashboards.
+const PROFILE_SELECT_BASE_FIELDS = [
   'id',
   'email',
   'phone',
@@ -32,7 +33,6 @@ const PROFILE_SELECT_FIELDS = [
   'is_active',
   'is_verified',
   'service_area',
-  'experience_years',
   'specializations',
   'max_active_jobs',
   'max_immediate_orders',
@@ -40,8 +40,25 @@ const PROFILE_SELECT_FIELDS = [
   'prepaid_balance',
   'initial_deposit',
   'completed_jobs_count',
-  'created_at'
+  'created_at',
+  'last_login_at'
+];
+
+// Added by partner patch (PATCH_PARTNER_ROLE_PAYOUTS.sql).
+const PROFILE_SELECT_PARTNER_FIELDS = [
+  'partner_balance',
+  'partner_commission_rate',
+  'partner_min_payout',
+  'partner_company_id'
+];
+
+const PROFILE_SELECT_FIELDS = [
+  ...PROFILE_SELECT_BASE_FIELDS,
+  ...PROFILE_SELECT_PARTNER_FIELDS,
 ].join(', ');
+
+const PROFILE_SELECT_FIELDS_LEGACY = PROFILE_SELECT_BASE_FIELDS.join(', ');
+const EMAIL_FORMAT_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const MASTER_LIST_FIELDS = [
   'id',
@@ -52,13 +69,13 @@ const MASTER_LIST_FIELDS = [
   'is_active',
   'is_verified',
   'service_area',
-  'experience_years',
   'specializations',
   'max_active_jobs',
   'prepaid_balance',
   'initial_deposit',
   'completed_jobs_count',
-  'created_at'
+  'created_at',
+  'last_login_at'
 ].join(', ');
 
 const DISPATCHER_LIST_FIELDS = [
@@ -69,8 +86,43 @@ const DISPATCHER_LIST_FIELDS = [
   'role',
   'is_active',
   'is_verified',
-  'created_at'
+  'created_at',
+  'last_login_at'
 ].join(', ');
+
+const PARTNER_LIST_FIELDS = [
+  'id',
+  'email',
+  'phone',
+  'full_name',
+  'role',
+  'is_active',
+  'is_verified',
+  'partner_balance',
+  'partner_commission_rate',
+  'partner_min_payout',
+  'partner_company_id',
+  'created_at',
+  'last_login_at'
+].join(', ');
+
+const isLegacyProfileSchemaError = (error) => {
+  const code = String(error?.code || '');
+  const message = String(error?.message || '').toLowerCase();
+  if (code === '42703' && message.includes('profiles.partner_')) return true;
+  return message.includes('column profiles.partner_balance does not exist')
+    || message.includes('column profiles.partner_commission_rate does not exist')
+    || message.includes('column profiles.partner_min_payout does not exist')
+    || message.includes('column profiles.partner_company_id does not exist');
+};
+
+const normalizeProfileShape = (profile) => ({
+  ...profile,
+  partner_balance: Number(profile?.partner_balance || 0),
+  partner_commission_rate: Number(profile?.partner_commission_rate || 0),
+  partner_min_payout: Number(profile?.partner_min_payout || 50),
+  partner_company_id: profile?.partner_company_id || null,
+});
 
 const isAuthInvalidError = (error) => {
   const message = error?.message?.toLowerCase?.() || '';
@@ -97,6 +149,18 @@ const isTransientError = (error) => {
     || message.includes('temporarily unavailable')
     || message.includes('econnreset')
     || message.includes('eai_again');
+};
+
+const normalizePeopleSearch = (value) => String(value || '')
+  .trim()
+  .replace(/[,%]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .slice(0, 80);
+
+const buildPeopleSearchOrFilter = (term) => {
+  const safe = normalizePeopleSearch(term);
+  if (!safe) return null;
+  return `full_name.ilike.%${safe}%,phone.ilike.%${safe}%,email.ilike.%${safe}%`;
 };
 
 const mapLoginError = (error) => {
@@ -134,6 +198,7 @@ class AuthService {
     this.redirects = {
       admin: 'AdminDashboard',
       dispatcher: 'DispatcherDashboard',
+      partner: 'PartnerDashboard',
       master: 'MasterDashboard',
       client: null, // Clients cannot login in v5 (dispatcher-mediated)
     };
@@ -162,6 +227,7 @@ class AuthService {
       page: Number.isInteger(options.page) && options.page >= 0 ? options.page : null,
       pageSize: Number.isInteger(options.pageSize) && options.pageSize > 0 ? options.pageSize : null,
       force: options.force === true,
+      search: normalizePeopleSearch(options.search || options.query || ''),
     };
   }
 
@@ -171,6 +237,7 @@ class AuthService {
       role,
       page: opts.page,
       pageSize: opts.pageSize,
+      search: opts.search,
     });
   }
 
@@ -180,8 +247,17 @@ class AuthService {
     let query = supabase
       .from('profiles')
       .select(selectFields)
-      .eq('role', role)
-      .order('created_at', { ascending: false });
+      .eq('role', role);
+
+    if (opts.search) {
+      const orFilter = buildPeopleSearchOrFilter(opts.search);
+      if (orFilter) {
+        query = query.or(orFilter);
+      }
+      query = query.order('full_name', { ascending: true });
+    } else {
+      query = query.order('created_at', { ascending: false });
+    }
 
     if (opts.page !== null && opts.pageSize !== null) {
       const start = opts.page * opts.pageSize;
@@ -243,6 +319,46 @@ class AuthService {
     }
   }
 
+  async fetchProfileById(userId, options = {}) {
+    const retries = Number.isInteger(options.retries) ? options.retries : 0;
+    const retryDelayMs = Number.isInteger(options.retryDelayMs) ? options.retryDelayMs : 300;
+    let attempt = 0;
+    let useLegacySelect = false;
+    let lastError = null;
+
+    while (attempt <= retries) {
+      const selectFields = useLegacySelect ? PROFILE_SELECT_FIELDS_LEGACY : PROFILE_SELECT_FIELDS;
+      const { data, error } = await supabase
+        .from('profiles')
+        .select(selectFields)
+        .eq('id', userId)
+        .single();
+
+      if (!error && data) {
+        return { profile: normalizeProfileShape(data), error: null };
+      }
+
+      lastError = error || null;
+
+      // Backward compatibility: allow login before partner DB patch is applied.
+      if (!useLegacySelect && isLegacyProfileSchemaError(error)) {
+        authDiag('profile_select_legacy_fallback', { userId });
+        useLegacySelect = true;
+        continue;
+      }
+
+      if (attempt < retries && isTransientError(error)) {
+        attempt += 1;
+        await sleep(retryDelayMs * attempt);
+        continue;
+      }
+
+      break;
+    }
+
+    return { profile: null, error: lastError };
+  }
+
   /**
    * Login user - v5 uses 'role' field instead of 'user_type'
    */
@@ -283,23 +399,10 @@ class AuthService {
 
       debug(`${LOG_PREFIX} Auth successful, fetching profile...`);
 
-      // Fetch profile with v5 fields
-      const profileFetchAttempts = 2;
-      let profile = null;
-      let profileError = null;
-      for (let attempt = 1; attempt <= profileFetchAttempts; attempt += 1) {
-        const result = await supabase
-          .from('profiles')
-          .select(PROFILE_SELECT_FIELDS)
-          .eq('id', data.user.id)
-          .single();
-        profile = result?.data || null;
-        profileError = result?.error || null;
-        if (!profileError || !isTransientError(profileError) || attempt === profileFetchAttempts) {
-          break;
-        }
-        await sleep(250 * attempt);
-      }
+      const { profile, error: profileError } = await this.fetchProfileById(data.user.id, {
+        retries: 1,
+        retryDelayMs: 250,
+      });
 
       if (profileError || !profile) {
         console.error(`${LOG_PREFIX} Profile error:`, profileError?.message);
@@ -318,11 +421,11 @@ class AuthService {
         throw new Error('Account deactivated. Contact administrator.');
       }
 
-      // Dispatcher access is controlled by verification status.
-      if (profile.role === 'dispatcher' && profile.is_verified !== true) {
-        debugWarn(`${LOG_PREFIX} Dispatcher access disabled (not verified):`, profile.id);
+      // Dispatcher/partner access is controlled by verification status.
+      if (['dispatcher', 'partner'].includes(profile.role) && profile.is_verified !== true) {
+        debugWarn(`${LOG_PREFIX} ${profile.role} access disabled (not verified):`, profile.id);
         await this.logoutUser({ scope: 'local' });
-        throw new Error('Dispatcher account is unverified. Contact administrator.');
+        throw new Error(`${profile.role === 'partner' ? 'Partner' : 'Dispatcher'} account is unverified. Contact administrator.`);
       }
 
       // Block client logins in v5 (dispatcher-mediated architecture)
@@ -382,55 +485,42 @@ class AuthService {
 
       const retries = Number.isInteger(options.retries) ? options.retries : 0;
       const retryDelayMs = Number.isInteger(options.retryDelayMs) ? options.retryDelayMs : 300;
-      let attempt = 0;
+      const { profile, error } = await this.fetchProfileById(session.user.id, { retries, retryDelayMs });
 
-      while (attempt <= retries) {
-        const { data: profile, error } = await supabase
-          .from('profiles')
-          .select(PROFILE_SELECT_FIELDS)
-          .eq('id', session.user.id)
-          .single();
-
-        if (!error && profile) {
-          if (profile.is_active === false) {
-            await supabase.auth.signOut({ scope: 'local' });
-            return null;
-          }
-          if (profile.role === 'dispatcher' && profile.is_verified !== true) {
-            await supabase.auth.signOut({ scope: 'local' });
-            return null;
-          }
-          if (profile.role === 'client') {
-            await supabase.auth.signOut({ scope: 'local' });
-            return null;
-          }
-          debug(`${LOG_PREFIX} Current user: ${profile.full_name} (${profile.role})`);
-          return { ...session.user, ...profile };
+      if (!error && profile) {
+        if (profile.is_active === false) {
+          await supabase.auth.signOut({ scope: 'local' });
+          return null;
         }
-
-        if (error) {
-          console.error(`${LOG_PREFIX} Profile fetch error:`, error?.message);
-          const errorCode = String(error?.code || '');
-          const lowered = String(error?.message || '').toLowerCase();
-          const missingProfile = errorCode === 'PGRST116'
-            || lowered.includes('multiple (or no) rows returned')
-            || lowered.includes('0 rows');
-          if (missingProfile) {
-            await supabase.auth.signOut({ scope: 'local' });
-            return null;
-          }
-          if (isAuthInvalidError(error)) {
-            await supabase.auth.signOut({ scope: 'local' });
-            return null;
-          }
-          if (attempt < retries && isTransientError(error)) {
-            attempt += 1;
-            await sleep(retryDelayMs);
-            continue;
-          }
+        if (['dispatcher', 'partner'].includes(profile.role) && profile.is_verified !== true) {
+          await supabase.auth.signOut({ scope: 'local' });
+          return null;
         }
-        return null;
+        if (profile.role === 'client') {
+          await supabase.auth.signOut({ scope: 'local' });
+          return null;
+        }
+        debug(`${LOG_PREFIX} Current user: ${profile.full_name} (${profile.role})`);
+        return { ...session.user, ...profile };
       }
+
+      if (error) {
+        console.error(`${LOG_PREFIX} Profile fetch error:`, error?.message);
+        const errorCode = String(error?.code || '');
+        const lowered = String(error?.message || '').toLowerCase();
+        const missingProfile = errorCode === 'PGRST116'
+          || lowered.includes('multiple (or no) rows returned')
+          || lowered.includes('0 rows');
+        if (missingProfile) {
+          await supabase.auth.signOut({ scope: 'local' });
+          return null;
+        }
+        if (isAuthInvalidError(error)) {
+          await supabase.auth.signOut({ scope: 'local' });
+          return null;
+        }
+      }
+      return null;
     } catch (error) {
       console.error(`${LOG_PREFIX} getCurrentUser error:`, error);
       return null;
@@ -523,6 +613,19 @@ class AuthService {
   }
 
   /**
+   * Get all partners (admin)
+   */
+  async getAllPartners(options = {}) {
+    try {
+      const data = await this.fetchProfileListWithCache('partner', PARTNER_LIST_FIELDS, options);
+      return data;
+    } catch (error) {
+      console.error(`${LOG_PREFIX} getAllPartners error:`, error);
+      return [];
+    }
+  }
+
+  /**
    * Verify master (admin only)
    */
   async verifyMaster(masterId) {
@@ -578,15 +681,108 @@ class AuthService {
     debug(`${LOG_PREFIX} Updating profile: ${userId}`);
 
     try {
+      const hasField = (fieldName) => Object.prototype.hasOwnProperty.call(updates || {}, fieldName);
       const profileUpdates = {};
+      const parseNonNegativeInteger = (value, label, { allowNull = false } = {}) => {
+        if (value === undefined) return { skip: true };
+        const raw = String(value ?? '').trim();
+        if (!raw) {
+          if (allowNull) return { value: null };
+          return { error: `${label} is required` };
+        }
+        if (!/^\d+$/.test(raw)) return { error: `${label} must be a non-negative whole number` };
+        return { value: Number.parseInt(raw, 10) };
+      };
+      const parseNonNegativeDecimal = (value, label, { allowNull = false, precision = 2 } = {}) => {
+        if (value === undefined) return { skip: true };
+        const raw = String(value ?? '').trim();
+        if (!raw) {
+          if (allowNull) return { value: null };
+          return { error: `${label} is required` };
+        }
+        const parsed = Number(raw.replace(',', '.'));
+        if (!Number.isFinite(parsed) || parsed < 0) return { error: `${label} must be a non-negative number` };
+        return { value: Number(parsed.toFixed(precision)) };
+      };
 
-      if (updates.full_name) profileUpdates.full_name = updates.full_name;
-      if (updates.phone) profileUpdates.phone = updates.phone;
-      if (updates.email) profileUpdates.email = updates.email;
-      if (updates.service_area) profileUpdates.service_area = updates.service_area;
-      if (updates.experience_years !== undefined) profileUpdates.experience_years = parseInt(updates.experience_years) || 0;
-      if (updates.specializations) profileUpdates.specializations = updates.specializations;
-      if (updates.max_active_jobs !== undefined) profileUpdates.max_active_jobs = updates.max_active_jobs;
+      if (hasField('full_name') || hasField('name')) {
+        const nextFullName = hasField('full_name') ? updates.full_name : updates.name;
+        profileUpdates.full_name = String(nextFullName || '').trim();
+      }
+
+      if (hasField('phone')) {
+        const rawPhone = String(updates.phone || '').trim();
+        if (!rawPhone) {
+          profileUpdates.phone = '';
+        } else {
+          const normalizedPhone = normalizeKyrgyzPhone(rawPhone);
+          if (!normalizedPhone) {
+            return { success: false, message: 'Phone must be a valid Kyrgyz number (+996XXXXXXXXX)' };
+          }
+          profileUpdates.phone = normalizedPhone;
+        }
+      }
+
+      if (hasField('email')) {
+        const normalizedEmail = String(updates.email || '').trim().toLowerCase();
+        if (normalizedEmail && !EMAIL_FORMAT_REGEX.test(normalizedEmail)) {
+          return { success: false, message: 'Invalid email format' };
+        }
+        profileUpdates.email = normalizedEmail;
+      }
+
+      if (hasField('service_area')) {
+        profileUpdates.service_area = String(updates.service_area || '').trim();
+      }
+
+      if (hasField('specializations')) {
+        profileUpdates.specializations = updates.specializations;
+      }
+
+      if (hasField('max_active_jobs')) {
+        const parsed = parseNonNegativeInteger(updates.max_active_jobs, 'Max active jobs', { allowNull: true });
+        if (parsed.error) return { success: false, message: parsed.error };
+        if (!parsed.skip) profileUpdates.max_active_jobs = parsed.value;
+      }
+
+      if (hasField('max_immediate_orders')) {
+        const parsed = parseNonNegativeInteger(updates.max_immediate_orders, 'Max immediate orders', { allowNull: true });
+        if (parsed.error) return { success: false, message: parsed.error };
+        if (!parsed.skip) profileUpdates.max_immediate_orders = parsed.value;
+      }
+
+      if (hasField('max_pending_confirmation')) {
+        const parsed = parseNonNegativeInteger(updates.max_pending_confirmation, 'Max pending confirmation', { allowNull: true });
+        if (parsed.error) return { success: false, message: parsed.error };
+        if (!parsed.skip) profileUpdates.max_pending_confirmation = parsed.value;
+      }
+
+      if (hasField('partner_commission_rate')) {
+        const raw = String(updates.partner_commission_rate ?? '').trim();
+        if (!raw) {
+          profileUpdates.partner_commission_rate = null;
+        } else {
+          const parsed = Number(raw.replace(',', '.'));
+          if (!Number.isFinite(parsed) || parsed < 0) {
+            return { success: false, message: 'Partner commission rate must be between 0 and 100' };
+          }
+          const normalizedRate = parsed <= 1 ? parsed : parsed / 100;
+          if (normalizedRate < 0 || normalizedRate > 1) {
+            return { success: false, message: 'Partner commission rate must be between 0 and 100' };
+          }
+          profileUpdates.partner_commission_rate = Number(normalizedRate.toFixed(5));
+        }
+      }
+
+      if (hasField('partner_min_payout')) {
+        const parsed = parseNonNegativeDecimal(updates.partner_min_payout, 'Partner minimum payout', { allowNull: true, precision: 2 });
+        if (parsed.error) return { success: false, message: parsed.error };
+        if (!parsed.skip) profileUpdates.partner_min_payout = parsed.value;
+      }
+
+      if (!Object.keys(profileUpdates).length) {
+        return { success: false, message: 'No valid profile fields to update' };
+      }
 
       const { data, error } = await supabase
         .from('profiles')
@@ -605,11 +801,13 @@ class AuthService {
   }
 
   /**
-   * Create new user (admin only) - Creates user in auth + profile
-   * Used to add new masters or dispatchers
+   * Create new user (admin/dispatcher/partner) - Creates user in auth + profile
+   * Admin can create master/dispatcher/partner.
+   * Dispatcher/partner can create only master accounts (always unverified).
    */
-  async createUser(userData) {
-    debug(`${LOG_PREFIX} Creating new user: ${userData.email} (${userData.role})`);
+  async createUser(userData, options = {}) {
+    const requestedRole = String(userData?.role || '').trim().toLowerCase();
+    debug(`${LOG_PREFIX} Creating new user: ${userData?.email} (${requestedRole || 'unknown'})`);
 
     let originalSessionTokens = null;
     let originalSessionUserId = null;
@@ -657,24 +855,108 @@ class AuthService {
       }
     };
 
+    let sessionRestored = false;
     try {
-      if (!userData.email || !userData.password || !userData.role) {
+      if (!userData?.email || !userData?.password || !requestedRole) {
         throw new Error('Email, password, and role are required');
       }
 
-      if (!['master', 'dispatcher'].includes(userData.role)) {
-        throw new Error('Role must be master or dispatcher');
+      if (!['master', 'dispatcher', 'partner'].includes(requestedRole)) {
+        throw new Error('Role must be master, dispatcher, or partner');
+      }
+
+      let creatorRole = String(options?.creatorRole || '').trim().toLowerCase();
+      if (!creatorRole) {
+        const currentProfile = await this.getCurrentUser({ retries: 1, retryDelayMs: 250 });
+        creatorRole = String(currentProfile?.role || '').trim().toLowerCase();
+      }
+
+      if (!['admin', 'dispatcher', 'partner'].includes(creatorRole)) {
+        throw new Error('Only admins, dispatchers, or partners can create users');
+      }
+
+      if ((creatorRole === 'dispatcher' || creatorRole === 'partner') && requestedRole !== 'master') {
+        throw new Error('Dispatchers and partners can only create master accounts');
+      }
+
+      const normalizedEmail = String(userData.email || '').trim().toLowerCase();
+      const normalizedFullName = String(userData.full_name || '').trim();
+      const password = String(userData.password || '');
+      const rawPhone = String(userData.phone || '').trim();
+      const normalizedPhone = rawPhone ? normalizeKyrgyzPhone(rawPhone) : '';
+
+      if (!EMAIL_FORMAT_REGEX.test(normalizedEmail)) {
+        throw new Error('Invalid email format');
+      }
+
+      if (password.length < 6) {
+        throw new Error('Password must be at least 6 characters');
+      }
+
+      if (rawPhone && !normalizedPhone) {
+        throw new Error('Phone must be a valid Kyrgyz number (+996XXXXXXXXX)');
+      }
+
+      const normalizePartnerRateToRatio = (value) => {
+        if (value === undefined || value === null || value === '') return null;
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return null;
+        if (parsed < 0) return null;
+        if (parsed <= 1) return parsed;
+        if (parsed <= 100) return parsed / 100;
+        return null;
+      };
+
+      const parseNonNegativeNumber = (value) => {
+        if (value === undefined || value === null || value === '') return null;
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed < 0) return null;
+        return parsed;
+      };
+
+      const partnerCommissionRate = requestedRole === 'partner'
+        ? normalizePartnerRateToRatio(userData.partner_commission_rate)
+        : null;
+      const partnerMinPayout = requestedRole === 'partner'
+        ? parseNonNegativeNumber(userData.partner_min_payout)
+        : null;
+      const parseOptionalLimit = (value) => {
+        if (value === undefined) return { provided: false, value: null, error: null };
+        const raw = String(value ?? '').trim();
+        if (!raw) return { provided: true, value: null, error: null };
+        if (!/^\d+$/.test(raw)) return { provided: true, value: null, error: 'Master limits must be non-negative whole numbers' };
+        return { provided: true, value: Number.parseInt(raw, 10), error: null };
+      };
+      const maxActiveJobs = parseOptionalLimit(userData.max_active_jobs);
+      const maxImmediateOrders = parseOptionalLimit(userData.max_immediate_orders);
+      const maxPendingConfirmation = parseOptionalLimit(userData.max_pending_confirmation);
+
+      if (requestedRole === 'partner' && userData.partner_commission_rate !== undefined
+        && userData.partner_commission_rate !== null && userData.partner_commission_rate !== ''
+        && partnerCommissionRate === null) {
+        throw new Error('Partner commission rate must be between 0 and 100');
+      }
+
+      if (requestedRole === 'partner' && userData.partner_min_payout !== undefined
+        && userData.partner_min_payout !== null && userData.partner_min_payout !== ''
+        && partnerMinPayout === null) {
+        throw new Error('Partner minimum payout must be a non-negative number');
+      }
+
+      if (requestedRole === 'master' && (maxActiveJobs.error || maxImmediateOrders.error || maxPendingConfirmation.error)) {
+        throw new Error(maxActiveJobs.error || maxImmediateOrders.error || maxPendingConfirmation.error);
       }
 
       // Create auth user via Supabase
       const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: userData.email.trim().toLowerCase(),
-        password: userData.password,
+        email: normalizedEmail,
+        password,
         options: {
           data: {
-            full_name: userData.full_name || '',
-            phone: userData.phone || '',
-            role: userData.role
+            full_name: normalizedFullName || '',
+            phone: normalizedPhone || '',
+            // Never trust role from client metadata; DB trigger forces initial "client".
+            role: 'client',
           }
         }
       });
@@ -688,50 +970,100 @@ class AuthService {
         throw new Error('Failed to create user');
       }
 
-      // Update profile with additional details (trigger should have created basic profile)
-      const profileUpdates = {
-        full_name: userData.full_name || '',
-        phone: userData.phone || '',
-        role: userData.role,
-        is_active: true,
-        is_verified: userData.role === 'dispatcher', // Dispatchers auto-verified
-      };
+      // Restore admin session immediately after signup to avoid UI/session switching.
+      await restoreOriginalSession();
+      sessionRestored = true;
 
-      if (userData.role === 'master') {
-        profileUpdates.service_area = userData.service_area || '';
-        profileUpdates.experience_years = parseInt(userData.experience_years) || 0;
+      const isStaffMasterProvision = requestedRole === 'master'
+        && (creatorRole === 'dispatcher' || creatorRole === 'partner');
+      const configureRpcName = isStaffMasterProvision
+        ? 'staff_configure_master_profile'
+        : 'admin_configure_user_profile';
+      const configurePayload = isStaffMasterProvision
+        ? {
+          p_target_user_id: authData.user.id,
+          p_full_name: normalizedFullName || null,
+          p_phone: normalizedPhone || null,
+          p_service_area: String(userData.service_area || '').trim() || null,
+        }
+        : {
+          p_target_user_id: authData.user.id,
+          p_role: requestedRole,
+          p_full_name: normalizedFullName || null,
+          p_phone: normalizedPhone || null,
+          p_service_area: requestedRole === 'master' ? String(userData.service_area || '').trim() : null,
+          p_partner_commission_rate: requestedRole === 'partner' ? partnerCommissionRate : null,
+          p_partner_min_payout: requestedRole === 'partner' ? partnerMinPayout : null,
+          p_mark_verified: requestedRole === 'dispatcher' || requestedRole === 'partner',
+        };
+
+      const { data: configureResult, error: configureError } = await supabase.rpc(configureRpcName, configurePayload);
+
+      if (configureError) {
+        console.error(`${LOG_PREFIX} ${configureRpcName} RPC error:`, configureError);
+        const rpcCode = String(configureError?.code || '');
+        const rpcMessage = String(configureError?.message || '').toLowerCase();
+        if (rpcCode === '42883' || rpcMessage.includes(configureRpcName)) {
+          if (configureRpcName === 'staff_configure_master_profile') {
+            throw new Error('Database patch missing: apply PATCH_STAFF_MASTER_CREATE_AND_ADMIN_DELETE.sql');
+          }
+          throw new Error('Database patch missing: apply PATCH_ADMIN_PANEL_USER_PROVISIONING.sql');
+        }
+        throw configureError;
       }
 
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .update(profileUpdates)
-        .eq('id', authData.user.id)
-        .select()
-        .single();
-
-      if (profileError) {
-        console.error(`${LOG_PREFIX} Profile update error:`, profileError);
-        // User created but profile update failed - still return success with warning
-        this.invalidateProfileListCache();
+      if (!configureResult?.success) {
+        const message = configureResult?.message || 'User created but profile setup failed.';
         return {
-          success: true,
-          message: 'User created but profile update failed. Refresh to see changes.',
-          user: { id: authData.user.id, email: userData.email, role: userData.role }
+          success: false,
+          message,
+          user: { id: authData.user.id, email: normalizedEmail, role: requestedRole },
         };
+      }
+
+      let profile = configureResult?.user || { id: authData.user.id, email: normalizedEmail, role: requestedRole };
+
+      if (creatorRole === 'admin' && requestedRole === 'master') {
+        const masterLimitUpdates = {};
+        if (maxActiveJobs.provided) masterLimitUpdates.max_active_jobs = maxActiveJobs.value;
+        if (maxImmediateOrders.provided) masterLimitUpdates.max_immediate_orders = maxImmediateOrders.value;
+        if (maxPendingConfirmation.provided) masterLimitUpdates.max_pending_confirmation = maxPendingConfirmation.value;
+
+        if (Object.keys(masterLimitUpdates).length) {
+          const limitUpdateResult = await this.updateProfile(authData.user.id, masterLimitUpdates);
+          if (!limitUpdateResult?.success) {
+            return {
+              success: false,
+              message: limitUpdateResult?.message || 'User created but master limits update failed',
+              user: profile,
+            };
+          }
+          profile = limitUpdateResult.user || profile;
+        }
       }
 
       debug(`${LOG_PREFIX} User created successfully: ${profile.full_name}`);
       this.invalidateProfileListCache();
+      const roleTitleMap = {
+        master: 'Master',
+        dispatcher: 'Dispatcher',
+        partner: 'Partner',
+      };
+      const defaultSuccessMessage = isStaffMasterProvision
+        ? 'Master created. Waiting for admin verification'
+        : `${roleTitleMap[requestedRole] || 'User'} created successfully`;
       return {
         success: true,
-        message: `${userData.role === 'master' ? 'Master' : 'Dispatcher'} created successfully`,
+        message: configureResult?.message || defaultSuccessMessage,
         user: profile
       };
     } catch (error) {
       console.error(`${LOG_PREFIX} createUser error:`, error);
       return { success: false, message: error.message };
     } finally {
-      await restoreOriginalSession();
+      if (!sessionRestored) {
+        await restoreOriginalSession();
+      }
     }
   }
 
@@ -776,7 +1108,47 @@ class AuthService {
   }
 
   /**
-   * Reset user password (admin only) - Securely resets password for masters/dispatchers
+   * Verify partner (admin only)
+   */
+  async verifyPartner(partnerId) {
+    debug(`${LOG_PREFIX} Verifying partner: ${partnerId}`);
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ is_verified: true, is_active: true })
+        .eq('id', partnerId)
+        .eq('role', 'partner');
+      if (error) throw error;
+      this.invalidateProfileListCache();
+      return { success: true, message: 'Partner verified' };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} verifyPartner error:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Unverify partner (admin only)
+   */
+  async unverifyPartner(partnerId) {
+    debug(`${LOG_PREFIX} Unverifying partner: ${partnerId}`);
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ is_verified: false, is_active: false })
+        .eq('id', partnerId)
+        .eq('role', 'partner');
+      if (error) throw error;
+      this.invalidateProfileListCache();
+      return { success: true, message: 'Partner unverified' };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} unverifyPartner error:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Reset user password (admin only) - Securely resets password for masters/dispatchers/partners
    * Uses admin_reset_user_password RPC function from PATCH_ADMIN_PASSWORD_RESET.sql
    */
   async resetUserPassword(userId, newPassword) {
@@ -816,6 +1188,54 @@ class AuthService {
       };
     } catch (error) {
       console.error(`${LOG_PREFIX} resetUserPassword failed:`, error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Hard delete user (admin only)
+   * Uses admin_hard_delete_user RPC to remove auth + profile with audit logging.
+   */
+  async hardDeleteUser(userId, reason = null) {
+    debug(`${LOG_PREFIX} Hard deleting user: ${userId}`);
+
+    try {
+      if (!userId) {
+        return { success: false, message: 'User id is required' };
+      }
+
+      const { data, error } = await supabase.rpc('admin_hard_delete_user', {
+        p_target_user_id: userId,
+        p_reason: reason || null,
+      });
+
+      if (error) {
+        console.error(`${LOG_PREFIX} admin_hard_delete_user RPC error:`, error);
+        const rpcCode = String(error?.code || '');
+        const rpcMessage = String(error?.message || '').toLowerCase();
+        if (rpcCode === '42883' || rpcMessage.includes('admin_hard_delete_user')) {
+          throw new Error('Database patch missing: apply PATCH_STAFF_MASTER_CREATE_AND_ADMIN_DELETE.sql');
+        }
+        throw error;
+      }
+
+      if (!data?.success) {
+        return {
+          success: false,
+          message: data?.message || data?.error || 'Failed to delete user',
+          error: data?.error || null,
+          blockers: data?.blockers || null,
+        };
+      }
+
+      this.invalidateProfileListCache();
+      return {
+        success: true,
+        message: data?.message || 'User deleted successfully',
+        deletedRole: data?.deleted_role || null,
+      };
+    } catch (error) {
+      console.error(`${LOG_PREFIX} hardDeleteUser error:`, error);
       return { success: false, message: error.message };
     }
   }

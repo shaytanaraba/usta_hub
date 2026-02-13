@@ -45,6 +45,7 @@ export default function DispatcherQueueTab({
   setShowNeedsAttention,
   setDetailsOrder,
   openAssignModal,
+  canAssignMasters = true,
   filteredOrders,
   queueTotalCount,
   pageSize,
@@ -55,6 +56,8 @@ export default function DispatcherQueueTab({
   page,
   setPage,
   setShowPaymentModal,
+  setPaymentOrder,
+  setPaymentData,
   t,
   STATUS_COLORS,
   getOrderStatusLabel,
@@ -323,7 +326,7 @@ export default function DispatcherQueueTab({
           <Text style={[styles.compactClient, !isDark && styles.textDark]}>{item.client?.full_name || item.client_name || 'N/A'}</Text>
           {item.master && <Text style={styles.compactMaster}>{TRANSLATIONS[language].labelMasterPrefix}{item.master.full_name}</Text>}
           {item.final_price && <Text style={styles.compactPrice}>{item.final_price}c</Text>}
-          {['placed', 'reopened'].includes(item.status) && (
+          {canAssignMasters && ['placed', 'reopened'].includes(item.status) && (
             <TouchableOpacity style={styles.compactAssignBtn} onPress={(e) => { e.stopPropagation?.(); openAssignModal(item); }}>
               <Text style={styles.compactAssignText}>{TRANSLATIONS[language].actionAssign}</Text>
             </TouchableOpacity>
@@ -337,35 +340,55 @@ export default function DispatcherQueueTab({
     </TouchableOpacity>
   );
 
-  const renderCard = ({ item }) => (
-    <TouchableOpacity style={[styles.orderCard, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(item)}>
-      <View style={styles.cardHeader}>
-        <Text style={[styles.cardService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, t)}</Text>
-        <View style={[styles.cardStatus, { backgroundColor: STATUS_COLORS[item.status] }]}>
-          <Text style={styles.cardStatusText}>{getOrderStatusLabel(item.status, t)}</Text>
+  const renderCard = ({ item }) => {
+    const payAmount = item?.final_price ?? item?.initial_price ?? '-';
+    return (
+      <TouchableOpacity style={[styles.orderCard, !isDark && styles.cardLight]} onPress={() => setDetailsOrder(item)}>
+        <View style={styles.cardHeader}>
+          <Text style={[styles.cardService, !isDark && styles.textDark]}>{getServiceLabel(item.service_type, t)}</Text>
+          <View style={[styles.cardStatus, { backgroundColor: STATUS_COLORS[item.status] }]}>
+            <Text style={styles.cardStatusText}>{getOrderStatusLabel(item.status, t)}</Text>
+          </View>
         </View>
-      </View>
-      <Text style={[styles.cardAddr, !isDark && styles.textSecondary]} numberOfLines={2}>{item.full_address}</Text>
-      <View style={styles.cardFooter}>
-        <Text style={[styles.cardClient, !isDark && styles.textDark]}>{item.client?.full_name || item.client_name || 'N/A'}</Text>
-        <Text style={styles.cardTime}>{getTimeAgo(item.created_at, t)}</Text>
-      </View>
-      {['placed', 'reopened'].includes(item.status) && (
-        <TouchableOpacity style={styles.cardAssignBtn} onPress={(e) => { e.stopPropagation?.(); openAssignModal(item); }}>
-          <Text style={styles.cardAssignText}>{TRANSLATIONS[language].actionAssign}</Text>
-        </TouchableOpacity>
-      )}
-      {item.status === 'completed' && (
-        <TouchableOpacity style={styles.cardPayBtn} onPress={(e) => { e.stopPropagation?.(); setDetailsOrder(item); setShowPaymentModal(true); }}>
-          <Text style={styles.cardPayText}>
-            {TRANSLATIONS[language].btnPayWithAmount
-              ? TRANSLATIONS[language].btnPayWithAmount.replace('{0}', item.final_price)
-              : `Pay ${item.final_price}c`}
-          </Text>
-        </TouchableOpacity>
-      )}
-    </TouchableOpacity>
-  );
+        <Text style={[styles.cardAddr, !isDark && styles.textSecondary]} numberOfLines={2}>{item.full_address}</Text>
+        <View style={styles.cardFooter}>
+          <Text style={[styles.cardClient, !isDark && styles.textDark]}>{item.client?.full_name || item.client_name || 'N/A'}</Text>
+          <Text style={styles.cardTime}>{getTimeAgo(item.created_at, t)}</Text>
+        </View>
+        {canAssignMasters && ['placed', 'reopened'].includes(item.status) && (
+          <TouchableOpacity style={styles.cardAssignBtn} onPress={(e) => { e.stopPropagation?.(); openAssignModal(item); }}>
+            <Text style={styles.cardAssignText}>{TRANSLATIONS[language].actionAssign}</Text>
+          </TouchableOpacity>
+        )}
+        {item.status === 'completed' && (
+          <TouchableOpacity
+            style={styles.cardPayBtn}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              setPaymentOrder(item);
+              setPaymentData({
+                finalAmount: item?.final_price !== null && item?.final_price !== undefined && item?.final_price !== ''
+                  ? String(item.final_price)
+                  : (item?.initial_price !== null && item?.initial_price !== undefined && item?.initial_price !== '' ? String(item.initial_price) : ''),
+                reportReason: '',
+                workPerformed: String(item?.work_performed || ''),
+                hoursWorked: item?.hours_worked !== null && item?.hours_worked !== undefined && item?.hours_worked !== ''
+                  ? String(item.hours_worked)
+                  : '',
+              });
+              setShowPaymentModal(true);
+            }}
+          >
+            <Text style={styles.cardPayText}>
+              {TRANSLATIONS[language].btnPayWithAmount
+                ? TRANSLATIONS[language].btnPayWithAmount.replace('{0}', payAmount)
+                : `Pay ${payAmount}c`}
+            </Text>
+          </TouchableOpacity>
+        )}
+      </TouchableOpacity>
+    );
+  };
 
   const totalPages = Math.max(1, Math.ceil((queueTotalCount || 0) / pageSize));
   if (loading && !refreshing) {

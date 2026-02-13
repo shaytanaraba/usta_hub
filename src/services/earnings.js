@@ -31,7 +31,7 @@ class EarningsService {
                     total_earnings, total_commission_owed, total_commission_paid, 
                     completed_jobs_count, prepaid_balance, initial_deposit, 
                     balance_blocked_at, balance_threshold, refusal_count, rating,
-                    max_active_jobs, service_area, license_number, experience_years,
+                    max_active_jobs, service_area, license_number,
                     specializations, full_name, email, phone
                 `)
                 .eq('id', masterId)
@@ -57,7 +57,6 @@ class EarningsService {
                 maxActiveJobs: data.max_active_jobs || 2,
                 serviceArea: data.service_area || '',
                 licenseNumber: data.license_number || '',
-                experienceYears: data.experience_years || 0,
                 specializations: data.specializations || [],
                 fullName: data.full_name || '',
                 email: data.email || '',
@@ -83,7 +82,6 @@ class EarningsService {
                 maxActiveJobs: 2,
                 serviceArea: '',
                 licenseNumber: '',
-                experienceYears: 0,
                 specializations: [],
                 fullName: '',
                 email: '',

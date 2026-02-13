@@ -27,6 +27,7 @@ export default function AdminSettingsTab(props) {
         actionLoading,
         showToast,
         loadSettings,
+        onSettingsUpdated,
         ordersService,
         configurationCollapsed,
         setDistrictModal,
@@ -126,6 +127,7 @@ export default function AdminSettingsTab(props) {
                                                     });
                                                     showToast(TRANSLATIONS.settingsSaved || 'Settings saved', 'success');
                                                     loadSettings();
+                                                    onSettingsUpdated?.();
                                                     setIsEditing(false);
                                                 } catch (error) {
                                                     showToast(TRANSLATIONS.errorSavingSettings || 'Error saving settings', 'error');
@@ -258,11 +260,11 @@ export default function AdminSettingsTab(props) {
                                                 placeholder="30"
                                                 placeholderTextColor="#64748b"
                                             />
-                                            <Text style={styles.settingsInputSuffix}>min</Text>
+                                            <Text style={styles.settingsInputSuffix}>{TRANSLATIONS.unitMin || 'min'}</Text>
                                         </View>
                                     ) : (
                                         <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
-                                            {settings.claim_timeout_minutes || 30} <Text style={styles.settingsFieldUnit}>min</Text>
+                                            {settings.claim_timeout_minutes || 30} <Text style={styles.settingsFieldUnit}>{TRANSLATIONS.unitMin || 'min'}</Text>
                                         </Text>
                                     )}
                                 </View>
@@ -281,11 +283,11 @@ export default function AdminSettingsTab(props) {
                                                 placeholder="48"
                                                 placeholderTextColor="#64748b"
                                             />
-                                            <Text style={styles.settingsInputSuffix}>hours</Text>
+                                            <Text style={styles.settingsInputSuffix}>{TRANSLATIONS.unitHours || 'hours'}</Text>
                                         </View>
                                     ) : (
                                         <Text style={[styles.settingsFieldValue, !isDark && styles.textDark]}>
-                                            {settings.order_expiry_hours || 48} <Text style={styles.settingsFieldUnit}>hours</Text>
+                                            {settings.order_expiry_hours || 48} <Text style={styles.settingsFieldUnit}>{TRANSLATIONS.unitHours || 'hours'}</Text>
                                         </Text>
                                     )}
                                 </View>

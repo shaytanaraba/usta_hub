@@ -48,6 +48,12 @@ export default function DispatcherCreateOrderTab({
 }) {
   const TRANSLATIONS = translations;
   const publishDisabled = !confirmChecked || actionLoading;
+  const getServiceTypeLabel = (service) => {
+    if (!service) return '';
+    if (language === 'ru') return service.name_ru || service.name_en || service.name_kg || service.label || service.id;
+    if (language === 'kg') return service.name_kg || service.name_ru || service.name_en || service.label || service.id;
+    return service.name_en || service.name_ru || service.name_kg || service.label || service.id;
+  };
 
   const renderLoading = () => (
     <View style={styles.createWrapper}>
@@ -196,16 +202,16 @@ export default function DispatcherCreateOrderTab({
               ]}
               onPress={() => setNewOrder({ ...newOrder, serviceType: service.id })}
             >
-              <Text
-                style={[
-                  styles.serviceBtnText,
-                  !isDark && newOrder.serviceType !== service.id && styles.textDark,
-                  newOrder.serviceType === service.id && styles.serviceBtnTextActive,
-                ]}
-              >
-                {service.label}
-              </Text>
-            </TouchableOpacity>
+                <Text
+                  style={[
+                    styles.serviceBtnText,
+                    !isDark && newOrder.serviceType !== service.id && styles.textDark,
+                    newOrder.serviceType === service.id && styles.serviceBtnTextActive,
+                  ]}
+                >
+                  {getServiceTypeLabel(service)}
+                </Text>
+              </TouchableOpacity>
           ))}
         </View>
         <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].problemDesc} *</Text>

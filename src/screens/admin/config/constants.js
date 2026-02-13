@@ -1,4 +1,4 @@
-export const ADMIN_TAB_KEYS = ['analytics', 'people', 'create_order', 'orders', 'settings'];
+export const ADMIN_TAB_KEYS = ['analytics', 'people', 'create_order', 'orders', 'disputes', 'payouts', 'settings'];
 export const DEFAULT_ADMIN_TAB = 'analytics';
 
 export const normalizeAdminTab = (tab) => {
@@ -11,6 +11,8 @@ export const buildAdminMenuItems = (translations = {}) => ([
   { key: 'people', label: translations.team || translations.tabTeam || 'Team', icon: 'people' },
   { key: 'create_order', label: translations.createOrder || 'Create Order', icon: 'add' },
   { key: 'orders', label: translations.ordersQueue || translations.orders || 'Order Queue', icon: 'list' },
+  { key: 'disputes', label: translations.disputes || 'Disputes', icon: 'warning' },
+  { key: 'payouts', label: translations.payouts || 'Payouts', icon: 'cash' },
   { key: 'settings', label: translations.settings || 'Settings', icon: 'settings' },
 ]);
 

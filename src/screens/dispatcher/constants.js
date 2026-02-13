@@ -59,3 +59,4 @@ export const INITIAL_ORDER_STATE = {
 };
 
 export const DISPATCHER_TABS = ['stats', 'queue', 'create', 'settings'];
+export const PARTNER_TABS = ['stats', 'queue', 'create', 'settings'];

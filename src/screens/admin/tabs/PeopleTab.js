@@ -13,6 +13,7 @@ export default function AdminPeopleTab(props) {
         setShowAddUserModal,
         renderMasters,
         renderStaff,
+        renderPartners,
         renderHeader,
     } = props;
 
@@ -32,23 +33,52 @@ export default function AdminPeopleTab(props) {
                         onPress={() => setPeopleView('staff')}>
                         <Text style={[styles.tabBtnText, peopleView === 'staff' && styles.tabBtnTextActive, !isDark && peopleView !== 'staff' && styles.textDark]}>{TRANSLATIONS.peopleDispatchers || 'Dispatchers'}</Text>
                     </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.tabBtn, peopleView === 'partners' && styles.tabBtnActive, !isDark && peopleView !== 'partners' && styles.tabBtnLight, { borderRadius: 100, paddingHorizontal: 20 }]}
+                        onPress={() => setPeopleView('partners')}>
+                        <Text style={[styles.tabBtnText, peopleView === 'partners' && styles.tabBtnTextActive, !isDark && peopleView !== 'partners' && styles.textDark]}>{TRANSLATIONS.peoplePartners || 'Partners'}</Text>
+                    </TouchableOpacity>
                 </View>
 
                 <TouchableOpacity
-                    style={[styles.actionButton, { backgroundColor: peopleView === 'masters' ? '#22c55e' : '#3b82f6', paddingHorizontal: 16, paddingVertical: 10, marginTop: 0 }]}
+                    style={[styles.actionButton, {
+                        backgroundColor:
+                            peopleView === 'masters' ? '#22c55e'
+                                : peopleView === 'partners' ? '#0ea5e9'
+                                    : '#3b82f6',
+                        paddingHorizontal: 16,
+                        paddingVertical: 10,
+                        marginTop: 0
+                    }]}
                     onPress={() => {
-                        setAddUserRole(peopleView === 'masters' ? 'master' : 'dispatcher');
+                        setAddUserRole(
+                            peopleView === 'masters'
+                                ? 'master'
+                                : peopleView === 'partners'
+                                    ? 'partner'
+                                    : 'dispatcher'
+                        );
                         setShowAddUserModal(true);
                     }}
                 >
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                         <Ionicons name="person-add" size={16} color="#fff" />
-                        <Text style={styles.actionButtonText}>{peopleView === 'masters' ? (TRANSLATIONS.addMaster || 'Add Master') : (TRANSLATIONS.addDispatcher || 'Add Dispatcher')}</Text>
+                        <Text style={styles.actionButtonText}>
+                            {peopleView === 'masters'
+                                ? (TRANSLATIONS.addMaster || 'Add Master')
+                                : peopleView === 'partners'
+                                    ? (TRANSLATIONS.addPartner || 'Add Partner')
+                                    : (TRANSLATIONS.addDispatcher || 'Add Dispatcher')}
+                        </Text>
                     </View>
                 </TouchableOpacity>
             </View>
 
-            {peopleView === 'masters' ? renderMasters() : renderStaff()}
+            {peopleView === 'masters'
+                ? renderMasters()
+                : peopleView === 'partners'
+                    ? renderPartners()
+                    : renderStaff()}
         </View>
     );
 }

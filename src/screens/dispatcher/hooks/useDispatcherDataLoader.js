@@ -96,11 +96,26 @@ export default function useDispatcherDataLoader({
       });
 
       if (isStale()) return;
-      setOrders(response?.data || []);
-      setQueueTotalCount(Number(response?.count || 0));
+      const queueItems = Array.isArray(response?.data) ? response.data : [];
+      const visibleQueueItems = queueItems.filter((item) => !item?.is_disputed);
+      const hiddenQueueItems = Math.max(0, queueItems.length - visibleQueueItems.length);
+      const rawQueueCount = Number(response?.count || 0);
+      const normalizedQueueCount = Number.isFinite(rawQueueCount)
+        ? Math.max(0, rawQueueCount - hiddenQueueItems)
+        : visibleQueueItems.length;
+      const rawAttentionItems = Array.isArray(response?.attentionItems) ? response.attentionItems : [];
+      const visibleAttentionItems = rawAttentionItems.filter((item) => !item?.is_disputed);
+      const hiddenAttentionItems = Math.max(0, rawAttentionItems.length - visibleAttentionItems.length);
+      const rawAttentionCount = Number(response?.attentionCount || 0);
+      const normalizedAttentionCount = Number.isFinite(rawAttentionCount)
+        ? Math.max(0, rawAttentionCount - hiddenAttentionItems)
+        : visibleAttentionItems.length;
+
+      setOrders(visibleQueueItems);
+      setQueueTotalCount(normalizedQueueCount);
       setStatusCounts(response?.statusCounts || EMPTY_STATUS_COUNTS);
-      setAttentionOrders(response?.attentionItems || []);
-      setAttentionCount(Number(response?.attentionCount || 0));
+      setAttentionOrders(visibleAttentionItems);
+      setAttentionCount(normalizedAttentionCount);
     } catch (error) {
       if (!isStale()) {
         dispatcherError('DataLoader', 'loadQueueData error', error);
@@ -133,7 +148,7 @@ export default function useDispatcherDataLoader({
   ]);
 
   const loadServiceTypes = useCallback(async () => {
-    const cacheKey = METADATA_KEYS.SERVICE_TYPES;
+    const cacheKey = `${METADATA_KEYS.SERVICE_TYPES}:${language}`;
     const cached = await getCachedMetadata(cacheKey, METADATA_TTL_MS.SERVICE_TYPES);
     if (cached?.length) {
       setServiceTypes(cached);
@@ -144,10 +159,16 @@ export default function useDispatcherDataLoader({
       const types = await ordersService.getServiceTypes();
       perf?.markApiDone?.('metadata', 'serviceTypes', Date.now() - apiStartedAt, true, { count: types?.length || 0 });
       if (types && types.length > 0) {
-        const labelField = language === 'ru' ? 'name_ru' : language === 'kg' ? 'name_kg' : 'name_en';
         const mapped = types.map((t) => ({
           id: t.code,
-          label: t[labelField] || t.name_en,
+          label: language === 'ru'
+            ? (t.name_ru || t.name_en || t.name_kg || t.code)
+            : language === 'kg'
+              ? (t.name_kg || t.name_ru || t.name_en || t.code)
+              : (t.name_en || t.name_ru || t.name_kg || t.code),
+          name_en: t.name_en || null,
+          name_ru: t.name_ru || null,
+          name_kg: t.name_kg || null,
         }));
         setServiceTypes(mapped);
         await setCachedMetadata(cacheKey, mapped);
@@ -160,7 +181,7 @@ export default function useDispatcherDataLoader({
   }, [language, perf, setServiceTypes]);
 
   const loadDistricts = useCallback(async () => {
-    const cacheKey = METADATA_KEYS.DISTRICTS;
+    const cacheKey = `${METADATA_KEYS.DISTRICTS}:${language}`;
     const cached = await getCachedMetadata(cacheKey, METADATA_TTL_MS.DISTRICTS);
     if (cached?.length) {
       setDistricts(cached);
@@ -171,11 +192,17 @@ export default function useDispatcherDataLoader({
       const data = await ordersService.getDistricts();
       perf?.markApiDone?.('metadata', 'districts', Date.now() - apiStartedAt, true, { count: data?.length || 0 });
       if (data && data.length > 0) {
-        const labelField = language === 'ru' ? 'name_ru' : language === 'kg' ? 'name_kg' : 'name_en';
         const mapped = data.map((d) => ({
           id: d.code,
-          label: d[labelField] || d.name_en,
+          label: language === 'ru'
+            ? (d.name_ru || d.name_en || d.name_kg || d.code)
+            : language === 'kg'
+              ? (d.name_kg || d.name_ru || d.name_en || d.code)
+              : (d.name_en || d.name_ru || d.name_kg || d.code),
           region: d.region,
+          name_en: d.name_en || null,
+          name_ru: d.name_ru || null,
+          name_kg: d.name_kg || null,
         }));
         setDistricts(mapped);
         await setCachedMetadata(cacheKey, mapped);

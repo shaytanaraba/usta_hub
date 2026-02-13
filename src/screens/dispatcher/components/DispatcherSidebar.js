@@ -5,6 +5,7 @@ export default function DispatcherSidebar({
   visible,
   styles,
   isDark,
+  isPartner,
   activeTab,
   onSelectTab,
   onClose,
@@ -16,6 +17,10 @@ export default function DispatcherSidebar({
   user,
   onLogout,
 }) {
+  const roleTitle = isPartner
+    ? (translations[language].partnerPro || 'Partner Pro')
+    : (translations[language].dispatcherPro || 'Dispatcher Pro');
+
   return (
     <Modal visible={visible} transparent animationType="none">
       <View style={styles.sidebarOverlay}>
@@ -23,7 +28,7 @@ export default function DispatcherSidebar({
           <View style={[styles.sidebarHeader, !isDark && styles.sidebarHeaderLight]}>
             <View style={styles.sidebarBrand}>
               <Image source={require('../../../../assets/circle.png')} style={styles.sidebarBrandLogo} />
-              <Text style={[styles.sidebarTitle, !isDark && styles.textDark]}>{translations[language].dispatcherPro}</Text>
+              <Text style={[styles.sidebarTitle, !isDark && styles.textDark]}>{roleTitle}</Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.sidebarClose}>
               <Text style={styles.sidebarCloseText}>X</Text>
@@ -31,14 +36,27 @@ export default function DispatcherSidebar({
           </View>
 
           <View style={styles.sidebarNav}>
-            <TouchableOpacity
-              style={[styles.sidebarNavItem, activeTab === 'stats' && styles.sidebarNavItemActive]}
-              onPress={() => onSelectTab('stats')}
-            >
-              <Text style={[styles.sidebarNavText, activeTab === 'stats' && styles.sidebarNavTextActive]}>
-                {translations[language].stats || 'Statistics'}
-              </Text>
-            </TouchableOpacity>
+            {isPartner ? (
+              <>
+                <TouchableOpacity
+                  style={[styles.sidebarNavItem, activeTab === 'stats' && styles.sidebarNavItemActive]}
+                  onPress={() => onSelectTab('stats')}
+                >
+                  <Text style={[styles.sidebarNavText, activeTab === 'stats' && styles.sidebarNavTextActive]}>
+                    {translations[language].stats || 'Statistics'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <TouchableOpacity
+                style={[styles.sidebarNavItem, activeTab === 'stats' && styles.sidebarNavItemActive]}
+                onPress={() => onSelectTab('stats')}
+              >
+                <Text style={[styles.sidebarNavText, activeTab === 'stats' && styles.sidebarNavTextActive]}>
+                  {translations[language].stats || 'Statistics'}
+                </Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={[styles.sidebarNavItem, activeTab === 'queue' && styles.sidebarNavItemActive]}
               onPress={() => onSelectTab('queue')}
@@ -94,12 +112,12 @@ export default function DispatcherSidebar({
             <View style={[styles.sidebarUserCard, !isDark && styles.sidebarBtnLight]}>
               <View style={styles.sidebarUserAvatar}>
                 <Text style={styles.sidebarUserAvatarText}>
-                  {user?.full_name ? user.full_name.split(' ').map((name) => name[0]).join('').substring(0, 2) : 'DP'}
+                  {user?.full_name ? user.full_name.split(' ').map((name) => name[0]).join('').substring(0, 2) : (isPartner ? 'PR' : 'DP')}
                 </Text>
               </View>
               <View style={styles.sidebarUserInfo}>
                 <Text style={[styles.sidebarUserName, !isDark && styles.textDark]} numberOfLines={1}>
-                  {user?.full_name || 'Dispatcher'}
+                  {user?.full_name || (isPartner ? (translations[language].partnerRole || 'Partner') : (translations[language].dispatcherRole || 'Dispatcher'))}
                 </Text>
                 <Text style={styles.sidebarUserStatus}>{translations[language].online}</Text>
               </View>

@@ -6,13 +6,16 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-    View, Text, TouchableOpacity,
+    View, Text, TouchableOpacity, FlatList,
     Modal, TextInput, ScrollView, ActivityIndicator, Alert, Platform,
     Dimensions, Linking, Animated,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import ordersService, { ORDER_STATUS } from '../services/orders';
+import authService from '../services/auth';
+import partnerFinanceService from '../services/partnerFinance';
 import { useToast } from '../contexts/ToastContext';
 import { useLocalization } from '../contexts/LocalizationContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -26,10 +29,13 @@ import useDispatcherUiState from './dispatcher/hooks/useDispatcherUiState';
 import useDispatcherOrderActions from './dispatcher/hooks/useDispatcherOrderActions';
 import {
     INITIAL_ORDER_STATE,
+    DISPATCHER_TABS,
+    PARTNER_TABS,
     SERVICE_TYPES,
     STORAGE_KEYS,
 } from './dispatcher/constants';
 import { generateIdempotencyKey, sanitizeNumberInput } from './dispatcher/utils/formHelpers';
+import { normalizeKyrgyzPhone, isValidKyrgyzPhone } from '../utils/phone';
 import DispatcherPickerModal from './dispatcher/components/DispatcherPickerModal';
 import DispatcherSidebar from './dispatcher/components/DispatcherSidebar';
 import DispatcherHeader from './dispatcher/components/DispatcherHeader';
@@ -40,16 +46,57 @@ import DispatcherStatsTab from './dispatcher/components/tabs/DispatcherStatsTab'
 import styles from './dispatcher/styles/dashboardStyles';
 const LOG_PREFIX = '[DispatcherDashboard]';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const DEFAULT_PAYMENT_CONFIRMATION_DATA = {
+    finalAmount: '',
+    reportReason: '',
+    workPerformed: '',
+    hoursWorked: '',
+};
+const EMAIL_FORMAT_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const buildPaymentConfirmationData = (order) => {
+    const finalAmountValue = order?.final_price ?? order?.initial_price;
+    return {
+        finalAmount: finalAmountValue !== null && finalAmountValue !== undefined && finalAmountValue !== ''
+            ? String(finalAmountValue)
+            : '',
+        reportReason: '',
+        workPerformed: String(order?.work_performed || ''),
+        hoursWorked: order?.hours_worked !== null && order?.hours_worked !== undefined && order?.hours_worked !== ''
+            ? String(order?.hours_worked)
+            : '',
+    };
+};
+const normalizeSearchTerm = (value) => String(value || '').trim().toLowerCase();
+const normalizeSearchDigits = (value) => String(value || '').replace(/\D/g, '');
+const matchesMasterSearch = (master, queryText) => {
+    const query = normalizeSearchTerm(queryText);
+    const digits = normalizeSearchDigits(queryText);
+    if (!query && !digits) return true;
+    const fullName = String(master?.full_name || master?.name || '').toLowerCase();
+    const phone = String(master?.phone || '');
+    const phoneDigits = normalizeSearchDigits(phone);
+    const serviceArea = String(master?.service_area || '').toLowerCase();
+    const haystack = `${fullName} ${phone.toLowerCase()} ${serviceArea}`;
+    if (query && haystack.includes(query)) return true;
+    if (!digits) return false;
+    return phoneDigits.includes(digits);
+};
 
 export default function DispatcherDashboard({ navigation, route }) {
     const { showToast } = useToast();
     const { translations, language, cycleLanguage, setLanguage, t } = useLocalization();
     const TRANSLATIONS = translations;
     const { logout, user: authUser } = useAuth();
+    const routeRole = route?.params?.user?.role || authUser?.role || null;
+    const allowedTabs = useMemo(
+        () => (routeRole === 'partner' ? PARTNER_TABS : DISPATCHER_TABS),
+        [routeRole]
+    );
     const perf = useDispatcherPerf();
 
     // User & Data
     const [user, setUser] = useState(route.params?.user || null);
+    const isPartner = (user?.role || authUser?.role || route?.params?.user?.role) === 'partner';
     const [orders, setOrders] = useState([]);
     const [masters, setMasters] = useState([]);
     const [dispatchers, setDispatchers] = useState([]);
@@ -61,19 +108,37 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [recentAddresses, setRecentAddresses] = useState([]);
     const [serviceTypes, setServiceTypes] = useState(SERVICE_TYPES);
     const [districts, setDistricts] = useState([]);
+    const [partnerFinanceSummary, setPartnerFinanceSummary] = useState(null);
+    const [partnerPayoutRequests, setPartnerPayoutRequests] = useState([]);
+    const [partnerTransactions, setPartnerTransactions] = useState([]);
+    const [partnerFinanceLoading, setPartnerFinanceLoading] = useState(false);
+    const [partnerPayoutAmount, setPartnerPayoutAmount] = useState('');
+    const [partnerPayoutNote, setPartnerPayoutNote] = useState('');
+    const [partnerPayoutComposerToken, setPartnerPayoutComposerToken] = useState(0);
 
     // UI States
-    const { activeTab, setActiveTab } = useDispatcherRouting({ navigation, route });
+    const { activeTab, setActiveTab } = useDispatcherRouting({ navigation, route, tabs: allowedTabs });
     const [refreshing, setRefreshing] = useState(false);
     const [loading, setLoading] = useState(true);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [isDark, setIsDark] = useState(true); // Theme state
     const [actionLoading, setActionLoading] = useState(false);
+    const [showAddMasterModal, setShowAddMasterModal] = useState(false);
+    const [newMasterData, setNewMasterData] = useState({
+        email: '',
+        password: '',
+        full_name: '',
+        phone: '',
+        service_area: '',
+    });
+    const [newMasterPhoneError, setNewMasterPhoneError] = useState('');
     const [page, setPage] = useState(1); // Pagination state
     const [statsTooltip, setStatsTooltip] = useState(null);
     const [statsInfo, setStatsInfo] = useState(null);
     const [statsGridWidth, setStatsGridWidth] = useState(0);
     const statsTooltipTimer = useRef(null);
+    const assignMasterBaseRef = useRef([]);
+    const assignMasterSearchReqRef = useRef(0);
 
     // Filters
     const [viewMode, setViewMode] = useState('compact');
@@ -87,6 +152,8 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [showNeedsAttention, setShowNeedsAttention] = useState(false);
     const [sortOrder, setSortOrder] = useState('newest');
     const [filterAttentionType, setFilterAttentionType] = useState('All');
+    const [assignMasterSearchQuery, setAssignMasterSearchQuery] = useState('');
+    const [assignMasterSearchLoading, setAssignMasterSearchLoading] = useState(false);
 
     const {
         pickerModal,
@@ -136,6 +203,7 @@ export default function DispatcherDashboard({ navigation, route }) {
     const [platformSettings, setPlatformSettings] = useState(null); // Dynamic platform settings
     const skeletonPulse = useRef(new Animated.Value(0.6)).current;
     const debouncedSearchQuery = useDebouncedValue(searchQuery, 220);
+    const assignMasterSearchDebounced = useDebouncedValue(assignMasterSearchQuery, 220);
     const pageSize = viewMode === 'cards' ? 20 : 10;
     const queueQuery = useMemo(() => ({
         page,
@@ -196,6 +264,26 @@ export default function DispatcherDashboard({ navigation, route }) {
         scheduleBackgroundRefresh,
     } = useDispatcherActions({ setOrders, setDetailsOrder });
 
+    const loadPartnerFinance = useCallback(async () => {
+        const partnerId = user?.id || authUser?.id;
+        if (!isPartner || !partnerId) {
+            setPartnerFinanceSummary(null);
+            setPartnerPayoutRequests([]);
+            setPartnerTransactions([]);
+            return null;
+        }
+        setPartnerFinanceLoading(true);
+        try {
+            const summary = await partnerFinanceService.getPartnerFinanceSummary(partnerId);
+            setPartnerFinanceSummary(summary || null);
+            setPartnerPayoutRequests(summary?.payoutRequests || []);
+            setPartnerTransactions(summary?.transactions || []);
+            return summary || null;
+        } finally {
+            setPartnerFinanceLoading(false);
+        }
+    }, [authUser?.id, isPartner, user?.id]);
+
     // ============================================
     // DATA LOADING
     // ============================================
@@ -218,6 +306,9 @@ export default function DispatcherDashboard({ navigation, route }) {
             setAttentionOrders([]);
             setNeedsAttentionCount(0);
             setStatsSummary(null);
+            setPartnerFinanceSummary(null);
+            setPartnerPayoutRequests([]);
+            setPartnerTransactions([]);
             return;
         }
         setUser((prev) => {
@@ -286,9 +377,23 @@ export default function DispatcherDashboard({ navigation, route }) {
         return () => { canceled = true; };
     }, [activeTab, statsWindowDays, loadStatsSummary, setStatsSummary]);
 
+    useEffect(() => {
+        if (!isPartner || !['settings', 'stats'].includes(activeTab)) return;
+        let canceled = false;
+        const run = async () => {
+            const summary = await loadPartnerFinance();
+            if (canceled || !summary) return;
+        };
+        run();
+        return () => { canceled = true; };
+    }, [activeTab, isPartner, loadPartnerFinance]);
+
     const handleRefresh = useCallback(async () => {
         await onRefresh({ includeStats: activeTab === 'stats', statsDays: statsWindowDays });
-    }, [onRefresh, activeTab, statsWindowDays]);
+        if (isPartner && ['settings', 'stats'].includes(activeTab)) {
+            await loadPartnerFinance();
+        }
+    }, [onRefresh, activeTab, statsWindowDays, isPartner, loadPartnerFinance]);
 
     const loadDraft = async () => {
         try {
@@ -326,8 +431,176 @@ export default function DispatcherDashboard({ navigation, route }) {
 
     const loadMastersIntoState = useCallback(async () => {
         const data = await loadMasters();
-        setMasters(data || []);
+        const normalized = Array.isArray(data) ? data : [];
+        assignMasterBaseRef.current = normalized;
+        setAssignMasterSearchQuery('');
+        setAssignMasterSearchLoading(false);
+        setMasters(normalized);
     }, [loadMasters]);
+
+    const resetNewMasterForm = useCallback(() => {
+        setNewMasterData({
+            email: '',
+            password: '',
+            full_name: '',
+            phone: '',
+            service_area: '',
+        });
+        setNewMasterPhoneError('');
+    }, []);
+
+    const openAddMasterModal = useCallback(() => {
+        setShowAddMasterModal(true);
+    }, []);
+
+    const handleNewMasterPhoneChange = useCallback((text) => {
+        const rawValue = String(text || '');
+        const normalized = normalizeKyrgyzPhone(rawValue);
+        const nextValue = normalized || rawValue;
+        setNewMasterData((prev) => ({ ...prev, phone: nextValue }));
+        setNewMasterPhoneError(nextValue && !isValidKyrgyzPhone(nextValue)
+            ? (t('errorPhoneFormat') || 'Invalid format (+996...)')
+            : '');
+    }, [t]);
+
+    const handleNewMasterPhoneBlur = useCallback(() => {
+        const rawValue = String(newMasterData?.phone || '').trim();
+        if (!rawValue) {
+            setNewMasterPhoneError('');
+            return;
+        }
+        const normalized = normalizeKyrgyzPhone(rawValue);
+        if (!normalized) {
+            setNewMasterPhoneError(t('errorPhoneFormat') || 'Invalid format (+996...)');
+            return;
+        }
+        setNewMasterData((prev) => ({ ...prev, phone: normalized }));
+        setNewMasterPhoneError('');
+    }, [newMasterData?.phone, t]);
+
+    const handleCreateMasterAccount = useCallback(async () => {
+        const email = String(newMasterData?.email || '').trim().toLowerCase();
+        const password = String(newMasterData?.password || '');
+        const fullName = String(newMasterData?.full_name || '').trim();
+        const rawPhone = String(newMasterData?.phone || '').trim();
+        const normalizedPhone = rawPhone ? normalizeKyrgyzPhone(rawPhone) : '';
+        const serviceArea = String(newMasterData?.service_area || '').trim();
+
+        if (!email || !password || !fullName) {
+            showToast(t('toastFillRequired') || 'Please fill required fields', 'error');
+            return;
+        }
+
+        if (!EMAIL_FORMAT_REGEX.test(email)) {
+            showToast(t('invalidEmail') || 'Invalid email format', 'error');
+            return;
+        }
+
+        if (password.length < 6) {
+            showToast(t('minCharacters') || 'Minimum 6 characters', 'error');
+            return;
+        }
+
+        if (rawPhone && !normalizedPhone) {
+            setNewMasterPhoneError(t('errorPhoneFormat') || 'Invalid format (+996...)');
+            showToast(t('toastFixPhone') || 'Fix phone format', 'error');
+            return;
+        }
+
+        setActionLoading(true);
+        try {
+            const result = await authService.createUser(
+                {
+                    ...newMasterData,
+                    email,
+                    password,
+                    full_name: fullName,
+                    phone: normalizedPhone || '',
+                    service_area: serviceArea,
+                    role: 'master',
+                },
+                {
+                    creatorRole: user?.role || authUser?.role || null,
+                }
+            );
+
+            if (!result?.success) {
+                showToast(result?.message || (t('errorGeneric') || 'Error'), 'error');
+                return;
+            }
+
+            showToast(
+                result?.message || (t('masterCreatedAwaitingVerification') || 'Master created. Waiting for admin verification'),
+                'success'
+            );
+            setShowAddMasterModal(false);
+            resetNewMasterForm();
+        } catch (error) {
+            showToast(error?.message || (t('errorGeneric') || 'Error'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    }, [
+        newMasterData,
+        t,
+        user?.role,
+        authUser?.role,
+        showToast,
+        resetNewMasterForm,
+    ]);
+
+    const handleSubmitPartnerPayout = useCallback(async () => {
+        if (!isPartner) return false;
+        const rawAmount = String(partnerPayoutAmount || '').replace(',', '.');
+        const amount = Number(rawAmount);
+        const minPayout = Number(partnerFinanceSummary?.minPayout || 50);
+        const currentBalance = Number(partnerFinanceSummary?.balance || 0);
+        if (!Number.isFinite(amount) || amount <= 0) {
+            showToast(t('toastFillRequired') || 'Enter payout amount', 'error');
+            return false;
+        }
+        if (amount < minPayout) {
+            showToast(
+                `${t('partnerMinPayoutHint') || 'Minimum payout'}: ${minPayout} ${t('currencySom') || 'som'}`,
+                'error'
+            );
+            return false;
+        }
+        if (amount > currentBalance) {
+            showToast(t('insufficientBalance') || 'Insufficient balance', 'error');
+            return false;
+        }
+        setActionLoading(true);
+        try {
+            const result = await partnerFinanceService.createPayoutRequest(
+                amount,
+                partnerPayoutNote?.trim() || null
+            );
+            if (!result?.success) {
+                showToast(result?.message || (t('toastOrderFailed') || 'Request failed'), 'error');
+                return false;
+            }
+            showToast(result?.message || (t('toastUpdated') || 'Request sent'), 'success');
+            setPartnerPayoutAmount('');
+            setPartnerPayoutNote('');
+            await loadPartnerFinance();
+            return true;
+        } catch (error) {
+            showToast(error?.message || (t('errorGeneric') || 'Error'), 'error');
+            return false;
+        } finally {
+            setActionLoading(false);
+        }
+    }, [
+        isPartner,
+        partnerPayoutAmount,
+        partnerPayoutNote,
+        partnerFinanceSummary,
+        showToast,
+        t,
+        loadPartnerFinance,
+        setActionLoading,
+    ]);
 
     const openDistrictPicker = () => {
         setPickerModal({
@@ -376,6 +649,12 @@ export default function DispatcherDashboard({ navigation, route }) {
     const statsCanceled = Number(statsCurrent.canceled || 0);
     const completionRate = Number(statsCurrent.completionRate || 0);
     const cancelRate = Number(statsCurrent.cancelRate || 0);
+    const partnerPendingRequestedAmount = useMemo(
+        () => (partnerPayoutRequests || [])
+            .filter((item) => item.status === 'requested')
+            .reduce((sum, item) => sum + Number(item.requested_amount || 0), 0),
+        [partnerPayoutRequests]
+    );
     const createdSeries = useMemo(() => {
         const series = statsSummary?.series?.created;
         if (Array.isArray(series) && series.length === statsWindowDays) return series;
@@ -446,6 +725,7 @@ export default function DispatcherDashboard({ navigation, route }) {
         handlePastePhone,
         handleCall,
         handleConfirmPayment,
+        handleReportMaster,
         openAssignModal,
         openTransferPicker,
         handleAssignMaster,
@@ -524,6 +804,50 @@ export default function DispatcherDashboard({ navigation, route }) {
         if (showAssignModal) loadMastersIntoState();
     }, [showAssignModal, loadMastersIntoState]);
 
+    useEffect(() => {
+        if (!showAssignModal) {
+            assignMasterSearchReqRef.current += 1;
+            setAssignMasterSearchLoading(false);
+            return;
+        }
+
+        const query = normalizeSearchTerm(assignMasterSearchDebounced);
+        if (!query || query.length < 2) {
+            setMasters(assignMasterBaseRef.current || []);
+            setAssignMasterSearchLoading(false);
+            return;
+        }
+
+        const localMatches = (assignMasterBaseRef.current || []).filter((master) => matchesMasterSearch(master, query));
+        if (localMatches.length > 0) {
+            setMasters(localMatches);
+        }
+
+        let cancelled = false;
+        const requestId = assignMasterSearchReqRef.current + 1;
+        assignMasterSearchReqRef.current = requestId;
+        setAssignMasterSearchLoading(true);
+
+        ordersService.getAvailableMasters({ search: query, limit: 80, offset: 0, force: true })
+            .then((data) => {
+                if (cancelled || requestId !== assignMasterSearchReqRef.current) return;
+                setMasters(Array.isArray(data) ? data : []);
+            })
+            .catch((error) => {
+                if (cancelled || requestId !== assignMasterSearchReqRef.current) return;
+                console.error(`${LOG_PREFIX} assign master search failed`, error);
+                setMasters(localMatches);
+            })
+            .finally(() => {
+                if (cancelled || requestId !== assignMasterSearchReqRef.current) return;
+                setAssignMasterSearchLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [showAssignModal, assignMasterSearchDebounced]);
+
     // Date/Time Parsers & Handlers
     const parseDateStr = (str) => {
         if (!str) return new Date();
@@ -571,6 +895,15 @@ export default function DispatcherDashboard({ navigation, route }) {
         setIsSidebarOpen(false);
     }, [setActiveTab]);
 
+    const goToCreateOrderTab = useCallback(() => {
+        setActiveTab('create');
+    }, [setActiveTab]);
+
+    const openPartnerPayoutComposer = useCallback(() => {
+        setActiveTab('settings');
+        setPartnerPayoutComposerToken(Date.now());
+    }, [setActiveTab]);
+
     const renderPickerModal = () => (
         <DispatcherPickerModal
             pickerModal={pickerModal}
@@ -595,6 +928,7 @@ export default function DispatcherDashboard({ navigation, route }) {
             onToggleTheme={() => setIsDark(prev => !prev)}
             cycleLanguage={cycleLanguage}
             user={user}
+            isPartner={isPartner}
             onLogout={handleLogout}
         />
     );
@@ -643,6 +977,7 @@ export default function DispatcherDashboard({ navigation, route }) {
             setShowNeedsAttention={setShowNeedsAttention}
             setDetailsOrder={setDetailsOrder}
             openAssignModal={openAssignModal}
+            canAssignMasters={!isPartner}
             filteredOrders={filteredOrders}
             queueTotalCount={queueTotalCount}
             pageSize={pageSize}
@@ -653,6 +988,8 @@ export default function DispatcherDashboard({ navigation, route }) {
             page={page}
             setPage={setPage}
             setShowPaymentModal={setShowPaymentModal}
+            setPaymentOrder={setPaymentOrder}
+            setPaymentData={setPaymentData}
             t={t}
             STATUS_COLORS={STATUS_COLORS}
             getOrderStatusLabel={getOrderStatusLabel}
@@ -667,6 +1004,7 @@ export default function DispatcherDashboard({ navigation, route }) {
             isDark={isDark}
             translations={TRANSLATIONS}
             language={language}
+            isPartner={isPartner}
             statsRange={statsRange}
             setStatsRange={setStatsRange}
             statsWindowDays={statsWindowDays}
@@ -695,6 +1033,12 @@ export default function DispatcherDashboard({ navigation, route }) {
             SCREEN_WIDTH={SCREEN_WIDTH}
             loading={loading}
             skeletonPulse={skeletonPulse}
+            partnerFinanceSummary={partnerFinanceSummary}
+            partnerPendingRequestedAmount={partnerPendingRequestedAmount}
+            partnerTransactions={partnerTransactions}
+            partnerPayoutRequests={partnerPayoutRequests}
+            onCreateOrder={goToCreateOrderTab}
+            onRequestPayout={openPartnerPayoutComposer}
         />
     );
     const renderCreateOrder = () => (
@@ -746,7 +1090,152 @@ export default function DispatcherDashboard({ navigation, route }) {
             setIsDark={setIsDark}
             loading={loading}
             skeletonPulse={skeletonPulse}
+            isPartner={isPartner}
+            partnerFinanceSummary={partnerFinanceSummary}
+            partnerPayoutRequests={partnerPayoutRequests}
+            partnerTransactions={partnerTransactions}
+            partnerPayoutAmount={partnerPayoutAmount}
+            setPartnerPayoutAmount={setPartnerPayoutAmount}
+            partnerPayoutNote={partnerPayoutNote}
+            setPartnerPayoutNote={setPartnerPayoutNote}
+            onSubmitPartnerPayout={handleSubmitPartnerPayout}
+            partnerFinanceLoading={partnerFinanceLoading}
+            actionLoading={actionLoading}
+            openPayoutComposerToken={partnerPayoutComposerToken}
+            onOpenAddMaster={openAddMasterModal}
+            addMasterDisabled={actionLoading}
         />
+    );
+    const renderAddMasterModal = () => (
+        <Modal
+            visible={showAddMasterModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => {
+                if (actionLoading) return;
+                setShowAddMasterModal(false);
+                resetNewMasterForm();
+            }}
+        >
+            <View style={styles.modalOverlay}>
+                <View style={[styles.modalContent, !isDark && styles.modalContentLight, { width: Math.min(460, SCREEN_WIDTH - 24) }]}>
+                    <Text style={[styles.modalTitle, !isDark && styles.textDark]}>
+                        {TRANSLATIONS[language].addMaster || 'Add Master'}
+                    </Text>
+                    <Text style={[styles.settingsMeta, !isDark && styles.textSecondary, { marginBottom: 14 }]}>
+                        {TRANSLATIONS[language].createNewMasterAccount || 'Create a new master account. Admin verification is required before assignment.'}
+                    </Text>
+
+                    <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+                        <View style={{ gap: 10 }}>
+                            <View>
+                                <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>
+                                    {(TRANSLATIONS[language].loginEmail || 'Email')} *
+                                </Text>
+                                <TextInput
+                                    style={[styles.input, !isDark && styles.inputLight]}
+                                    value={newMasterData.email}
+                                    onChangeText={(text) => setNewMasterData((prev) => ({ ...prev, email: text }))}
+                                    keyboardType="email-address"
+                                    autoCapitalize="none"
+                                    placeholder={TRANSLATIONS[language].loginEmailPlaceholder || 'email@example.com'}
+                                    placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+                                />
+                            </View>
+                            <View>
+                                <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>
+                                    {(TRANSLATIONS[language].loginPassword || 'Password')} *
+                                </Text>
+                                <TextInput
+                                    style={[styles.input, !isDark && styles.inputLight]}
+                                    value={newMasterData.password}
+                                    onChangeText={(text) => setNewMasterData((prev) => ({ ...prev, password: text }))}
+                                    secureTextEntry
+                                    placeholder={TRANSLATIONS[language].minCharacters || 'Minimum 6 characters'}
+                                    placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+                                />
+                            </View>
+                            <View>
+                                <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].fullName || 'Full Name'} *</Text>
+                                <TextInput
+                                    style={[styles.input, !isDark && styles.inputLight]}
+                                    value={newMasterData.full_name}
+                                    onChangeText={(text) => setNewMasterData((prev) => ({ ...prev, full_name: text }))}
+                                    placeholder={TRANSLATIONS[language].placeholderFullName || 'John Doe'}
+                                    placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+                                />
+                            </View>
+                            <View>
+                                <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].phone || 'Phone'}</Text>
+                                <TextInput
+                                    style={[styles.input, newMasterPhoneError && styles.inputError, !isDark && styles.inputLight]}
+                                    value={newMasterData.phone}
+                                    onChangeText={handleNewMasterPhoneChange}
+                                    onBlur={handleNewMasterPhoneBlur}
+                                    keyboardType="phone-pad"
+                                    placeholder="+996..."
+                                    placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+                                />
+                                {newMasterPhoneError ? <Text style={styles.errorText}>{newMasterPhoneError}</Text> : null}
+                            </View>
+                            <View>
+                                <Text style={[styles.inputLabel, !isDark && styles.textSecondary]}>{TRANSLATIONS[language].serviceArea || 'Service Area'}</Text>
+                                <TextInput
+                                    style={[styles.input, !isDark && styles.inputLight]}
+                                    value={newMasterData.service_area}
+                                    onChangeText={(text) => setNewMasterData((prev) => ({ ...prev, service_area: text }))}
+                                    placeholder={TRANSLATIONS[language].placeholderArea || 'Area / district'}
+                                    placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+                                />
+                            </View>
+                        </View>
+                    </ScrollView>
+
+                    <View style={[styles.modalButtons, { marginTop: 16 }]}>
+                        <TouchableOpacity
+                            style={[
+                                styles.modalCancel,
+                                !isDark && styles.modalCancelLight,
+                                actionLoading && !isDark && styles.modalBtnDisabledLight,
+                            ]}
+                            onPress={() => {
+                                if (actionLoading) return;
+                                setShowAddMasterModal(false);
+                                resetNewMasterForm();
+                            }}
+                            disabled={actionLoading}
+                        >
+                            <Text style={[styles.modalCancelText, !isDark && styles.modalCancelTextLight]}>
+                                {TRANSLATIONS[language].cancel || 'Cancel'}
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[
+                                styles.modalConfirm,
+                                !isDark && styles.modalConfirmLight,
+                                (actionLoading || !newMasterData.email || !newMasterData.password || !newMasterData.full_name || Boolean(newMasterPhoneError))
+                                && (isDark ? styles.bottomPublishBtnDisabled : styles.modalConfirmDisabledLight),
+                            ]}
+                            onPress={actionLoading ? undefined : handleCreateMasterAccount}
+                            disabled={actionLoading || !newMasterData.email || !newMasterData.password || !newMasterData.full_name || Boolean(newMasterPhoneError)}
+                        >
+                            <Text
+                                style={[
+                                    styles.modalConfirmText,
+                                    (actionLoading || !newMasterData.email || !newMasterData.password || !newMasterData.full_name || Boolean(newMasterPhoneError))
+                                    && !isDark
+                                    && styles.modalConfirmTextDisabledLight,
+                                ]}
+                            >
+                                {actionLoading
+                                    ? (TRANSLATIONS[language].creating || 'Creating...')
+                                    : (TRANSLATIONS[language].createMaster || 'Create Master')}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </View>
+        </Modal>
     );
     const renderDetailsDrawer = () => {
         if (!detailsOrder) return null;
@@ -766,8 +1255,8 @@ export default function DispatcherDashboard({ navigation, route }) {
         const screenWidth = Dimensions.get('window').width;
         const drawerWidth = screenWidth <= 480 ? screenWidth : (screenWidth > 500 ? 400 : screenWidth * 0.85);
         const fullWidthDrawer = drawerWidth >= screenWidth;
-        const canAssignMaster = ['placed', 'reopened'].includes(detailsOrder.status);
-        const canCancelOrder = ['placed', 'reopened', 'expired', 'canceled_by_master'].includes(detailsOrder.status);
+        const canAssignMaster = !isPartner && ['placed', 'reopened'].includes(detailsOrder.status);
+        const canCancelOrder = !isPartner && ['placed', 'reopened', 'expired', 'canceled_by_master'].includes(detailsOrder.status);
 
         const drawerBody = (
             <View style={styles.drawerOverlay}>
@@ -779,7 +1268,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                 <Text style={styles.drawerDate}>{new Date(detailsOrder.created_at).toLocaleString()}</Text>
                             </View>
                             <View style={styles.drawerActions}>
-                                {!isEditing && (
+                                {!isEditing && !isPartner && (
                                     <TouchableOpacity
                                         style={styles.editBtn}
                                         onPress={() => {
@@ -821,6 +1310,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     {detailsOrder.status === 'completed' && (
                                         <TouchableOpacity style={[styles.drawerBtn, { backgroundColor: '#22c55e' }]} onPress={() => {
                                             setPaymentOrder(detailsOrder); // Store order for payment modal
+                                            setPaymentData(buildPaymentConfirmationData(detailsOrder));
                                             setDetailsOrder(null); // Close drawer
                                             setShowPaymentModal(true);
                                         }}>
@@ -855,7 +1345,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                                         </View>
                                                     </View>
                                                 )}
-                                                {isCurrentHandler && (
+                                                {isCurrentHandler && !isPartner && (
                                                     <View style={{ marginTop: 10 }}>
                                                         <TouchableOpacity style={styles.drawerBtnSecondary} onPress={() => openTransferPicker(detailsOrder)}>
                                                             <Text style={styles.drawerBtnSecondaryText}>{TRANSLATIONS[language].actionTransfer || 'Transfer'}</Text>
@@ -919,7 +1409,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     <TextInput style={[styles.input, styles.textArea, !isDark && styles.inputLight]} value={editForm.dispatcher_note || ''}
                                         onChangeText={t => setEditForm({ ...editForm, dispatcher_note: t })} multiline placeholderTextColor={isDark ? "#64748b" : "#94a3b8"} />
 
-                                    {detailsOrder?.master && (
+                                    {detailsOrder?.master && !isPartner && (
                                         <View style={styles.editActionRow}>
                                             <TouchableOpacity style={[styles.editActionBtn, styles.editActionPrimary]} onPress={() => openAssignModal(detailsOrder)}>
                                                 <Text style={styles.editActionText}>{TRANSLATIONS[language].actionAssignMaster || TRANSLATIONS[language].actionAssign || 'Assign Master'}</Text>
@@ -1023,7 +1513,7 @@ export default function DispatcherDashboard({ navigation, route }) {
                                         </View>
                                     )}
                                     {/* Actions */}
-                                    {['canceled_by_master', 'canceled_by_client'].includes(detailsOrder.status) && (
+                                    {!isPartner && ['canceled_by_master', 'canceled_by_client'].includes(detailsOrder.status) && (
                                         <TouchableOpacity style={styles.reopenBtn} onPress={() => { handleReopen(detailsOrder.id); setDetailsOrder(null); }}>
                                             <Text style={styles.reopenText}>? {TRANSLATIONS[language].actionReopen}</Text>
                                         </TouchableOpacity>
@@ -1068,22 +1558,64 @@ export default function DispatcherDashboard({ navigation, route }) {
             <View style={styles.modalOverlay}>
                 <View style={styles.modalContent}>
                     <Text style={styles.modalTitle}>{TRANSLATIONS[language].titlePayment}</Text>
-                    <Text style={styles.modalSubtitle}>{TRANSLATIONS[language].modalOrderPrefix.replace('{0}', paymentOrder?.id?.slice(-8))}</Text>
-                    <Text style={styles.modalAmount}>{TRANSLATIONS[language].labelAmount} {paymentOrder?.final_price || paymentOrder?.initial_price || 'N/A'}с</Text>
-                    <View style={styles.paymentMethods}>
-                        {['cash', 'transfer', 'card'].map(m => (
-                            <TouchableOpacity key={m} style={[styles.paymentMethod, paymentData.method === m && styles.paymentMethodActive]}
-                                onPress={() => setPaymentData({ ...paymentData, method: m })}>
-                                <Text style={[styles.paymentMethodText, paymentData.method === m && { color: '#fff' }]}>{TRANSLATIONS[language][`payment${m.charAt(0).toUpperCase() + m.slice(1)}`] || m}</Text>
+                    <Text style={styles.modalSubtitle}>
+                        {(TRANSLATIONS[language].modalOrderPrefix || 'Order #{0}').replace('{0}', paymentOrder?.id?.slice(-8) || '')}
+                    </Text>
+                    <Text style={styles.modalAmount}>
+                        {(TRANSLATIONS[language].labelAmount || 'Amount')} {paymentOrder?.final_price ?? paymentOrder?.initial_price ?? 'N/A'}с
+                    </Text>
+
+                    <Text style={styles.inputLabel}>{TRANSLATIONS[language].labelFinal || 'Final Amount'}</Text>
+                    <TextInput
+                        style={styles.input}
+                        value={String(paymentData?.finalAmount ?? '')}
+                        onChangeText={value => setPaymentData((prev) => ({ ...prev, finalAmount: sanitizeNumberInput(value) }))}
+                        keyboardType="numeric"
+                        placeholder={TRANSLATIONS[language].labelFinal || 'Final Amount'}
+                        placeholderTextColor="#64748b"
+                    />
+
+                    <Text style={styles.inputLabel}>{TRANSLATIONS[language].labelWorkDone || 'Work Done'}</Text>
+                    <Text style={[styles.input, { minHeight: 56, textAlignVertical: 'top', paddingTop: 12 }]}>
+                        {paymentOrder?.work_performed || paymentData?.workPerformed || '-'}
+                    </Text>
+
+                    <Text style={styles.inputLabel}>{TRANSLATIONS[language].labelTimeSpent || 'Time Spent (hours)'}</Text>
+                    <Text style={[styles.input, { minHeight: 44, paddingTop: 12 }]}>
+                        {paymentOrder?.hours_worked ?? paymentData?.hoursWorked ?? '-'}
+                    </Text>
+
+                    {!paymentOrder?.is_disputed && (
+                        <>
+                            <Text style={styles.inputLabel}>{TRANSLATIONS[language].labelReportReason || 'Report Reason'}</Text>
+                            <TextInput
+                                style={[styles.input, styles.textArea]}
+                                value={paymentData?.reportReason || ''}
+                                onChangeText={value => setPaymentData((prev) => ({ ...prev, reportReason: value }))}
+                                multiline
+                                numberOfLines={3}
+                                placeholder={TRANSLATIONS[language].labelReportReasonHint || 'Required only if reporting master'}
+                                placeholderTextColor="#64748b"
+                            />
+
+                            <TouchableOpacity
+                                style={[styles.modalCancel, { marginTop: 10, backgroundColor: '#dc2626' }]}
+                                onPress={actionLoading ? undefined : handleReportMaster}
+                                disabled={actionLoading}
+                            >
+                                <Text style={styles.modalCancelText}>{TRANSLATIONS[language].reportMaster || 'Report Master'}</Text>
                             </TouchableOpacity>
-                        ))}
-                    </View>
-                    {paymentData.method === 'transfer' && (
-                        <TextInput style={styles.input} placeholder={TRANSLATIONS[language].labelProof} value={paymentData.proofUrl}
-                            onChangeText={t => setPaymentData({ ...paymentData, proofUrl: t })} placeholderTextColor="#64748b" />
+                        </>
                     )}
                     <View style={styles.modalButtons}>
-                        <TouchableOpacity style={styles.modalCancel} onPress={() => { setShowPaymentModal(false); setPaymentOrder(null); }}>
+                        <TouchableOpacity
+                            style={styles.modalCancel}
+                            onPress={() => {
+                                setShowPaymentModal(false);
+                                setPaymentOrder(null);
+                                setPaymentData({ ...DEFAULT_PAYMENT_CONFIRMATION_DATA });
+                            }}
+                        >
                             <Text style={styles.modalCancelText}>{TRANSLATIONS[language].cancel}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
@@ -1104,8 +1636,47 @@ export default function DispatcherDashboard({ navigation, route }) {
             <View style={styles.modalOverlay}>
                 <View style={styles.modalContent}>
                     <Text style={styles.modalTitle}>{TRANSLATIONS[language].titleSelectMaster}</Text>
-                    <ScrollView style={styles.mastersList}>
-                        {masters.map(m => {
+                    <View style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        minHeight: 44,
+                        borderWidth: 1,
+                        borderColor: '#334155',
+                        borderRadius: 10,
+                        paddingHorizontal: 12,
+                        marginBottom: 12,
+                    }}>
+                        <Ionicons name="search" size={16} color="#94a3b8" />
+                        <TextInput
+                            style={{
+                                flex: 1,
+                                color: '#fff',
+                                paddingVertical: 10,
+                                paddingHorizontal: 8,
+                                borderWidth: 0,
+                                ...(Platform.OS === 'web' ? { outlineStyle: 'none', outlineWidth: 0 } : {}),
+                            }}
+                            value={assignMasterSearchQuery}
+                            onChangeText={setAssignMasterSearchQuery}
+                            placeholder={TRANSLATIONS[language].placeholderSearch || 'Search by name or phone'}
+                            placeholderTextColor="#64748b"
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                        />
+                        {assignMasterSearchLoading ? (
+                            <ActivityIndicator size="small" color="#64748b" />
+                        ) : assignMasterSearchQuery ? (
+                            <TouchableOpacity onPress={() => setAssignMasterSearchQuery('')}>
+                                <Ionicons name="close-circle" size={16} color="#94a3b8" />
+                            </TouchableOpacity>
+                        ) : null}
+                    </View>
+                    <FlatList
+                        style={styles.mastersList}
+                        data={masters}
+                        keyExtractor={(m, index) => String(m?.id || m?.master_id || index)}
+                        keyboardShouldPersistTaps="handled"
+                        renderItem={({ item: m }) => {
                             const maxJobs = Number.isFinite(Number(m.max_active_jobs)) ? Number(m.max_active_jobs) : null;
                             const activeJobs = Number.isFinite(Number(m.active_jobs)) ? Number(m.active_jobs) : 0;
                             const atLimit = maxJobs !== null && activeJobs >= maxJobs;
@@ -1125,10 +1696,16 @@ export default function DispatcherDashboard({ navigation, route }) {
                                     </Text>
                                 </TouchableOpacity>
                             );
-                        })}
-                        {masters.length === 0 && <Text style={styles.noMasters}>{TRANSLATIONS[language].noMasters}</Text>}
-                    </ScrollView>
-                    <TouchableOpacity style={styles.modalCancel} onPress={() => { setShowAssignModal(false); setAssignTarget(null); }}>
+                        }}
+                        ListEmptyComponent={(
+                            <Text style={styles.noMasters}>
+                                {assignMasterSearchLoading
+                                    ? (TRANSLATIONS[language].loading || 'Loading...')
+                                    : (TRANSLATIONS[language].noMasters || 'No masters found')}
+                            </Text>
+                        )}
+                    />
+                    <TouchableOpacity style={styles.modalCancel} onPress={() => { setShowAssignModal(false); setAssignTarget(null); setAssignMasterSearchQuery(''); }}>
                         <Text style={styles.modalCancelText}>{TRANSLATIONS[language].cancel}</Text>
                     </TouchableOpacity>
                 </View>
@@ -1186,6 +1763,7 @@ export default function DispatcherDashboard({ navigation, route }) {
             {activeTab === 'queue' && renderQueue()}
             {activeTab === 'create' && renderCreateOrder()}
             {activeTab === 'settings' && renderSettings()}
+            {renderAddMasterModal()}
             {renderDetailsDrawer()}
             {renderPaymentModal()}
             {renderAssignModal()}

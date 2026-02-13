@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Animated, Modal, Platform, Text, TouchableOpacity, View } from 'react-native';
 
 export default function DispatcherStatsTab({
@@ -6,6 +6,7 @@ export default function DispatcherStatsTab({
   isDark,
   translations,
   language,
+  isPartner,
   statsRange,
   setStatsRange,
   statsWindowDays,
@@ -34,8 +35,24 @@ export default function DispatcherStatsTab({
   SCREEN_WIDTH,
   loading,
   skeletonPulse,
+  partnerFinanceSummary,
+  partnerPendingRequestedAmount,
+  partnerTransactions,
+  partnerPayoutRequests,
+  onRequestPayout,
 }) {
   const TRANSLATIONS = translations;
+  const sectionEarningsLabel = TRANSLATIONS[language].partnerEarnings
+    || TRANSLATIONS[language].sectionEarnings
+    || 'Earnings';
+  const trendsLabel = TRANSLATIONS[language].analyticsTrends
+    || TRANSLATIONS[language].analyticsTrend
+    || 'trends';
+  const formatAmount = (value) => {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return '0';
+    return amount.toLocaleString();
+  };
   const createdMeta = getSeriesMeta(createdSeries);
   const handledMeta = getSeriesMeta(handledSeries);
   const createdMax = Math.max(1, createdMeta.max);
@@ -44,6 +61,46 @@ export default function DispatcherStatsTab({
   const emptyHandled = handledMeta.total === 0;
   const activeDays = createdSeries.filter((v) => v > 0).length;
   const dateRangeLabel = `${formatShortDate(statsWindowStart)} - ${formatShortDate(statsWindowEnd)}`;
+  const partnerBalance = Number(partnerFinanceSummary?.balance || 0);
+  const [partnerFinanceRange, setPartnerFinanceRange] = useState('7d');
+  const partnerCutoff = useMemo(() => {
+    const now = Date.now();
+    if (partnerFinanceRange === '30d') return now - (30 * 24 * 60 * 60 * 1000);
+    if (partnerFinanceRange === '7d') return now - (7 * 24 * 60 * 60 * 1000);
+    return null;
+  }, [partnerFinanceRange]);
+  const filteredPartnerTransactions = useMemo(() => {
+    const list = Array.isArray(partnerTransactions) ? partnerTransactions : [];
+    if (partnerCutoff === null) return list;
+    return list.filter((item) => {
+      const ts = item?.created_at ? new Date(item.created_at).getTime() : 0;
+      return Number.isFinite(ts) && ts >= partnerCutoff;
+    });
+  }, [partnerTransactions, partnerCutoff]);
+  const filteredPartnerRequests = useMemo(() => {
+    const list = Array.isArray(partnerPayoutRequests) ? partnerPayoutRequests : [];
+    if (partnerCutoff === null) return list;
+    return list.filter((item) => {
+      const ts = item?.created_at ? new Date(item.created_at).getTime() : 0;
+      return Number.isFinite(ts) && ts >= partnerCutoff;
+    });
+  }, [partnerPayoutRequests, partnerCutoff]);
+  const partnerPaidOut = filteredPartnerTransactions
+    .filter((item) => item.transaction_type === 'payout_paid')
+    .reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
+  const partnerEarned = filteredPartnerTransactions
+    .filter((item) => item.transaction_type === 'commission_earned')
+    .reduce((sum, item) => sum + Math.max(0, Number(item.amount || 0)), 0);
+  const partnerInProgressCalculated = filteredPartnerRequests
+    .filter((item) => item.status === 'requested')
+    .reduce((sum, item) => sum + Number(item.requested_amount || 0), 0);
+  const partnerInProgress = partnerInProgressCalculated > 0
+    ? partnerInProgressCalculated
+    : Number(partnerPendingRequestedAmount || 0);
+  const partnerPendingRequests = filteredPartnerRequests
+    .filter((item) => item.status === 'requested')
+    .length;
+  const [showTrends, setShowTrends] = useState(!isPartner);
 
   const statsInfoContent = {
     created: {
@@ -98,6 +155,13 @@ export default function DispatcherStatsTab({
     { key: 'completionRate', label: TRANSLATIONS[language].dispatcherStatsCompletionRate || 'Completion rate', value: `${completionRate}%`, delta: null },
     { key: 'cancelRate', label: TRANSLATIONS[language].dispatcherStatsCancelRate || 'Cancel rate', value: `${cancelRate}%`, delta: null },
   ];
+  const visibleStatCards = isPartner
+    ? statCards.filter((card) => !['completionRate', 'cancelRate'].includes(card.key))
+    : statCards;
+
+  useEffect(() => {
+    setShowTrends(!isPartner);
+  }, [isPartner]);
 
   const getEventPos = (event) => {
     const native = event?.nativeEvent || {};
@@ -219,6 +283,87 @@ export default function DispatcherStatsTab({
 
   return (
     <View style={styles.statsContainer}>
+      {isPartner && (
+        <View style={[styles.settingsCard, !isDark && styles.cardLight]}>
+          <View style={styles.statsChartHeader}>
+            <Text style={styles.statsChartTitle}>
+              {TRANSLATIONS[language].partnerStatsTitle || TRANSLATIONS[language].partnerRole || 'Partner'}
+            </Text>
+            <View style={styles.statsRangeRow}>
+              {[
+                { key: '7d', label: '7d' },
+                { key: '30d', label: '30d' },
+                { key: 'all', label: TRANSLATIONS[language].periodAll || 'All' },
+              ].map((item) => (
+                <TouchableOpacity
+                  key={item.key}
+                  style={[
+                    styles.statsRangeBtn,
+                    partnerFinanceRange === item.key && styles.statsRangeBtnActive,
+                    !isDark && styles.statsRangeBtnLight,
+                    !isDark && partnerFinanceRange === item.key && styles.statsRangeBtnActiveLight,
+                  ]}
+                  onPress={() => setPartnerFinanceRange(item.key)}
+                >
+                  <Text
+                    style={[
+                      styles.statsRangeText,
+                      partnerFinanceRange === item.key && styles.statsRangeTextActive,
+                      !isDark && styles.statsRangeTextLight,
+                      !isDark && partnerFinanceRange === item.key && styles.statsRangeTextActiveLight,
+                    ]}
+                  >
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+          <View style={styles.partnerMetricGrid}>
+            <View style={[styles.partnerMetricCard, !isDark && styles.cardLight]}>
+              <Text style={[styles.partnerMetricLabel, !isDark && styles.textSecondary]}>
+                {TRANSLATIONS[language].prepaidBalance || 'Balance'}
+              </Text>
+              <Text style={[styles.partnerMetricValue, !isDark && styles.textDark]}>
+                {formatAmount(partnerBalance)} {TRANSLATIONS[language].currencySom || 'som'}
+              </Text>
+            </View>
+            <View style={[styles.partnerMetricCard, !isDark && styles.cardLight]}>
+              <Text style={[styles.partnerMetricLabel, !isDark && styles.textSecondary]}>
+                {TRANSLATIONS[language].partnerPaidOut || 'Paid Out'}
+              </Text>
+              <Text style={[styles.partnerMetricValue, !isDark && styles.textDark]}>
+                {formatAmount(partnerPaidOut)} {TRANSLATIONS[language].currencySom || 'som'}
+              </Text>
+            </View>
+            <View style={[styles.partnerMetricCard, !isDark && styles.cardLight]}>
+              <Text style={[styles.partnerMetricLabel, !isDark && styles.textSecondary]}>
+                {TRANSLATIONS[language].pending || 'In progress'}
+              </Text>
+              <Text style={[styles.partnerMetricValue, !isDark && styles.textDark]}>
+                {formatAmount(partnerInProgress)} {TRANSLATIONS[language].currencySom || 'som'}
+              </Text>
+            </View>
+          </View>
+          <Text style={[styles.partnerStatsMeta, !isDark && styles.textSecondary]}>
+            {(TRANSLATIONS[language].partnerEarned || 'Earned')}: {formatAmount(partnerEarned)} {TRANSLATIONS[language].currencySom || 'som'}
+            {' | '}
+            {(TRANSLATIONS[language].pending || 'Pending')}: {partnerPendingRequests}
+          </Text>
+          <TouchableOpacity
+            style={[styles.settingsActionBtn, !isDark && styles.settingsActionBtnLight, styles.partnerStatsAction]}
+            onPress={onRequestPayout}
+          >
+            <Text style={[styles.settingsActionText, !isDark && styles.settingsActionTextLight]}>
+              {TRANSLATIONS[language].partnerRequestNow || 'Request Payout'}
+            </Text>
+          </TouchableOpacity>
+          <Text style={[styles.settingsHint, !isDark && styles.textSecondary]}>
+            {sectionEarningsLabel} -> {TRANSLATIONS[language].sectionSettings || 'Settings'}
+          </Text>
+        </View>
+      )}
+
       <View style={styles.statsHeader}>
         <Text style={[styles.statsTitle, !isDark && styles.textDark]}>
           {TRANSLATIONS[language].dispatcherStatsTitle || 'Dispatcher Stats'}
@@ -247,27 +392,35 @@ export default function DispatcherStatsTab({
         <Text style={[styles.statsRangeLabel, !isDark && styles.statsRangeLabelLight]}>
           {(TRANSLATIONS[language].dispatcherStatsRangeLabel || 'Range')}: {dateRangeLabel}
         </Text>
-        <View style={styles.statsRangeBadges}>
-          <View style={[styles.statsBadge, !isDark && styles.statsBadgeLight]}>
-            <Text style={[styles.statsBadgeText, !isDark && styles.statsBadgeTextLight]}>
-              {TRANSLATIONS[language].dispatcherStatsActiveDays || 'Active days'}: {activeDays}
-            </Text>
-          </View>
-          {activeDays <= Math.ceil(statsWindowDays / 3) && (
-            <View style={[styles.statsBadgeMuted, !isDark && styles.statsBadgeMutedLight]}>
-              <Text style={[styles.statsBadgeMutedText, !isDark && styles.statsBadgeMutedTextLight]}>
-                {TRANSLATIONS[language].dispatcherStatsQuiet || 'Quiet period'}
+        {isPartner ? (
+          <Text style={[styles.statsRangeLabel, !isDark && styles.statsRangeLabelLight]}>
+            {TRANSLATIONS[language].dispatcherStatsActiveDays || 'Active days'}: {activeDays}
+          </Text>
+        ) : (
+          <View style={styles.statsRangeBadges}>
+            <View style={[styles.statsBadge, !isDark && styles.statsBadgeLight]}>
+              <Text style={[styles.statsBadgeText, !isDark && styles.statsBadgeTextLight]}>
+                {TRANSLATIONS[language].dispatcherStatsActiveDays || 'Active days'}: {activeDays}
               </Text>
             </View>
-          )}
-        </View>
+            {activeDays <= Math.ceil(statsWindowDays / 3) && (
+              <View style={[styles.statsBadgeMuted, !isDark && styles.statsBadgeMutedLight]}>
+                <Text style={[styles.statsBadgeMutedText, !isDark && styles.statsBadgeMutedTextLight]}>
+                  {TRANSLATIONS[language].dispatcherStatsQuiet || 'Quiet period'}
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
       </View>
-      <Text style={[styles.statsHintText, !isDark && styles.textSecondary]}>
-        {TRANSLATIONS[language].statsInfoHint || 'Tap a metric card for details'}
-      </Text>
+      {!isPartner && (
+        <Text style={[styles.statsHintText, !isDark && styles.textSecondary]}>
+          {TRANSLATIONS[language].statsInfoHint || 'Tap a metric card for details'}
+        </Text>
+      )}
 
       <View style={styles.statsCards} onLayout={(event) => setStatsGridWidth(event.nativeEvent.layout.width)}>
-        {statCards.map((card) => (
+        {visibleStatCards.map((card) => (
           <TouchableOpacity
             key={card.key}
             style={[
@@ -289,30 +442,44 @@ export default function DispatcherStatsTab({
         ))}
       </View>
 
-      <View style={styles.statsCharts}>
-        <View style={[styles.statsChartCard, !isDark && styles.cardLight]}>
-          <View style={styles.statsChartHeader}>
-            <Text style={styles.statsChartTitle}>{TRANSLATIONS[language].dispatcherStatsTrendCreated || 'Created trend'}</Text>
-            <Text style={styles.statsChartMeta}>
-              {(TRANSLATIONS[language].dispatcherStatsAvgPerDay || 'Avg/day')}: {createdMeta.avg.toFixed(1)} · {(TRANSLATIONS[language].analyticsMax || 'Max')}: {createdMeta.max}
-            </Text>
-          </View>
-          {emptyCreated
-            ? <Text style={styles.statsEmptyText}>{TRANSLATIONS[language].analyticsEmpty || 'No activity in this period'}</Text>
-            : renderDots(createdSeries, createdMax, '#3b82f6', 'created', createdMeta.avg)}
-        </View>
-        <View style={[styles.statsChartCard, !isDark && styles.cardLight]}>
-          <View style={styles.statsChartHeader}>
-            <Text style={styles.statsChartTitle}>{TRANSLATIONS[language].dispatcherStatsTrendHandled || 'Handled trend'}</Text>
-            <Text style={styles.statsChartMeta}>
-              {(TRANSLATIONS[language].dispatcherStatsAvgPerDay || 'Avg/day')}: {handledMeta.avg.toFixed(1)} · {(TRANSLATIONS[language].analyticsMax || 'Max')}: {handledMeta.max}
-            </Text>
-          </View>
-          {emptyHandled
-            ? <Text style={styles.statsEmptyText}>{TRANSLATIONS[language].analyticsEmpty || 'No activity in this period'}</Text>
-            : renderDots(handledSeries, handledMax, '#22c55e', 'handled', handledMeta.avg)}
-        </View>
+      <View style={styles.statsSectionToggleWrap}>
+        <TouchableOpacity
+          style={[styles.settingsActionBtn, !isDark && styles.settingsActionBtnLight, styles.statsSectionToggleBtn]}
+          onPress={() => setShowTrends((prev) => !prev)}
+        >
+          <Text style={[styles.settingsActionText, !isDark && styles.settingsActionTextLight]}>
+            {showTrends
+              ? (TRANSLATIONS[language].actionHide || 'Hide') + ' ' + trendsLabel
+              : (TRANSLATIONS[language].actionShow || 'Show') + ' ' + trendsLabel}
+          </Text>
+        </TouchableOpacity>
       </View>
+      {showTrends && (
+        <View style={styles.statsCharts}>
+          <View style={[styles.statsChartCard, !isDark && styles.cardLight]}>
+            <View style={styles.statsChartHeader}>
+              <Text style={styles.statsChartTitle}>{TRANSLATIONS[language].dispatcherStatsTrendCreated || 'Created trend'}</Text>
+              <Text style={styles.statsChartMeta}>
+                {(TRANSLATIONS[language].dispatcherStatsAvgPerDay || 'Avg/day')}: {createdMeta.avg.toFixed(1)} | {(TRANSLATIONS[language].analyticsMax || 'Max')}: {createdMeta.max}
+              </Text>
+            </View>
+            {emptyCreated
+              ? <Text style={styles.statsEmptyText}>{TRANSLATIONS[language].analyticsEmpty || 'No activity in this period'}</Text>
+              : renderDots(createdSeries, createdMax, '#3b82f6', 'created', createdMeta.avg)}
+          </View>
+          <View style={[styles.statsChartCard, !isDark && styles.cardLight]}>
+            <View style={styles.statsChartHeader}>
+              <Text style={styles.statsChartTitle}>{TRANSLATIONS[language].dispatcherStatsTrendHandled || 'Handled trend'}</Text>
+              <Text style={styles.statsChartMeta}>
+                {(TRANSLATIONS[language].dispatcherStatsAvgPerDay || 'Avg/day')}: {handledMeta.avg.toFixed(1)} | {(TRANSLATIONS[language].analyticsMax || 'Max')}: {handledMeta.max}
+              </Text>
+            </View>
+            {emptyHandled
+              ? <Text style={styles.statsEmptyText}>{TRANSLATIONS[language].analyticsEmpty || 'No activity in this period'}</Text>
+              : renderDots(handledSeries, handledMax, '#22c55e', 'handled', handledMeta.avg)}
+          </View>
+        </View>
+      )}
 
       {statsTooltip && (
         <View
@@ -384,3 +551,4 @@ export default function DispatcherStatsTab({
     </View>
   );
 }
+

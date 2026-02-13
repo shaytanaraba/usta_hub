@@ -18,6 +18,7 @@ import { NavigationHistoryProvider, useNavHistory } from './src/contexts/Navigat
 import LoginScreen from './src/screens/LoginScreen';
 import MasterDashboard from './src/screens/MasterDashboard';
 import DispatcherDashboard from './src/screens/DispatcherDashboard';
+import PartnerDashboard from './src/screens/PartnerDashboard';
 import AdminDashboard from './src/screens/AdminDashboard';
 
 const Stack = createNativeStackNavigator();
@@ -81,6 +82,8 @@ function AppNavigator() {
       ? 'MasterDashboard'
       : user?.role === 'dispatcher'
         ? 'DispatcherDashboard'
+        : user?.role === 'partner'
+          ? 'PartnerDashboard'
         : user?.role === 'admin'
           ? 'AdminDashboard'
           : 'Login';
@@ -206,6 +209,7 @@ function AppNavigator() {
         />
         <Stack.Screen name="MasterDashboard" component={MasterDashboard} />
         <Stack.Screen name="DispatcherDashboard" component={DispatcherDashboard} />
+        <Stack.Screen name="PartnerDashboard" component={PartnerDashboard} />
         <Stack.Screen name="AdminDashboard" component={AdminDashboard} />
       </Stack.Navigator>
     </NavigationContainer>

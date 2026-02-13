@@ -33,6 +33,8 @@ import { useRoute } from '@react-navigation/native';
 import authService from '../services/auth';
 import ordersService, { ORDER_STATUS } from '../services/orders';
 import earningsService from '../services/earnings';
+import partnerFinanceService from '../services/partnerFinance';
+import { supabase } from '../lib/supabase';
 import { useToast } from '../contexts/ToastContext';
 import { useLocalization } from '../contexts/LocalizationContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -87,10 +89,157 @@ import { normalizeKyrgyzPhone, isValidKyrgyzPhone } from '../utils/phone';
 
 const LOG_PREFIX = '[AdminDashboard]';
 const SCREEN_WIDTH = Dimensions.get('window').width;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const PARTNER_HISTORY_PAGE_SIZE = 15;
 const ADMIN_LOADING_HARD_TIMEOUT_MS = 20000;
 const ADMIN_QUEUE_REQUEST_TIMEOUT_MS = Number(process?.env?.EXPO_PUBLIC_ADMIN_QUEUE_TIMEOUT_MS || 12000);
 const ADMIN_QUEUE_TIMEOUT_TOAST_COOLDOWN_MS = 15000;
+const parseMs = (value, fallback) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : fallback;
+};
+const parsePositiveInt = (value, fallback) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : fallback;
+};
+const EMAIL_FORMAT_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const createEmptyNewUserData = () => ({
+    email: '',
+    password: '',
+    full_name: '',
+    phone: '',
+    service_area: '',
+    max_active_jobs: '',
+    max_immediate_orders: '',
+    max_pending_confirmation: '',
+    partner_commission_rate: '10',
+    partner_min_payout: '50',
+});
+const createEmptyPartnerFinanceSummary = () => ({
+    balance: 0,
+    commissionRatePercent: 0,
+    minPayout: 50,
+    earnedTotal: 0,
+    deductedTotal: 0,
+    paidTotal: 0,
+    requestedTotal: 0,
+    pendingRequests: 0,
+    transactions: [],
+    payoutRequests: [],
+});
+const toFiniteNumberOrNull = (value) => {
+    if (value === '' || value === null || value === undefined) return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+const parseDisputeClientNotes = (rawValue) => {
+    const text = String(rawValue || '').trim();
+    if (!text) {
+        return {
+            plainNotes: '',
+            metadata: {},
+            source: '',
+            reportedBy: '',
+            reporterRole: '',
+            reportedFinalAmount: null,
+            masterFinalAmount: null,
+            workPerformed: '',
+            hoursWorked: null,
+        };
+    }
+    const chunks = text.split(';').map((chunk) => chunk.trim()).filter(Boolean);
+    const metadata = {};
+    const plain = [];
+    chunks.forEach((chunk) => {
+        const sepIndex = chunk.indexOf('=');
+        if (sepIndex <= 0) {
+            plain.push(chunk);
+            return;
+        }
+        const key = chunk.slice(0, sepIndex).trim();
+        const value = chunk.slice(sepIndex + 1).trim();
+        if (!key) {
+            plain.push(chunk);
+            return;
+        }
+        metadata[key] = value;
+    });
+    const readText = (key) => String(metadata[key] || '').trim();
+    return {
+        plainNotes: plain.join('; '),
+        metadata,
+        source: readText('source'),
+        reportedBy: readText('reported_by'),
+        reporterRole: readText('reporter_role'),
+        reportedFinalAmount: toFiniteNumberOrNull(readText('reported_final_amount')),
+        masterFinalAmount: toFiniteNumberOrNull(readText('master_final_amount')),
+        workPerformed: readText('work_performed'),
+        hoursWorked: toFiniteNumberOrNull(readText('hours_worked')),
+    };
+};
+const formatOrderRefLabel = (template, orderId) => {
+    const fallbackTemplate = String(template || 'Order #{0}');
+    const orderTail = String(orderId || '').trim();
+    const displayRef = orderTail ? orderTail.slice(-8) : '-';
+    return fallbackTemplate.includes('{0}')
+        ? fallbackTemplate.replace('{0}', displayRef)
+        : `${fallbackTemplate} ${displayRef}`;
+};
+const normalizeSearchTerm = (value) => String(value || '').trim().toLowerCase();
+const normalizeSearchDigits = (value) => String(value || '').replace(/\D/g, '');
+const optionMatchesSearch = (option, query, fields = []) => {
+    const term = normalizeSearchTerm(query);
+    const digits = normalizeSearchDigits(query);
+    if (!term && !digits) return true;
+
+    const candidateFields = (Array.isArray(fields) && fields.length > 0)
+        ? fields
+        : ['label', 'full_name', 'name', 'phone', 'email'];
+    const hasTextMatch = candidateFields.some((field) => String(option?.[field] || '').toLowerCase().includes(term));
+    if (hasTextMatch) return true;
+    if (!digits) return false;
+    return candidateFields.some((field) => normalizeSearchDigits(option?.[field]).includes(digits));
+};
+const ADMIN_TAB_KEYS = ['analytics', 'orders', 'people', 'create_order', 'disputes', 'payouts', 'settings'];
+const ADMIN_DEFAULT_TAB_STALE_TTL_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_TAB_STALE_TTL_MS, 30000);
+const ADMIN_TAB_STALE_TTL_MS = {
+    analytics: parseMs(process?.env?.EXPO_PUBLIC_ADMIN_ANALYTICS_STALE_TTL_MS, 20000),
+    orders: parseMs(process?.env?.EXPO_PUBLIC_ADMIN_ORDERS_STALE_TTL_MS, 15000),
+    people: parseMs(process?.env?.EXPO_PUBLIC_ADMIN_PEOPLE_STALE_TTL_MS, 30000),
+    settings: parseMs(process?.env?.EXPO_PUBLIC_ADMIN_SETTINGS_STALE_TTL_MS, 60000),
+    create_order: parseMs(process?.env?.EXPO_PUBLIC_ADMIN_CREATE_ORDER_STALE_TTL_MS, 45000),
+    disputes: parseMs(process?.env?.EXPO_PUBLIC_ADMIN_DISPUTES_STALE_TTL_MS, 15000),
+    payouts: parseMs(process?.env?.EXPO_PUBLIC_ADMIN_PAYOUTS_STALE_TTL_MS, 15000),
+};
+const ADMIN_TAB_LOAD_TIMEOUT_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_TAB_LOAD_TIMEOUT_MS, 15000);
+const ADMIN_TAB_INFLIGHT_STALE_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_TAB_INFLIGHT_STALE_MS, 18000);
+const ADMIN_TAB_FORCE_JOIN_WINDOW_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_TAB_FORCE_JOIN_WINDOW_MS, 1200);
+const ADMIN_PENDING_CREATED_ORDER_TTL_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_PENDING_CREATED_ORDER_TTL_MS, 120000);
+const ADMIN_REALTIME_SYNC_ENABLED = process?.env?.EXPO_PUBLIC_ADMIN_REALTIME_SYNC !== '0';
+const ADMIN_REALTIME_DEBOUNCE_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_REALTIME_DEBOUNCE_MS, 900);
+const ADMIN_REALTIME_MIN_INTERVAL_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_REALTIME_MIN_INTERVAL_MS, 2500);
+const ADMIN_CREATE_CONFIRM_RETRIES = parsePositiveInt(process?.env?.EXPO_PUBLIC_ADMIN_CREATE_CONFIRM_RETRIES, 4);
+const ADMIN_CREATE_CONFIRM_DELAY_MS = parseMs(process?.env?.EXPO_PUBLIC_ADMIN_CREATE_CONFIRM_DELAY_MS, 850);
 const ADMIN_DIAG_ENABLED = process?.env?.EXPO_PUBLIC_ENABLE_AUTH_DIAGNOSTICS === '1';
+const DEFAULT_PAYMENT_CONFIRMATION_DATA = {
+    finalAmount: '',
+    reportReason: '',
+    workPerformed: '',
+    hoursWorked: '',
+};
+const buildPaymentConfirmationData = (order) => {
+    const finalAmountValue = order?.final_price ?? order?.initial_price;
+    return {
+        finalAmount: finalAmountValue !== null && finalAmountValue !== undefined && finalAmountValue !== ''
+            ? String(finalAmountValue)
+            : '',
+        reportReason: '',
+        workPerformed: String(order?.work_performed || ''),
+        hoursWorked: order?.hours_worked !== null && order?.hours_worked !== undefined && order?.hours_worked !== ''
+            ? String(order?.hours_worked)
+            : '',
+    };
+};
 const adminDiag = (event, payload = null) => {
     if (!ADMIN_DIAG_ENABLED) return;
     if (payload === null) {
@@ -143,6 +292,7 @@ export default function AdminDashboard({ navigation }) {
     const analyticsTooltipTimer = useRef(null);
     const [analyticsTrendTooltip, setAnalyticsTrendTooltip] = useState(null);
     const analyticsTrendTooltipTimer = useRef(null);
+    const [analyticsNowTick, setAnalyticsNowTick] = useState(Date.now());
     const authSyncUserIdRef = useRef(null);
     const [priceDistRange, setPriceDistRange] = useState('30d');
     const [priceDistGrouping, setPriceDistGrouping] = useState('week');
@@ -162,7 +312,12 @@ export default function AdminDashboard({ navigation }) {
     const [queueSource, setQueueSource] = useState('init');
     const [masters, setMasters] = useState([]);
     const [dispatchers, setDispatchers] = useState([]);
+    const [partners, setPartners] = useState([]);
     const [adminUsers, setAdminUsers] = useState([]);
+    const [disputes, setDisputes] = useState([]);
+    const [adminPayoutRequests, setAdminPayoutRequests] = useState([]);
+    const [adminPayoutStatusFilter, setAdminPayoutStatusFilter] = useState('requested');
+    const [adminPayoutActionId, setAdminPayoutActionId] = useState(null);
     const [settings, setSettings] = useState({});
     const [tempSettings, setTempSettings] = useState({});
     const [user, setUser] = useState(null);
@@ -172,7 +327,7 @@ export default function AdminDashboard({ navigation }) {
     const [searchQuery, setSearchQuery] = useState('');
     const [queueSearch, setQueueSearch] = useState('');
     const queueSearchDebounced = useDebouncedValue(queueSearch.trim(), 240);
-    const [peopleView, setPeopleView] = useState('masters'); // 'masters' or 'staff'
+    const [peopleView, setPeopleView] = useState('masters'); // 'masters' | 'staff' | 'partners'
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage] = useState(10);
 
@@ -198,7 +353,23 @@ export default function AdminDashboard({ navigation }) {
     const [filterAttentionType, setFilterAttentionType] = useState('All');
     const [sortOrder, setSortOrder] = useState('newest');
 
-    const [pickerModal, setPickerModal] = useState({ visible: false, options: [], value: '', onChange: null, title: '' });
+    const [pickerModal, setPickerModal] = useState({
+        visible: false,
+        options: [],
+        value: '',
+        onChange: null,
+        title: '',
+        searchable: false,
+        searchFields: ['label'],
+        searchPlaceholder: '',
+        onSearch: null,
+        emptyText: '',
+        closeOnSelect: true,
+    });
+    const [pickerSearchQuery, setPickerSearchQuery] = useState('');
+    const pickerSearchDebounced = useDebouncedValue(pickerSearchQuery.trim(), 220);
+    const [pickerSearchLoading, setPickerSearchLoading] = useState(false);
+    const [pickerRemoteOptions, setPickerRemoteOptions] = useState(null);
     const [serviceTypes, setServiceTypes] = useState([]);
     const [districts, setDistricts] = useState([]);
     const [managedDistricts, setManagedDistricts] = useState([]);
@@ -230,6 +401,76 @@ export default function AdminDashboard({ navigation }) {
     const [districtsCollapsed, setDistrictsCollapsed] = useState(true);
     const [cancellationReasonsCollapsed, setCancellationReasonsCollapsed] = useState(true);
     const [configurationCollapsed, setConfigurationCollapsed] = useState(true);
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchQuery, peopleView]);
+
+    useEffect(() => {
+        if (!pickerModal.visible) {
+            pickerSearchSeqRef.current += 1;
+            setPickerSearchQuery('');
+            setPickerRemoteOptions(null);
+            setPickerSearchLoading(false);
+            return;
+        }
+        setPickerSearchQuery('');
+        setPickerRemoteOptions(null);
+        setPickerSearchLoading(false);
+    }, [pickerModal.visible]);
+
+    useEffect(() => {
+        if (!pickerModal.visible || !pickerModal.searchable || typeof pickerModal.onSearch !== 'function') {
+            return;
+        }
+        const query = normalizeSearchTerm(pickerSearchDebounced);
+        if (!query || query.length < 2) {
+            pickerSearchSeqRef.current += 1;
+            setPickerRemoteOptions(null);
+            setPickerSearchLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+        const requestId = pickerSearchSeqRef.current + 1;
+        pickerSearchSeqRef.current = requestId;
+        setPickerSearchLoading(true);
+
+        Promise.resolve(pickerModal.onSearch(query))
+            .then((data) => {
+                if (cancelled || requestId !== pickerSearchSeqRef.current) return;
+                setPickerRemoteOptions(Array.isArray(data) ? data : []);
+            })
+            .catch((error) => {
+                if (cancelled || requestId !== pickerSearchSeqRef.current) return;
+                console.error(`${LOG_PREFIX} picker remote search failed`, error);
+                setPickerRemoteOptions([]);
+            })
+            .finally(() => {
+                if (cancelled || requestId !== pickerSearchSeqRef.current) return;
+                setPickerSearchLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [pickerModal.visible, pickerModal.searchable, pickerModal.onSearch, pickerSearchDebounced]);
+
+    const pickerSearchFields = useMemo(() => (
+        Array.isArray(pickerModal.searchFields) && pickerModal.searchFields.length > 0
+            ? pickerModal.searchFields
+            : ['label']
+    ), [pickerModal.searchFields]);
+
+    const pickerVisibleOptions = useMemo(() => {
+        const base = Array.isArray(pickerRemoteOptions)
+            ? pickerRemoteOptions
+            : (Array.isArray(pickerModal.options) ? pickerModal.options : []);
+        if (!pickerModal.searchable) return base;
+        const query = normalizeSearchTerm(pickerSearchDebounced);
+        if (!query) return base;
+        return base.filter((option) => optionMatchesSearch(option, query, pickerSearchFields));
+    }, [pickerModal.options, pickerModal.searchable, pickerRemoteOptions, pickerSearchDebounced, pickerSearchFields]);
 
     const openDistrictPicker = () => {
         setPickerModal({
@@ -282,12 +523,19 @@ export default function AdminDashboard({ navigation }) {
         const byProfiles = [...(dispatchers || []), ...(adminUsers || [])].map(d => ({
             id: String(d.id),
             label: d.full_name || d.name || d.phone || d.email || `Dispatcher ${d.id}`,
+            full_name: d.full_name || d.name || '',
+            phone: d.phone || '',
+            email: d.email || '',
+            role: d.role || '',
         }));
         const byOrders = orders
             .filter(o => o.dispatcher_id || o.dispatcher?.id || o.assigned_dispatcher_id || o.assigned_dispatcher?.id)
             .map(o => ({
                 id: String(o.assigned_dispatcher_id || o.assigned_dispatcher?.id || o.dispatcher_id || o.dispatcher?.id),
                 label: o.assigned_dispatcher?.full_name || o.dispatcher?.full_name || `Dispatcher ${o.assigned_dispatcher_id || o.assigned_dispatcher?.id || o.dispatcher_id || o.dispatcher?.id}`,
+                full_name: o.assigned_dispatcher?.full_name || o.dispatcher?.full_name || '',
+                phone: o.assigned_dispatcher?.phone || o.dispatcher?.phone || '',
+                email: o.assigned_dispatcher?.email || o.dispatcher?.email || '',
             }));
         const merged = new Map();
         [...byProfiles, ...byOrders].forEach(opt => {
@@ -311,7 +559,7 @@ export default function AdminDashboard({ navigation }) {
             [district?.id, district?.code, district?.label, district?.name_en, district?.name_ru, district?.name_kg]
                 .filter(Boolean)
                 .forEach(key => {
-                    const normalized = String(key);
+                    const normalized = String(key).trim().toLowerCase();
                     if (!map.has(normalized)) map.set(normalized, district);
                 });
         });
@@ -333,10 +581,47 @@ export default function AdminDashboard({ navigation }) {
 
     const getAreaLabel = useCallback((area) => {
         if (!area) return '';
-        const key = String(area);
-        const district = districtLookup.get(key);
-        return getLocalizedName(district, area);
+        const raw = String(area).trim();
+        const normalized = raw.toLowerCase();
+        const district = districtLookup.get(normalized);
+        if (district) return getLocalizedName(district, raw);
+        const normalizedParts = raw.split(/\u2014|-/).map((part) => part.trim()).filter(Boolean);
+        if (normalizedParts.length > 1) {
+            const tail = normalizedParts[normalizedParts.length - 1].toLowerCase();
+            const tailDistrict = districtLookup.get(tail);
+            if (tailDistrict) {
+                return `${normalizedParts.slice(0, -1).join(' - ')} - ${getLocalizedName(tailDistrict, normalizedParts[normalizedParts.length - 1])}`;
+            }
+        }
+        const parts = raw.split(/[—-]/).map((part) => part.trim()).filter(Boolean);
+        if (parts.length > 1) {
+            const tail = parts[parts.length - 1].toLowerCase();
+            const tailDistrict = districtLookup.get(tail);
+            if (tailDistrict) {
+                return `${parts.slice(0, -1).join(' - ')} - ${getLocalizedName(tailDistrict, parts[parts.length - 1])}`;
+            }
+        }
+        return raw;
     }, [districtLookup, getLocalizedName]);
+
+    const getAreaFilterKey = useCallback((area) => {
+        if (!area) return '';
+        const raw = String(area).trim();
+        const normalized = raw.toLowerCase();
+        const district = districtLookup.get(normalized);
+        if (district) {
+            return String(district.code || district.id || raw).trim().toLowerCase();
+        }
+        const parts = raw.split(/\u2014|-/).map((part) => part.trim()).filter(Boolean);
+        if (parts.length > 1) {
+            const tail = parts[parts.length - 1].toLowerCase();
+            const tailDistrict = districtLookup.get(tail);
+            if (tailDistrict) {
+                return String(tailDistrict.code || tailDistrict.id || tail).trim().toLowerCase();
+            }
+        }
+        return normalized;
+    }, [districtLookup]);
 
     const getCancelReasonLabel = useCallback((code) => {
         if (!code || code === 'unknown') return TRANSLATIONS.analyticsUnknown || 'Unknown';
@@ -346,20 +631,26 @@ export default function AdminDashboard({ navigation }) {
     }, [cancellationReasonLookup, getLocalizedName, TRANSLATIONS]);
 
     const analyticsAreaOptions = useMemo(() => {
-        const areaIds = Array.from(
-            new Set(
-                (orders || [])
-                    .map(o => o?.area)
-                    .filter(Boolean)
-                    .map(v => String(v))
-            )
-        ).sort((a, b) => String(getAreaLabel(a) || a).localeCompare(String(getAreaLabel(b) || b)));
+        const districtSource = (managedDistricts?.length ? managedDistricts : districts) || [];
+        const activeDistrictIds = districtSource
+            .filter((district) => district && district.is_active !== false)
+            .map((district) => getAreaFilterKey(
+                district.code || district.id || district.label || district.name_en || district.name_ru || district.name_kg
+            ))
+            .filter(Boolean);
+        const fallbackOrderAreaIds = (orders || [])
+            .map((order) => getAreaFilterKey(order?.area))
+            .filter(Boolean)
+            .map((value) => String(value).trim());
+        const areaIds = Array.from(new Set(
+            activeDistrictIds.length > 0 ? activeDistrictIds : fallbackOrderAreaIds
+        )).sort((a, b) => String(getAreaLabel(a) || a).localeCompare(String(getAreaLabel(b) || b)));
         const areas = areaIds.map(id => ({
             id,
             label: getAreaLabel(id) || id,
         }));
         return [{ id: 'all', label: TRANSLATIONS.filterAll || 'All' }, ...areas];
-    }, [orders, getAreaLabel, TRANSLATIONS.filterAll]);
+    }, [managedDistricts, districts, orders, getAreaLabel, getAreaFilterKey, TRANSLATIONS.filterAll]);
 
     const matchesDispatcher = useCallback((order, dispatcherId) => {
         if (!order) return false;
@@ -391,21 +682,29 @@ export default function AdminDashboard({ navigation }) {
         };
 
         const map = new Map();
-        const addOption = (id, name, role) => {
+        const addOption = (id, name, role, phone, email) => {
             if (!id) return;
             const key = String(id);
             if (map.has(key)) return;
             const roleName = roleLabel(role);
             const displayName = name || (roleName ? `${roleName} ${key.slice(0, 6)}` : `User ${key.slice(0, 6)}`);
             const label = roleName ? `${displayName} (${roleName})` : displayName;
-            map.set(key, { id: key, label });
+            map.set(key, {
+                id: key,
+                label,
+                full_name: String(name || ''),
+                phone: String(phone || ''),
+                email: String(email || ''),
+                role: String(role || ''),
+                role_label: roleName,
+            });
         };
 
-        (dispatchers || []).forEach(d => addOption(d.id, d.full_name || d.name || d.phone || d.email, d.role || 'dispatcher'));
-        (adminUsers || []).forEach(a => addOption(a.id, a.full_name || a.name || a.phone || a.email, a.role || 'admin'));
+        (dispatchers || []).forEach(d => addOption(d.id, d.full_name || d.name || d.phone || d.email, d.role || 'dispatcher', d.phone, d.email));
+        (adminUsers || []).forEach(a => addOption(a.id, a.full_name || a.name || a.phone || a.email, a.role || 'admin', a.phone, a.email));
         (orders || []).forEach(o => {
-            addOption(o.dispatcher_id, o.dispatcher?.full_name, 'dispatcher');
-            addOption(o.assigned_dispatcher_id, o.assigned_dispatcher?.full_name, 'dispatcher');
+            addOption(o.dispatcher_id, o.dispatcher?.full_name, 'dispatcher', o.dispatcher?.phone, o.dispatcher?.email);
+            addOption(o.assigned_dispatcher_id, o.assigned_dispatcher?.full_name, 'dispatcher', o.assigned_dispatcher?.phone, o.assigned_dispatcher?.email);
         });
 
         const sorted = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
@@ -414,20 +713,110 @@ export default function AdminDashboard({ navigation }) {
 
     const analyticsMasterOptions = useMemo(() => {
         const map = new Map();
-        const addOption = (id, name) => {
+        const addOption = (id, name, phone, email) => {
             if (!id) return;
             const key = String(id);
             if (map.has(key)) return;
             const displayName = name || `Master ${key.slice(0, 6)}`;
-            map.set(key, { id: key, label: displayName });
+            map.set(key, {
+                id: key,
+                label: displayName,
+                full_name: String(name || ''),
+                phone: String(phone || ''),
+                email: String(email || ''),
+                role: 'master',
+            });
         };
 
-        (masters || []).forEach(m => addOption(m.id, m.full_name || m.name || m.phone || m.email));
-        (orders || []).forEach(o => addOption(o.master?.id || o.master_id, o.master?.full_name || o.master_name));
+        (masters || []).forEach(m => addOption(m.id, m.full_name || m.name || m.phone || m.email, m.phone, m.email));
+        (orders || []).forEach(o => addOption(
+            o.master?.id || o.master_id,
+            o.master?.full_name || o.master_name,
+            o.master?.phone,
+            o.master?.email
+        ));
 
         const sorted = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
         return [{ id: 'all', label: TRANSLATIONS.analyticsAllMasters || 'All masters' }, ...sorted];
     }, [masters, orders, TRANSLATIONS]);
+
+    const searchAnalyticsDispatcherOptions = useCallback(async (queryText) => {
+        const query = normalizeSearchTerm(queryText);
+        if (!query) return analyticsDispatcherOptions;
+        if (query.length < 2) {
+            return analyticsDispatcherOptions.filter((option) => optionMatchesSearch(option, query, ['label', 'full_name', 'phone', 'email', 'role_label']));
+        }
+
+        const roleLabel = (role) => {
+            if (role === 'admin') return TRANSLATIONS.adminRole || TRANSLATIONS.admin || 'Admin';
+            return TRANSLATIONS.dispatcherRole || TRANSLATIONS.analyticsDispatcher || 'Dispatcher';
+        };
+        const map = new Map();
+        const addOption = (entity, fallbackRole) => {
+            if (!entity?.id) return;
+            const key = String(entity.id);
+            if (map.has(key)) return;
+            const role = String(entity.role || fallbackRole || 'dispatcher');
+            const roleName = roleLabel(role);
+            const fullName = entity.full_name || entity.name || entity.phone || entity.email || `${roleName} ${key.slice(0, 6)}`;
+            map.set(key, {
+                id: key,
+                label: roleName ? `${fullName} (${roleName})` : fullName,
+                full_name: entity.full_name || entity.name || '',
+                phone: entity.phone || '',
+                email: entity.email || '',
+                role,
+                role_label: roleName,
+            });
+        };
+
+        try {
+            const [dispatcherData, adminData] = await Promise.all([
+                authService.getAllDispatchers ? authService.getAllDispatchers({ search: query, force: true, pageSize: 80 }) : Promise.resolve([]),
+                authService.getAllAdmins ? authService.getAllAdmins({ search: query, force: true, pageSize: 80 }) : Promise.resolve([]),
+            ]);
+            (dispatcherData || []).forEach((item) => addOption(item, 'dispatcher'));
+            (adminData || []).forEach((item) => addOption(item, 'admin'));
+        } catch (error) {
+            console.error(`${LOG_PREFIX} analytics dispatcher search failed`, error);
+        }
+
+        const remoteOptions = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+        if (remoteOptions.length > 0) {
+            return [{ id: 'all', label: TRANSLATIONS.analyticsAllDispatchers || 'All dispatchers' }, ...remoteOptions];
+        }
+        return analyticsDispatcherOptions.filter((option) => optionMatchesSearch(option, query, ['label', 'full_name', 'phone', 'email', 'role_label']));
+    }, [analyticsDispatcherOptions, TRANSLATIONS]);
+
+    const searchAnalyticsMasterOptions = useCallback(async (queryText) => {
+        const query = normalizeSearchTerm(queryText);
+        if (!query) return analyticsMasterOptions;
+        if (query.length < 2) {
+            return analyticsMasterOptions.filter((option) => optionMatchesSearch(option, query, ['label', 'full_name', 'phone', 'email']));
+        }
+
+        try {
+            const remote = await authService.getAllMasters({ search: query, force: true, pageSize: 80 });
+            const mapped = (remote || [])
+                .filter((item) => item?.id)
+                .map((item) => ({
+                    id: String(item.id),
+                    label: item.full_name || item.name || item.phone || item.email || `Master ${String(item.id).slice(0, 6)}`,
+                    full_name: item.full_name || item.name || '',
+                    phone: item.phone || '',
+                    email: item.email || '',
+                    role: 'master',
+                }))
+                .sort((a, b) => a.label.localeCompare(b.label));
+            if (mapped.length > 0) {
+                return [{ id: 'all', label: TRANSLATIONS.analyticsAllMasters || 'All masters' }, ...mapped];
+            }
+        } catch (error) {
+            console.error(`${LOG_PREFIX} analytics master search failed`, error);
+        }
+
+        return analyticsMasterOptions.filter((option) => optionMatchesSearch(option, query, ['label', 'full_name', 'phone', 'email']));
+    }, [analyticsMasterOptions, TRANSLATIONS]);
 
     const analyticsRangeWindow = useMemo(() => {
         if (analyticsRange === 'all') return null;
@@ -453,10 +842,13 @@ export default function AdminDashboard({ navigation }) {
             if (!order) return false;
             if (analyticsFilters.urgency !== 'all' && order.urgency !== analyticsFilters.urgency) return false;
             if (analyticsFilters.service !== 'all' && order.service_type !== analyticsFilters.service) return false;
-            if (analyticsFilters.area !== 'all' && order.area !== analyticsFilters.area) return false;
+            if (
+                analyticsFilters.area !== 'all'
+                && getAreaFilterKey(order.area) !== String(analyticsFilters.area || '').trim().toLowerCase()
+            ) return false;
             return true;
         });
-    }, [orders, analyticsFilters]);
+    }, [orders, analyticsFilters, getAreaFilterKey]);
 
     const analyticsOrders = useMemo(() => {
         return analyticsFilteredOrders.filter(order => {
@@ -598,7 +990,7 @@ export default function AdminDashboard({ navigation }) {
             topUpCount: Number(balanceTopUpStats.count || 0),
             statusBreakdown,
         };
-    }, [analyticsOrders, masters, balanceTopUpStats, settings]);
+    }, [analyticsOrders, masters, balanceTopUpStats, settings, analyticsNowTick]);
 
     const analyticsLists = useMemo(() => {
         const hoursUnit = TRANSLATIONS.analyticsHoursUnit || 'hours';
@@ -700,7 +1092,7 @@ export default function AdminDashboard({ navigation }) {
             backlogOrders,
             funnel: funnelWithRatio,
         };
-    }, [analyticsOrders, t, TRANSLATIONS, getAreaLabel, getCancelReasonLabel]);
+    }, [analyticsOrders, t, TRANSLATIONS, getAreaLabel, getCancelReasonLabel, analyticsNowTick]);
 
     const analyticsDailySeries = useMemo(() => {
         const ordersSeries = Array(7).fill(0);
@@ -1447,7 +1839,7 @@ export default function AdminDashboard({ navigation }) {
     const fallbackNeedsActionOrders = useMemo(() => {
         const now = Date.now();
         return orders.filter(o => {
-            if (o.is_disputed) return true;
+            if (o.is_disputed) return false;
             if (o.status === ORDER_STATUS.COMPLETED) return true;
             if (o.status === ORDER_STATUS.CANCELED_BY_CLIENT) return false;
             if (o.status === ORDER_STATUS.CANCELED_BY_MASTER) return true;
@@ -1460,6 +1852,7 @@ export default function AdminDashboard({ navigation }) {
     const fallbackStatusCounts = useMemo(() => {
         const counts = { Active: 0, Payment: 0, Confirmed: 0, Canceled: 0 };
         orders.forEach(o => {
+            if (o?.is_disputed) return;
             if ([ORDER_STATUS.PLACED, ORDER_STATUS.REOPENED, ORDER_STATUS.CLAIMED, ORDER_STATUS.STARTED].includes(o.status)) {
                 counts.Active += 1;
             } else if (o.status === ORDER_STATUS.COMPLETED) {
@@ -1512,6 +1905,7 @@ export default function AdminDashboard({ navigation }) {
         const countFor = ({ status = statusFilter, dispatcher = filterDispatcher, urgency = filterUrgency, service = serviceFilter }) => {
             return filterCountSource.filter(order => {
                 if (!order) return false;
+                if (order.is_disputed) return false;
                 if (!matchesStatusScope(order, status)) return false;
                 if (!matchesQueueSearch(order, queueSearchNeedle, queueSearchDigits)) return false;
 
@@ -1607,10 +2001,24 @@ export default function AdminDashboard({ navigation }) {
     const [showDatePicker, setShowDatePicker] = useState(false);
     const [showTimePicker, setShowTimePicker] = useState(false);
     const loadedTabsRef = useRef(new Set());
+    const tabDirtyRef = useRef(ADMIN_TAB_KEYS.reduce((acc, key) => ({ ...acc, [key]: true }), {}));
+    const tabLastLoadedAtRef = useRef({});
+    const tabLoadSeqRef = useRef(ADMIN_TAB_KEYS.reduce((acc, key) => ({ ...acc, [key]: 0 }), {}));
+    const tabLoadInFlightRef = useRef(new Map());
+    const pendingCreatedOrdersRef = useRef(new Map());
+    const createConfirmInFlightRef = useRef(new Map());
+    const ordersFullLoadSeqRef = useRef(0);
+    const pickerSearchSeqRef = useRef(0);
+    const assignMasterSearchSeqRef = useRef(0);
+    const realtimeSyncTimerRef = useRef(null);
+    const realtimeLastRunAtRef = useRef(0);
+    const activeTabRef = useRef(activeTab);
     const queueLoadIdRef = useRef(0);
     const queueTimeoutToastAtRef = useRef(0);
     const loadAllDataSeqRef = useRef(0);
     const loadAllDataLatestRef = useRef(null);
+    const loadAllOrdersLatestRef = useRef(null);
+    const ensureTabDataLatestRef = useRef(null);
     const hadAuthUserRef = useRef(false);
     const [tabLoadingState, setTabLoadingState] = useState({
         analytics: false,
@@ -1618,6 +2026,8 @@ export default function AdminDashboard({ navigation }) {
         people: false,
         settings: false,
         create_order: false,
+        disputes: false,
+        payouts: false,
     });
 
     // Interactive Stats Modal
@@ -1631,12 +2041,23 @@ export default function AdminDashboard({ navigation }) {
     // NEW: State for additional modals
     const [showBalanceModal, setShowBalanceModal] = useState(false);
     const [balanceData, setBalanceData] = useState({ amount: '', type: 'top_up', notes: '' });
+    const [isEditingMasterPerformance, setIsEditingMasterPerformance] = useState(false);
+    const [masterPerformanceTarget, setMasterPerformanceTarget] = useState(null);
+    const [masterPerformanceData, setMasterPerformanceData] = useState({
+        max_active_jobs: '',
+        max_immediate_orders: '',
+        max_pending_confirmation: '',
+    });
     const [showAssignModal, setShowAssignModal] = useState(false);
     const [availableMasters, setAvailableMasters] = useState([]);
+    const assignMastersBaseRef = useRef([]);
+    const [assignMasterSearchQuery, setAssignMasterSearchQuery] = useState('');
+    const assignMasterSearchDebounced = useDebouncedValue(assignMasterSearchQuery.trim(), 220);
+    const [assignMasterSearchLoading, setAssignMasterSearchLoading] = useState(false);
     const [assignOrderId, setAssignOrderId] = useState(null);
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [paymentOrder, setPaymentOrder] = useState(null);
-    const [paymentData, setPaymentData] = useState({ method: 'cash', proofUrl: '' });
+    const [paymentData, setPaymentData] = useState({ ...DEFAULT_PAYMENT_CONFIRMATION_DATA });
     const [showMasterDetails, setShowMasterDetails] = useState(false);
     const [masterDetails, setMasterDetails] = useState(null);
     const [masterDetailsLoading, setMasterDetailsLoading] = useState(false);
@@ -1644,9 +2065,24 @@ export default function AdminDashboard({ navigation }) {
     const [masterBalanceHistoryLoading, setMasterBalanceHistoryLoading] = useState(false);
     const [showDepositModal, setShowDepositModal] = useState(false);
     const [depositAmount, setDepositAmount] = useState('');
-    const [detailsPerson, setDetailsPerson] = useState(null); // For person details drawer (master/dispatcher)
+    const [detailsPerson, setDetailsPerson] = useState(null); // For person details drawer (master/dispatcher/partner)
     const [isEditingPerson, setIsEditingPerson] = useState(false);
+    const [isPersonalInfoExpanded, setIsPersonalInfoExpanded] = useState(true);
     const [editPersonData, setEditPersonData] = useState({});
+    const [partnerPayoutRequests, setPartnerPayoutRequests] = useState([]);
+    const [partnerCommissionInput, setPartnerCommissionInput] = useState('');
+    const [partnerMinPayoutInput, setPartnerMinPayoutInput] = useState('');
+    const [partnerDeductAmount, setPartnerDeductAmount] = useState('');
+    const [partnerDeductReason, setPartnerDeductReason] = useState('');
+    const [isPartnerFinanceExpanded, setIsPartnerFinanceExpanded] = useState(true);
+    const [isEditingPartnerTerms, setIsEditingPartnerTerms] = useState(false);
+    const [isEditingPartnerBalance, setIsEditingPartnerBalance] = useState(false);
+    const [partnerBalanceActionType, setPartnerBalanceActionType] = useState('top_up');
+    const [partnerHistoryFilter, setPartnerHistoryFilter] = useState('all');
+    const [partnerHistoryRequestsLimit, setPartnerHistoryRequestsLimit] = useState(PARTNER_HISTORY_PAGE_SIZE);
+    const [partnerHistoryTransactionsLimit, setPartnerHistoryTransactionsLimit] = useState(PARTNER_HISTORY_PAGE_SIZE);
+    const [showPartnerHistoryModal, setShowPartnerHistoryModal] = useState(false);
+    const [partnerHistorySearchQuery, setPartnerHistorySearchQuery] = useState('');
     const [showOrderHistoryModal, setShowOrderHistoryModal] = useState(false);
     const [masterOrderHistory, setMasterOrderHistory] = useState([]);
     const [orderHistoryLoading, setOrderHistoryLoading] = useState(false);
@@ -1655,11 +2091,16 @@ export default function AdminDashboard({ navigation }) {
     const [topUpHistory, setTopUpHistory] = useState([]);
     const [topUpHistoryLoading, setTopUpHistoryLoading] = useState(false);
     const topUpHistoryCache = useRef(new Map());
+    const [partnerFinanceSummary, setPartnerFinanceSummary] = useState(createEmptyPartnerFinanceSummary);
+    const [partnerFinanceLoading, setPartnerFinanceLoading] = useState(false);
+    const partnerFinanceCache = useRef(new Map());
 
     // NEW: Add User Modal State
     const [showAddUserModal, setShowAddUserModal] = useState(false);
-    const [addUserRole, setAddUserRole] = useState('master'); // 'master' or 'dispatcher'
-    const [newUserData, setNewUserData] = useState({ email: '', password: '', full_name: '', phone: '', service_area: '', experience_years: '' });
+    const [addUserRole, setAddUserRole] = useState('master'); // 'master' | 'dispatcher' | 'partner'
+    const [newUserData, setNewUserData] = useState(createEmptyNewUserData);
+    const [newUserPhoneError, setNewUserPhoneError] = useState('');
+    const [editPersonPhoneError, setEditPersonPhoneError] = useState('');
 
     // Password Reset Modal State
     const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
@@ -1689,6 +2130,55 @@ export default function AdminDashboard({ navigation }) {
             });
         return () => { isActive = false; };
     }, [detailsPerson?.id, detailsPerson?.type]);
+
+    useEffect(() => {
+        if (!detailsPerson?.id || detailsPerson?.type !== 'partner') {
+            setPartnerPayoutRequests([]);
+            setPartnerCommissionInput('');
+            setPartnerMinPayoutInput('');
+            setPartnerDeductAmount('');
+            setPartnerDeductReason('');
+            setIsPartnerFinanceExpanded(true);
+            setIsEditingPartnerTerms(false);
+            setIsEditingPartnerBalance(false);
+            setPartnerBalanceActionType('top_up');
+            setPartnerHistoryFilter('all');
+            setPartnerHistoryRequestsLimit(PARTNER_HISTORY_PAGE_SIZE);
+            setPartnerHistoryTransactionsLimit(PARTNER_HISTORY_PAGE_SIZE);
+            setShowPartnerHistoryModal(false);
+            setPartnerHistorySearchQuery('');
+            return;
+        }
+        let isActive = true;
+        const commissionPercent = Number(detailsPerson.partner_commission_rate || 0) * 100;
+        setPartnerCommissionInput(Number.isFinite(commissionPercent) ? String(commissionPercent) : '10');
+        setPartnerMinPayoutInput(String(detailsPerson.partner_min_payout ?? 50));
+        setPartnerDeductAmount('');
+        setPartnerDeductReason('');
+        setIsPartnerFinanceExpanded(true);
+        setIsEditingPartnerTerms(false);
+        setIsEditingPartnerBalance(false);
+        setPartnerBalanceActionType('top_up');
+        setPartnerHistoryFilter('all');
+        setPartnerHistoryRequestsLimit(PARTNER_HISTORY_PAGE_SIZE);
+        setPartnerHistoryTransactionsLimit(PARTNER_HISTORY_PAGE_SIZE);
+        setShowPartnerHistoryModal(false);
+        setPartnerHistorySearchQuery('');
+        partnerFinanceService.getPartnerPayoutRequestsAdmin({ partnerId: detailsPerson.id, limit: 100 })
+            .then((requests) => {
+                if (!isActive) return;
+                setPartnerPayoutRequests(requests || []);
+            })
+            .catch(() => {
+                if (!isActive) return;
+                setPartnerPayoutRequests([]);
+            });
+        return () => { isActive = false; };
+    }, [detailsPerson?.id, detailsPerson?.type]);
+
+    useEffect(() => {
+        setIsPersonalInfoExpanded(true);
+    }, [detailsPerson?.id]);
     const [confirmPassword, setConfirmPassword] = useState('');
 
     const setTabLoading = useCallback((tabKey, isLoading) => {
@@ -1697,6 +2187,33 @@ export default function AdminDashboard({ navigation }) {
             return { ...prev, [tabKey]: isLoading };
         });
     }, []);
+    const getTabStaleTtlMs = useCallback((tabKey) => {
+        return ADMIN_TAB_STALE_TTL_MS[tabKey] || ADMIN_DEFAULT_TAB_STALE_TTL_MS;
+    }, []);
+    const markTabsDirty = useCallback((tabKeys, reason = 'manual') => {
+        const keys = tabKeys === '*'
+            ? ADMIN_TAB_KEYS
+            : (Array.isArray(tabKeys) ? tabKeys : [tabKeys]).filter(Boolean);
+        keys.forEach((key) => {
+            tabDirtyRef.current[key] = true;
+            loadedTabsRef.current.delete(key);
+        });
+        adminDiag('tabs_mark_dirty', { keys, reason });
+    }, []);
+    const shouldRefreshTab = useCallback((tabKey, { force = false, reason = 'auto' } = {}) => {
+        if (!tabKey) return false;
+        if (force) return true;
+        if (!loadedTabsRef.current.has(tabKey)) return true;
+        if (tabDirtyRef.current[tabKey]) return true;
+        const ttlMs = getTabStaleTtlMs(tabKey);
+        const lastLoadedAt = Number(tabLastLoadedAtRef.current?.[tabKey] || 0);
+        if (!lastLoadedAt) return true;
+        const stale = (Date.now() - lastLoadedAt) > ttlMs;
+        if (stale) {
+            adminDiag('tab_stale_refresh', { tabKey, ttlMs, ageMs: Date.now() - lastLoadedAt, reason });
+        }
+        return stale;
+    }, [getTabStaleTtlMs]);
 
     // Initial Load
     useEffect(() => {
@@ -1712,6 +2229,18 @@ export default function AdminDashboard({ navigation }) {
             if (hadAuthUser) {
                 loadAllDataSeqRef.current += 1;
             }
+            tabLoadInFlightRef.current.clear();
+            tabLoadSeqRef.current = ADMIN_TAB_KEYS.reduce((acc, key) => ({ ...acc, [key]: 0 }), {});
+            tabLastLoadedAtRef.current = {};
+            tabDirtyRef.current = ADMIN_TAB_KEYS.reduce((acc, key) => ({ ...acc, [key]: true }), {});
+            pendingCreatedOrdersRef.current.clear();
+            createConfirmInFlightRef.current.clear();
+            ordersFullLoadSeqRef.current = 0;
+            realtimeLastRunAtRef.current = 0;
+            if (realtimeSyncTimerRef.current) {
+                clearTimeout(realtimeSyncTimerRef.current);
+                realtimeSyncTimerRef.current = null;
+            }
             setUser(null);
             setOrders([]);
             setQueueOrders([]);
@@ -1720,15 +2249,20 @@ export default function AdminDashboard({ navigation }) {
             setQueueAttentionItemsState([]);
             setQueueAttentionCountState(0);
             setQueueLoading(false);
+            setDisputes([]);
+            setAdminPayoutRequests([]);
             setStats({});
             setCommissionStats({});
             setBalanceTopUpStats({ totalTopUps: 0, avgTopUp: 0, count: 0 });
+            setPartners([]);
             setTabLoadingState({
                 analytics: false,
                 orders: false,
                 people: false,
                 settings: false,
                 create_order: false,
+                disputes: false,
+                payouts: false,
             });
             return;
         }
@@ -1738,6 +2272,10 @@ export default function AdminDashboard({ navigation }) {
             return authUser;
         });
     }, [authUser]);
+
+    useEffect(() => {
+        activeTabRef.current = activeTab;
+    }, [activeTab]);
 
     useEffect(() => {
         setDistricts(prev => prev.map(d => ({
@@ -1758,9 +2296,17 @@ export default function AdminDashboard({ navigation }) {
 
     useEffect(() => {
         if (!loading && activeTab) {
-            ensureTabData(activeTab);
+            ensureTabData(activeTab, { force: true, reason: 'tab_enter' });
         }
     }, [activeTab, loading]);
+
+    useEffect(() => {
+        if (activeTab !== 'analytics') return undefined;
+        const interval = setInterval(() => {
+            setAnalyticsNowTick(Date.now());
+        }, 60000);
+        return () => clearInterval(interval);
+    }, [activeTab]);
 
     useEffect(() => {
         if (loading || activeTab !== 'orders') return;
@@ -1811,6 +2357,8 @@ export default function AdminDashboard({ navigation }) {
             || showAddUserModal
             || showPasswordResetModal
             || showOrderHistoryModal
+            || showTopUpHistoryModal
+            || showPartnerHistoryModal
             || showPaymentModal
             || showMasterDetails
             || serviceTypeModal.visible
@@ -1829,6 +2377,8 @@ export default function AdminDashboard({ navigation }) {
         showAddUserModal,
         showPasswordResetModal,
         showOrderHistoryModal,
+        showTopUpHistoryModal,
+        showPartnerHistoryModal,
         showPaymentModal,
         showMasterDetails,
         serviceTypeModal.visible,
@@ -1899,11 +2449,124 @@ export default function AdminDashboard({ navigation }) {
         }
     };
 
-    const loadAllOrders = useCallback(async () => {
-        const data = await ordersService.getAllOrders();
-        setOrders(data || []);
-        return data || [];
+    const mergePendingCreatedOrders = useCallback((ordersList = []) => {
+        const base = Array.isArray(ordersList) ? [...ordersList] : [];
+        const now = Date.now();
+        const pending = pendingCreatedOrdersRef.current;
+        if (!pending.size) return base;
+
+        const byId = new Map(base.map((order) => [String(order?.id || ''), order]));
+        for (const [orderId, payload] of pending.entries()) {
+            const ageMs = now - Number(payload?.createdAt || 0);
+            if (ageMs > ADMIN_PENDING_CREATED_ORDER_TTL_MS) {
+                pending.delete(orderId);
+                continue;
+            }
+            if (byId.has(orderId)) {
+                pending.delete(orderId);
+                continue;
+            }
+            if (payload?.order) {
+                base.unshift(payload.order);
+                byId.set(orderId, payload.order);
+            }
+        }
+
+        base.sort((a, b) => {
+            const aTs = new Date(a?.created_at || 0).getTime();
+            const bTs = new Date(b?.created_at || 0).getTime();
+            return bTs - aTs;
+        });
+        return base;
     }, []);
+
+    const loadAllOrders = useCallback(async ({ reason = 'unspecified' } = {}) => {
+        const loadId = ordersFullLoadSeqRef.current + 1;
+        ordersFullLoadSeqRef.current = loadId;
+        const startedAt = Date.now();
+        adminDiag('orders_full_load_start', { loadId, reason });
+        const data = await ordersService.getAllOrders();
+        const merged = mergePendingCreatedOrders(data || []);
+        if (ordersFullLoadSeqRef.current !== loadId) {
+            adminDiag('orders_full_load_stale_ignored', { loadId, reason, count: merged.length });
+            return null;
+        }
+        setOrders(merged);
+        adminDiag('orders_full_load_done', {
+            loadId,
+            reason,
+            count: merged.length,
+            pendingCount: pendingCreatedOrdersRef.current.size,
+            durationMs: Date.now() - startedAt,
+        });
+        return merged;
+    }, [mergePendingCreatedOrders]);
+
+    const upsertOrderInState = useCallback((order) => {
+        if (!order?.id) return;
+        const orderId = String(order.id);
+        setOrders((prev) => {
+            const list = Array.isArray(prev) ? prev : [];
+            const withoutCurrent = list.filter((item) => String(item?.id || '') !== orderId);
+            const merged = [order, ...withoutCurrent];
+            merged.sort((a, b) => {
+                const aTs = new Date(a?.created_at || 0).getTime();
+                const bTs = new Date(b?.created_at || 0).getTime();
+                return bTs - aTs;
+            });
+            return merged;
+        });
+    }, []);
+
+    const confirmCreatedOrderPersisted = useCallback(async (orderId, { reason = 'order_create' } = {}) => {
+        const normalizedId = String(orderId || '');
+        if (!normalizedId) return false;
+        const existingTask = createConfirmInFlightRef.current.get(normalizedId);
+        if (existingTask) return existingTask;
+
+        const task = (async () => {
+            for (let attempt = 0; attempt <= ADMIN_CREATE_CONFIRM_RETRIES; attempt += 1) {
+                try {
+                    const confirmedOrder = await ordersService.getOrderById(normalizedId);
+                    if (confirmedOrder?.id) {
+                        pendingCreatedOrdersRef.current.set(normalizedId, {
+                            order: confirmedOrder,
+                            createdAt: Date.now(),
+                        });
+                        upsertOrderInState(confirmedOrder);
+                        adminDiag('order_create_confirm_hit', { orderId: normalizedId, attempt, reason });
+                        markTabsDirty(['orders', 'analytics', 'people'], 'order_create_confirmed');
+                        await loadAllOrdersLatestRef.current?.({ reason: `${reason}:confirm` });
+                        if ((activeTabRef.current || '') === 'orders') {
+                            await ensureTabDataLatestRef.current?.('orders', { force: true, reason: `${reason}:confirm` });
+                        }
+                        return true;
+                    }
+                } catch (error) {
+                    adminDiag('order_create_confirm_error', {
+                        orderId: normalizedId,
+                        attempt,
+                        reason,
+                        message: error?.message || String(error),
+                    });
+                }
+                if (attempt < ADMIN_CREATE_CONFIRM_RETRIES) {
+                    await sleep(ADMIN_CREATE_CONFIRM_DELAY_MS);
+                }
+            }
+            adminDiag('order_create_confirm_miss', { orderId: normalizedId, retries: ADMIN_CREATE_CONFIRM_RETRIES, reason });
+            return false;
+        })();
+
+        createConfirmInFlightRef.current.set(normalizedId, task);
+        try {
+            return await task;
+        } finally {
+            if (createConfirmInFlightRef.current.get(normalizedId) === task) {
+                createConfirmInFlightRef.current.delete(normalizedId);
+            }
+        }
+    }, [markTabsDirty, upsertOrderInState]);
 
     const loadOrdersQueue = useCallback(async (targetPage = queuePage, { force = false } = {}) => {
         const loadId = queueLoadIdRef.current + 1;
@@ -1959,11 +2622,25 @@ export default function AdminDashboard({ navigation }) {
                 adminDiag('queue_load_stale', { loadId, targetPage });
                 return null;
             }
-            setQueueOrders(timedPayload?.data || []);
-            setQueueTotalCount(Number(timedPayload?.count || 0));
+            const queueItems = Array.isArray(timedPayload?.data) ? timedPayload.data : [];
+            const visibleQueueItems = queueItems.filter((item) => !item?.is_disputed);
+            const hiddenQueueItems = Math.max(0, queueItems.length - visibleQueueItems.length);
+            const rawQueueCount = Number(timedPayload?.count || 0);
+            const normalizedQueueCount = Number.isFinite(rawQueueCount)
+                ? Math.max(0, rawQueueCount - hiddenQueueItems)
+                : visibleQueueItems.length;
+            const rawAttentionItems = Array.isArray(timedPayload?.attentionItems) ? timedPayload.attentionItems : [];
+            const visibleAttentionItems = rawAttentionItems.filter((item) => !item?.is_disputed);
+            const hiddenAttentionItems = Math.max(0, rawAttentionItems.length - visibleAttentionItems.length);
+            const rawAttentionCount = Number(timedPayload?.attentionCount || 0);
+            const normalizedAttentionCount = Number.isFinite(rawAttentionCount)
+                ? Math.max(0, rawAttentionCount - hiddenAttentionItems)
+                : visibleAttentionItems.length;
+            setQueueOrders(visibleQueueItems);
+            setQueueTotalCount(normalizedQueueCount);
             setQueueStatusCountsState(timedPayload?.statusCounts || null);
-            setQueueAttentionItemsState(timedPayload?.attentionItems || []);
-            setQueueAttentionCountState(Number(timedPayload?.attentionCount || 0));
+            setQueueAttentionItemsState(visibleAttentionItems);
+            setQueueAttentionCountState(normalizedAttentionCount);
             setQueueSource(timedPayload?.source || 'unknown');
             return timedPayload;
         } catch (e) {
@@ -1990,43 +2667,50 @@ export default function AdminDashboard({ navigation }) {
         TRANSLATIONS.authRequestTimedOut,
     ]);
 
-    const loadOrders = useCallback(async ({ forceQueue = true } = {}) => {
-        const tasks = [];
-        const shouldLoadOrdersTab = activeTab === 'orders';
-        const shouldLoadAnalyticsTab = activeTab === 'analytics';
-        if (shouldLoadOrdersTab) {
-            tasks.push(loadOrdersQueue(queuePage, { force: forceQueue }));
-        }
-        if (shouldLoadAnalyticsTab) {
-            tasks.push(loadAllOrders());
-        }
-        if (!tasks.length) {
-            tasks.push(loadOrdersQueue(queuePage, { force: forceQueue }));
-        }
-        await Promise.all(tasks);
-    }, [activeTab, queuePage, loadOrdersQueue, loadAllOrders]);
+    const loadOrders = useCallback(async ({ forceQueue = true, reason = 'orders_sync' } = {}) => {
+        await Promise.all([
+            loadOrdersQueue(queuePage, { force: forceQueue }),
+            loadAllOrders({ reason }),
+        ]);
+        const loadedAt = Date.now();
+        ['orders', 'analytics'].forEach((tabKey) => {
+            tabDirtyRef.current[tabKey] = false;
+            tabLastLoadedAtRef.current[tabKey] = loadedAt;
+            loadedTabsRef.current.add(tabKey);
+        });
+        adminDiag('orders_sync_done', { reason, queuePage, loadedAt });
+    }, [queuePage, loadOrdersQueue, loadAllOrders]);
 
-    const loadMasters = async () => {
+    const loadMasters = async ({ force = false } = {}) => {
         try {
-            const data = await authService.getAllMasters();
+            const data = await authService.getAllMasters({ force });
             setMasters(data || []);
         } catch (e) { console.error(e); }
     };
 
-    const loadDispatchers = async () => {
+    const loadDispatchers = async ({ force = false } = {}) => {
         // Implement if authService supports it, otherwise mock or skip
         try {
             if (authService.getAllDispatchers) {
-                const data = await authService.getAllDispatchers();
+                const data = await authService.getAllDispatchers({ force });
                 setDispatchers(data || []);
             }
         } catch (e) { }
     };
 
-    const loadAdmins = async () => {
+    const loadPartners = async ({ force = false } = {}) => {
+        try {
+            if (authService.getAllPartners) {
+                const data = await authService.getAllPartners({ force });
+                setPartners(data || []);
+            }
+        } catch (e) { }
+    };
+
+    const loadAdmins = async ({ force = false } = {}) => {
         try {
             if (authService.getAllAdmins) {
-                const data = await authService.getAllAdmins();
+                const data = await authService.getAllAdmins({ force });
                 setAdminUsers(data || []);
             }
         } catch (e) { }
@@ -2097,54 +2781,160 @@ export default function AdminDashboard({ navigation }) {
         } catch (e) { console.error(e); }
     };
 
-    const ensureTabData = useCallback(async (tabKey, { force = false } = {}) => {
-        if (!tabKey) return;
-        if (!force && loadedTabsRef.current.has(tabKey)) return;
-        setTabLoading(tabKey, true);
+    const loadDisputes = async () => {
         try {
-            switch (tabKey) {
-                case 'analytics':
+            if (ordersService.getDisputesAdmin) {
+                const data = await ordersService.getDisputesAdmin({ status: 'all', limit: 300 });
+                setDisputes(data || []);
+            } else {
+                setDisputes([]);
+            }
+        } catch (e) {
+            console.error(e);
+            setDisputes([]);
+        }
+    };
+
+    const loadPayoutRequests = async ({ status = 'all', limit = 300 } = {}) => {
+        try {
+            const normalizedStatus = String(status || 'all').trim().toLowerCase();
+            const safeLimit = Math.max(1, Math.min(500, Number(limit) || 300));
+            const data = await partnerFinanceService.getPartnerPayoutRequestsAdmin({
+                status: normalizedStatus === 'all' ? null : normalizedStatus,
+                limit: safeLimit,
+            });
+            setAdminPayoutRequests(data || []);
+        } catch (error) {
+            console.error(error);
+            setAdminPayoutRequests([]);
+        }
+    };
+
+    const ensureTabData = useCallback(async (tabKey, { force = false, reason = 'unspecified' } = {}) => {
+        if (!tabKey) return;
+        if (!shouldRefreshTab(tabKey, { force, reason })) {
+            adminDiag('tab_load_skip_fresh', { tabKey, reason });
+            return;
+        }
+        const now = Date.now();
+        const existingMeta = tabLoadInFlightRef.current.get(tabKey);
+        if (existingMeta?.promise) {
+            const ageMs = now - (existingMeta.startedAt || now);
+            const shouldJoin = ageMs < (force ? ADMIN_TAB_FORCE_JOIN_WINDOW_MS : ADMIN_TAB_INFLIGHT_STALE_MS);
+            if (shouldJoin) {
+                adminDiag('tab_load_join_inflight', { tabKey, reason, force, ageMs });
+                await existingMeta.promise;
+                return;
+            }
+            adminDiag('tab_load_drop_stale_inflight', { tabKey, reason, force, ageMs });
+            tabLoadInFlightRef.current.delete(tabKey);
+        }
+        const loadId = (Number(tabLoadSeqRef.current?.[tabKey] || 0) + 1);
+        tabLoadSeqRef.current[tabKey] = loadId;
+        const isStaleLoad = () => Number(tabLoadSeqRef.current?.[tabKey] || 0) !== loadId;
+        setTabLoading(tabKey, true);
+
+        const task = (async () => {
+            const loadTask = (async () => {
+                switch (tabKey) {
+                    case 'analytics':
                     await Promise.all([
                         loadStats(),
                         loadCommissionData(),
                         loadBalanceTopUpStats(),
-                        loadAllOrders(),
-                        loadMasters(),
-                        loadDispatchers(),
-                        loadAdmins(),
+                        loadAllOrders({ reason: `tab_${tabKey}:${reason}` }),
+                        loadMasters({ force }),
+                        loadDispatchers({ force }),
+                        loadAdmins({ force }),
                     ]);
-                    break;
-                case 'orders':
+                        break;
+                    case 'orders':
                     await Promise.all([
                         loadOrdersQueue(force ? 1 : queuePage, { force }),
-                        loadAllOrders(),
-                        loadDispatchers(),
-                        loadAdmins(),
+                        loadAllOrders({ reason: `tab_${tabKey}:${reason}` }),
+                        loadDispatchers({ force }),
+                        loadAdmins({ force }),
                     ]);
-                    break;
-                case 'people':
-                    await Promise.all([loadMasters(), loadDispatchers(), loadAdmins()]);
-                    break;
-                case 'settings':
-                    await Promise.all([
-                        loadSettings(),
-                        loadServiceTypes(),
-                        loadDistricts(),
-                        loadManagedDistricts(),
-                        loadCancellationReasons(),
-                    ]);
-                    break;
-                case 'create_order':
-                    await Promise.all([loadServiceTypes(), loadDistricts()]);
-                    break;
-                default:
-                    break;
+                        break;
+                    case 'people':
+                        await Promise.all([
+                            loadMasters({ force }),
+                            loadDispatchers({ force }),
+                            loadPartners({ force }),
+                            loadAdmins({ force }),
+                        ]);
+                        break;
+                    case 'settings':
+                        await Promise.all([
+                            loadSettings(),
+                            loadServiceTypes(),
+                            loadDistricts(),
+                            loadManagedDistricts(),
+                            loadCancellationReasons(),
+                        ]);
+                        break;
+                    case 'create_order':
+                        await Promise.all([loadServiceTypes(), loadDistricts()]);
+                        break;
+                    case 'disputes':
+                        await Promise.all([
+                            loadDisputes(),
+                            loadDispatchers({ force }),
+                            loadAdmins({ force }),
+                        ]);
+                        break;
+                    case 'payouts':
+                        await Promise.all([
+                            loadPayoutRequests({ status: 'all', limit: 300 }),
+                            loadPartners({ force }),
+                        ]);
+                        break;
+                    default:
+                        break;
+                }
+            })();
+            const timeoutToken = '__tab_load_timeout__';
+            const result = await Promise.race([
+                loadTask,
+                new Promise((resolve) => setTimeout(() => resolve(timeoutToken), ADMIN_TAB_LOAD_TIMEOUT_MS)),
+            ]);
+            if (result === timeoutToken) {
+                adminDiag('tab_load_timeout', { tabKey, reason, force, loadId, timeoutMs: ADMIN_TAB_LOAD_TIMEOUT_MS });
+                tabDirtyRef.current[tabKey] = true;
+                return timeoutToken;
+            }
+            return result;
+        })();
+
+        tabLoadInFlightRef.current.set(tabKey, {
+            promise: task,
+            startedAt: now,
+            loadId,
+        });
+        try {
+            const taskResult = await task;
+            if (taskResult === '__tab_load_timeout__') {
+                return;
+            }
+            if (isStaleLoad()) {
+                adminDiag('tab_load_stale_result_ignored', { tabKey, reason, force, loadId });
+                return;
             }
             loadedTabsRef.current.add(tabKey);
+            tabDirtyRef.current[tabKey] = false;
+            tabLastLoadedAtRef.current[tabKey] = Date.now();
+            adminDiag('tab_load_success', { tabKey, reason, force, loadId });
         } finally {
-            setTabLoading(tabKey, false);
+            const activeMeta = tabLoadInFlightRef.current.get(tabKey);
+            if (activeMeta?.loadId === loadId) {
+                tabLoadInFlightRef.current.delete(tabKey);
+            }
+            if (!isStaleLoad()) {
+                setTabLoading(tabKey, false);
+            }
         }
     }, [
+        shouldRefreshTab,
         queuePage,
         setTabLoading,
         loadStats,
@@ -2154,13 +2944,83 @@ export default function AdminDashboard({ navigation }) {
         loadOrdersQueue,
         loadMasters,
         loadDispatchers,
+        loadPartners,
         loadAdmins,
         loadSettings,
         loadServiceTypes,
         loadDistricts,
         loadManagedDistricts,
         loadCancellationReasons,
+        loadDisputes,
+        loadPayoutRequests,
     ]);
+
+    useEffect(() => {
+        ensureTabDataLatestRef.current = ensureTabData;
+    }, [ensureTabData]);
+
+    useEffect(() => {
+        loadAllOrdersLatestRef.current = loadAllOrders;
+    }, [loadAllOrders]);
+
+    useEffect(() => {
+        if (!ADMIN_REALTIME_SYNC_ENABLED || !authUser?.id) return undefined;
+        const channelName = `admin-orders-sync-${authUser.id}`;
+        const scheduleRealtimeSync = (trigger = 'unknown') => {
+            const now = Date.now();
+            const elapsed = now - realtimeLastRunAtRef.current;
+            const delayMs = elapsed >= ADMIN_REALTIME_MIN_INTERVAL_MS
+                ? ADMIN_REALTIME_DEBOUNCE_MS
+                : Math.max(ADMIN_REALTIME_DEBOUNCE_MS, ADMIN_REALTIME_MIN_INTERVAL_MS - elapsed);
+            if (realtimeSyncTimerRef.current) {
+                clearTimeout(realtimeSyncTimerRef.current);
+            }
+            realtimeSyncTimerRef.current = setTimeout(async () => {
+                realtimeSyncTimerRef.current = null;
+                realtimeLastRunAtRef.current = Date.now();
+                const currentTab = activeTabRef.current || 'analytics';
+                adminDiag('orders_realtime_sync_start', { trigger, currentTab });
+                try {
+                    await loadAllOrdersLatestRef.current?.({ reason: `orders_realtime:${trigger}` });
+                    if (currentTab === 'orders') {
+                        await ensureTabDataLatestRef.current?.('orders', { force: true, reason: `orders_realtime:${trigger}` });
+                    }
+                } catch (error) {
+                    console.error(`${LOG_PREFIX} realtime sync failed`, error);
+                    adminDiag('orders_realtime_sync_error', {
+                        trigger,
+                        currentTab,
+                        message: error?.message || String(error),
+                    });
+                }
+            }, delayMs);
+        };
+
+        const channel = supabase
+            .channel(channelName)
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'orders' },
+                (payload) => {
+                    const eventType = String(payload?.eventType || 'unknown').toLowerCase();
+                    const orderId = payload?.new?.id || payload?.old?.id || null;
+                    adminDiag('orders_realtime_event', { eventType, orderId });
+                    markTabsDirty(['orders', 'analytics', 'people', 'disputes'], `orders_realtime_${eventType}`);
+                    scheduleRealtimeSync(eventType);
+                }
+            )
+            .subscribe((status) => {
+                adminDiag('orders_realtime_status', { status, channel: channelName });
+            });
+
+        return () => {
+            if (realtimeSyncTimerRef.current) {
+                clearTimeout(realtimeSyncTimerRef.current);
+                realtimeSyncTimerRef.current = null;
+            }
+            supabase.removeChannel(channel);
+        };
+    }, [authUser?.id, markTabsDirty]);
 
     const loadAllData = useCallback(async (skipLoadingScreen = false) => {
         const loadId = loadAllDataSeqRef.current + 1;
@@ -2184,7 +3044,7 @@ export default function AdminDashboard({ navigation }) {
                 adminDiag('load_all_data_stale_after_bootstrap', { loadId });
                 return;
             }
-            await ensureTabData(activeTab || 'analytics', { force: true });
+            await ensureTabData(activeTab || 'analytics', { force: true, reason: 'load_all_data' });
         } catch (error) {
             console.error(`${LOG_PREFIX} loadAllData failed`, error);
             adminDiag('load_all_data_error', { loadId, message: error?.message || String(error) });
@@ -2213,7 +3073,7 @@ export default function AdminDashboard({ navigation }) {
     const onRefresh = useCallback(async () => {
         setRefreshing(true);
         try {
-            await ensureTabData(activeTab || 'analytics', { force: true });
+            await ensureTabData(activeTab || 'analytics', { force: true, reason: 'manual_refresh' });
         } finally {
             setRefreshing(false);
         }
@@ -2234,7 +3094,12 @@ export default function AdminDashboard({ navigation }) {
     const openAssignModalFromQueue = async (order) => {
         try {
             const mastersData = await ordersService.getAvailableMasters();
-            setAvailableMasters(mastersData || []);
+            const normalizedMasters = Array.isArray(mastersData) ? mastersData : [];
+            assignMastersBaseRef.current = normalizedMasters;
+            assignMasterSearchSeqRef.current += 1;
+            setAssignMasterSearchQuery('');
+            setAssignMasterSearchLoading(false);
+            setAvailableMasters(normalizedMasters);
             setIsEditing(false);
             setEditForm({});
             setDetailsOrder(order);
@@ -2245,6 +3110,54 @@ export default function AdminDashboard({ navigation }) {
             showToast?.(TRANSLATIONS.toastLoadMastersFailed || 'Failed to load masters', 'error');
         }
     };
+
+    useEffect(() => {
+        if (!showAssignModal) {
+            assignMasterSearchSeqRef.current += 1;
+            setAssignMasterSearchLoading(false);
+            return;
+        }
+
+        const query = normalizeSearchTerm(assignMasterSearchDebounced);
+        if (!query || query.length < 2) {
+            setAvailableMasters(assignMastersBaseRef.current || []);
+            setAssignMasterSearchLoading(false);
+            return;
+        }
+
+        const localMatches = (assignMastersBaseRef.current || []).filter((master) => optionMatchesSearch(
+            master,
+            query,
+            ['full_name', 'name', 'phone', 'email', 'service_area']
+        ));
+        if (localMatches.length > 0) {
+            setAvailableMasters(localMatches);
+        }
+
+        const requestId = assignMasterSearchSeqRef.current + 1;
+        assignMasterSearchSeqRef.current = requestId;
+        let cancelled = false;
+        setAssignMasterSearchLoading(true);
+
+        ordersService.getAvailableMasters({ search: query, force: true, limit: 80, offset: 0 })
+            .then((data) => {
+                if (cancelled || requestId !== assignMasterSearchSeqRef.current) return;
+                setAvailableMasters(Array.isArray(data) ? data : []);
+            })
+            .catch((error) => {
+                if (cancelled || requestId !== assignMasterSearchSeqRef.current) return;
+                console.error(`${LOG_PREFIX} assign master search failed`, error);
+                setAvailableMasters(localMatches);
+            })
+            .finally(() => {
+                if (cancelled || requestId !== assignMasterSearchSeqRef.current) return;
+                setAssignMasterSearchLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [showAssignModal, assignMasterSearchDebounced]);
 
     const openOrderDetails = (order) => {
         setIsEditing(false);
@@ -2264,6 +3177,7 @@ export default function AdminDashboard({ navigation }) {
             }
             showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
             setServiceTypeModal({ visible: false, type: null });
+            markTabsDirty(['settings', 'analytics', 'create_order', 'orders'], 'service_type_save');
             loadServiceTypes();
         } catch (e) {
             showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (e?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
@@ -2284,6 +3198,7 @@ export default function AdminDashboard({ navigation }) {
                     if (serviceTypeModal?.visible && serviceTypeModal?.type?.id === id) {
                         setServiceTypeModal({ visible: false, type: null });
                     }
+                    markTabsDirty(['settings', 'analytics', 'create_order', 'orders'], 'service_type_delete');
                     await loadServiceTypes();
                     showToast(TRANSLATIONS.toastDeleted || 'Deleted', 'success');
                 } catch (e) {
@@ -2318,6 +3233,7 @@ export default function AdminDashboard({ navigation }) {
                 throw new Error(result?.message || 'Failed to save district');
             }
             setDistrictModal({ visible: false, district: null });
+            markTabsDirty(['settings', 'analytics', 'create_order', 'orders'], 'district_save');
             loadManagedDistricts();
             loadDistricts();
             showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
@@ -2340,6 +3256,7 @@ export default function AdminDashboard({ navigation }) {
                     if (districtModal?.visible && districtModal?.district?.id === id) {
                         setDistrictModal({ visible: false, district: null });
                     }
+                    markTabsDirty(['settings', 'analytics', 'create_order', 'orders'], 'district_delete');
                     await Promise.all([loadManagedDistricts(), loadDistricts()]);
                     showToast(TRANSLATIONS.toastDeleted || 'Deleted', 'success');
                 } catch (e) {
@@ -2374,6 +3291,7 @@ export default function AdminDashboard({ navigation }) {
                 throw new Error(result?.message || 'Failed to save cancellation reason');
             }
             setCancellationReasonModal({ visible: false, reason: null });
+            markTabsDirty(['settings', 'analytics', 'create_order', 'orders'], 'cancellation_reason_save');
             loadCancellationReasons();
             showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
         } catch (e) {
@@ -2395,6 +3313,7 @@ export default function AdminDashboard({ navigation }) {
                     if (cancellationReasonModal?.visible && cancellationReasonModal?.reason?.id === id) {
                         setCancellationReasonModal({ visible: false, reason: null });
                     }
+                    markTabsDirty(['settings', 'analytics', 'create_order', 'orders'], 'cancellation_reason_delete');
                     await loadCancellationReasons();
                     showToast(TRANSLATIONS.toastDeleted || 'Deleted', 'success');
                 } catch (e) {
@@ -2455,7 +3374,20 @@ export default function AdminDashboard({ navigation }) {
                 showToast(TRANSLATIONS.toastOrderCreated || 'Order created!', 'success');
                 setCreationSuccess({ id: result.orderId });
                 setConfirmChecked(false);
-                loadOrders(); // Refresh list
+                const createdOrderId = String(result.order?.id || result.orderId || '');
+                if (createdOrderId) {
+                    if (result.order) {
+                        pendingCreatedOrdersRef.current.set(createdOrderId, {
+                            order: result.order,
+                            createdAt: Date.now(),
+                        });
+                        upsertOrderInState(result.order);
+                        adminDiag('order_create_optimistic_seed', { orderId: createdOrderId });
+                    }
+                    void confirmCreatedOrderPersisted(createdOrderId, { reason: 'order_create' });
+                }
+                markTabsDirty(['orders', 'analytics', 'people'], 'order_create');
+                loadOrders({ reason: 'order_create' }); // Refresh list
             } else {
                 showToast(TRANSLATIONS.toastCreateFailed || 'Create failed', 'error');
             }
@@ -2594,7 +3526,8 @@ export default function AdminDashboard({ navigation }) {
             if (result.success) {
                 showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 setIsEditing(false);
-                loadOrders();
+                markTabsDirty(['orders', 'analytics', 'people'], 'order_edit');
+                loadOrders({ reason: 'order_edit' });
                 setDetailsOrder(prev => ({
                     ...prev,
                     ...editForm,
@@ -2615,7 +3548,8 @@ export default function AdminDashboard({ navigation }) {
 
             if (res.success) {
                 showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
-                loadMasters();
+                markTabsDirty(['people', 'analytics', 'orders'], 'verify_master');
+                loadMasters({ force: true });
             } else {
                 showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
@@ -2631,12 +3565,282 @@ export default function AdminDashboard({ navigation }) {
                 : await authService.verifyDispatcher(dispatcherId);
             if (res.success) {
                 showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
-                loadDispatchers();
+                markTabsDirty(['people', 'analytics', 'orders'], 'verify_dispatcher');
+                loadDispatchers({ force: true });
             } else {
                 showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (res.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
         } catch (e) { showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error'); }
         finally { setActionLoading(false); }
+    };
+
+    const handleVerifyPartner = async (partnerId, isVerified) => {
+        setActionLoading(true);
+        try {
+            const res = isVerified
+                ? await authService.unverifyPartner(partnerId)
+                : await authService.verifyPartner(partnerId);
+            if (res.success) {
+                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
+                markTabsDirty(['people', 'analytics', 'orders'], 'verify_partner');
+                await loadPartners({ force: true });
+                if (detailsPerson?.id === partnerId && detailsPerson?.type === 'partner') {
+                    setDetailsPerson((prev) => prev ? ({
+                        ...prev,
+                        is_verified: !isVerified,
+                        is_active: !isVerified ? true : prev.is_active,
+                    }) : prev);
+                }
+            } else {
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (res.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+            }
+        } catch (e) {
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+        } finally { setActionLoading(false); }
+    };
+
+    const handleSavePartnerTerms = async () => {
+        const activePartner = detailsPerson?.type === 'partner' ? detailsPerson : null;
+        if (!activePartner?.id) return;
+        const commission = Number(partnerCommissionInput);
+        const minPayout = Number(partnerMinPayoutInput);
+        if (!Number.isFinite(commission) || commission < 0) {
+            showToast(TRANSLATIONS.invalidAmount || 'Invalid amount', 'error');
+            return;
+        }
+        if (!Number.isFinite(minPayout) || minPayout < 0) {
+            showToast(TRANSLATIONS.invalidAmount || 'Invalid amount', 'error');
+            return;
+        }
+        setActionLoading(true);
+        try {
+            const [rateRes, payoutRes] = await Promise.all([
+                partnerFinanceService.setPartnerCommissionRate(activePartner.id, commission),
+                partnerFinanceService.setPartnerMinPayout(activePartner.id, minPayout),
+            ]);
+            if (!rateRes?.success || !payoutRes?.success) {
+                const message = rateRes?.message || payoutRes?.message || TRANSLATIONS.errorGeneric || 'Error';
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + message, 'error');
+                return;
+            }
+            showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
+            markTabsDirty(['people', 'analytics'], 'partner_terms_update');
+            await loadPartners({ force: true });
+            const cacheKey = `partner:${activePartner.id}`;
+            partnerFinanceCache.current.delete(cacheKey);
+            setDetailsPerson((prev) => (prev?.id === activePartner.id && prev?.type === 'partner') ? ({
+                ...prev,
+                partner_commission_rate: commission / 100,
+                partner_min_payout: minPayout,
+            }) : prev);
+            const summary = await loadPartnerFinanceSummary(activePartner, true);
+            setPartnerFinanceSummary(summary);
+            setIsEditingPartnerTerms(false);
+        } catch (error) {
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (error?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleDeductPartnerBalance = async () => {
+        const activePartner = detailsPerson?.type === 'partner' ? detailsPerson : null;
+        if (!activePartner?.id) return;
+        const amount = Number(partnerDeductAmount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+            showToast(TRANSLATIONS.invalidAmount || 'Invalid amount', 'error');
+            return;
+        }
+        setActionLoading(true);
+        try {
+            const res = await partnerFinanceService.deductPartnerBalance(
+                activePartner.id,
+                amount,
+                partnerDeductReason?.trim() || null
+            );
+            if (!res?.success) {
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (res?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                return;
+            }
+            showToast(res?.message || (TRANSLATIONS.toastUpdated || 'Updated'), 'success');
+            setPartnerDeductAmount('');
+            setPartnerDeductReason('');
+            await loadPartners({ force: true });
+            const summary = await loadPartnerFinanceSummary(activePartner, true);
+            setPartnerFinanceSummary(summary);
+            setDetailsPerson((prev) => (prev?.id === activePartner.id && prev?.type === 'partner')
+                ? ({ ...prev, partner_balance: summary?.balance ?? prev.partner_balance })
+                : prev);
+            setIsEditingPartnerBalance(false);
+        } catch (error) {
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (error?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleTopUpPartnerBalance = async () => {
+        const activePartner = detailsPerson?.type === 'partner' ? detailsPerson : null;
+        if (!activePartner?.id) return;
+        const amount = Number(partnerDeductAmount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+            showToast(TRANSLATIONS.invalidAmount || 'Invalid amount', 'error');
+            return;
+        }
+        setActionLoading(true);
+        try {
+            const res = await partnerFinanceService.topUpPartnerBalance(
+                activePartner.id,
+                amount,
+                partnerDeductReason?.trim() || null
+            );
+            if (!res?.success) {
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (res?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                return;
+            }
+            showToast(res?.message || (TRANSLATIONS.toastUpdated || 'Updated'), 'success');
+            setPartnerDeductAmount('');
+            setPartnerDeductReason('');
+            await loadPartners({ force: true });
+            const summary = await loadPartnerFinanceSummary(activePartner, true);
+            setPartnerFinanceSummary(summary);
+            setDetailsPerson((prev) => (prev?.id === activePartner.id && prev?.type === 'partner')
+                ? ({ ...prev, partner_balance: summary?.balance ?? prev.partner_balance })
+                : prev);
+            setIsEditingPartnerBalance(false);
+        } catch (error) {
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (error?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleProcessPartnerPayout = async (requestItem, actionType = 'paid') => {
+        if (!requestItem?.id) return;
+        const activePartner = detailsPerson?.type === 'partner' ? detailsPerson : null;
+        let approvedAmount = null;
+        if (actionType === 'paid') {
+            if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.prompt === 'function') {
+                const entered = window.prompt(
+                    TRANSLATIONS.partnerPayoutAmountPrompt || 'Enter payout amount (leave empty to use requested amount)',
+                    String(requestItem.requested_amount || '')
+                );
+                if (entered === null) return;
+                const parsed = Number(String(entered).trim());
+                approvedAmount = Number.isFinite(parsed) && parsed > 0 ? parsed : Number(requestItem.requested_amount || 0);
+            } else {
+                approvedAmount = Number(requestItem.requested_amount || 0);
+            }
+        }
+
+        setActionLoading(true);
+        try {
+            const result = await partnerFinanceService.processPartnerPayoutRequest(
+                requestItem.id,
+                actionType,
+                actionType === 'paid' ? approvedAmount : null,
+                null
+            );
+            if (!result?.success) {
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (result?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                return;
+            }
+            showToast(result?.message || (TRANSLATIONS.toastUpdated || 'Updated'), 'success');
+            markTabsDirty(['payouts', 'people', 'analytics'], `partner_payout_${actionType}`);
+            await loadPayoutRequests({ status: 'all', limit: 300 });
+            await loadPartners({ force: true });
+            if (activePartner?.id) {
+                const summary = await loadPartnerFinanceSummary(activePartner, true);
+                setPartnerFinanceSummary(summary);
+                setDetailsPerson((prev) => (prev?.id === activePartner.id && prev?.type === 'partner')
+                    ? ({ ...prev, partner_balance: summary?.balance ?? prev.partner_balance })
+                    : prev);
+            }
+        } catch (error) {
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (error?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleProcessPayoutFromTab = async (requestItem, actionType = 'paid') => {
+        if (!requestItem?.id) return;
+        const requestId = String(requestItem.id);
+        const action = String(actionType || '').toLowerCase();
+        if (!['paid', 'rejected'].includes(action)) return;
+
+        let approvedAmount = null;
+        if (action === 'paid') {
+            const requestedAmount = Number(requestItem?.requested_amount || 0);
+            if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.prompt === 'function') {
+                const entered = window.prompt(
+                    TRANSLATIONS.partnerPayoutAmountPrompt || 'Enter payout amount (leave empty to use requested amount)',
+                    String(requestedAmount || '')
+                );
+                if (entered === null) return;
+                const parsed = Number(String(entered).trim());
+                approvedAmount = Number.isFinite(parsed) && parsed > 0 ? parsed : requestedAmount;
+            } else {
+                approvedAmount = requestedAmount;
+            }
+            if (!Number.isFinite(approvedAmount) || approvedAmount <= 0) {
+                showToast?.(TRANSLATIONS.invalidAmount || 'Invalid amount', 'error');
+                return;
+            }
+        }
+
+        const partnerName = requestItem?.partner?.full_name
+            || requestItem?.partner?.email
+            || requestItem?.partner?.phone
+            || `${TRANSLATIONS.partnerRole || 'Partner'} ${String(requestItem?.partner_id || '').slice(0, 6)}`;
+        const requestedAmountText = Number(requestItem?.requested_amount || 0).toFixed(2);
+        const confirmationMessage = action === 'paid'
+            ? `${TRANSLATIONS.markPaid || 'Mark paid'} ${requestedAmountText} ${TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}?\n${partnerName}`
+            : `${TRANSLATIONS.reject || 'Reject'} ${TRANSLATIONS.payouts || 'payout'} request?\n${partnerName}`;
+
+        const executeAction = async () => {
+            setActionLoading(true);
+            setAdminPayoutActionId(requestId);
+            try {
+                const result = await partnerFinanceService.processPartnerPayoutRequest(
+                    requestItem.id,
+                    action,
+                    action === 'paid' ? approvedAmount : null,
+                    null
+                );
+                if (!result?.success) {
+                    showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (result?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                    return;
+                }
+                showToast(result?.message || (TRANSLATIONS.toastUpdated || 'Updated'), 'success');
+                markTabsDirty(['payouts', 'people', 'analytics'], `partner_payout_${action}`);
+                await Promise.all([
+                    loadPayoutRequests({ status: 'all', limit: 300 }),
+                    loadPartners({ force: true }),
+                ]);
+            } catch (error) {
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (error?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+            } finally {
+                setAdminPayoutActionId(null);
+                setActionLoading(false);
+            }
+        };
+
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            if (window.confirm(confirmationMessage)) {
+                await executeAction();
+            }
+            return;
+        }
+
+        Alert.alert(
+            TRANSLATIONS.payouts || 'Payouts',
+            confirmationMessage,
+            [
+                { text: TRANSLATIONS.cancel || 'Cancel', style: 'cancel' },
+                { text: TRANSLATIONS.confirm || 'Confirm', onPress: () => { void executeAction(); } },
+            ],
+        );
     };
 
     // --- NEW: Missing Admin Handlers ---
@@ -2648,7 +3852,8 @@ export default function AdminDashboard({ navigation }) {
                 if (result.success) {
                     showToast(TRANSLATIONS.filterStatusReopened || TRANSLATIONS.toastUpdated || 'Updated', 'success');
                     setDetailsOrder(null);
-                    loadOrders();
+                    markTabsDirty(['orders', 'analytics', 'people'], 'order_reopen');
+                    loadOrders({ reason: 'order_reopen' });
                 } else {
                     showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
                 }
@@ -2684,7 +3889,8 @@ export default function AdminDashboard({ navigation }) {
                         const result = await ordersService.expireOldOrders();
                         if (result.success) {
                             showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
-                            loadOrders();
+                            markTabsDirty(['orders', 'analytics', 'people'], 'order_expire');
+                            loadOrders({ reason: 'order_expire' });
                             loadStats();
                         } else {
                             showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
@@ -2719,7 +3925,8 @@ export default function AdminDashboard({ navigation }) {
                     showToast(TRANSLATIONS.toastMasterAssigned || 'Master assigned!', 'success');
                     setDetailsOrder(null);
                     setShowAssignModal(false);
-                    loadOrders();
+                    markTabsDirty(['orders', 'analytics', 'people'], 'order_assign_master');
+                    loadOrders({ reason: 'order_assign_master' });
                 } else {
                     showToast(TRANSLATIONS.toastAssignFail || 'Assignment failed', 'error');
                 }
@@ -2742,7 +3949,7 @@ export default function AdminDashboard({ navigation }) {
         }
     };
 
-    const handleConfirmPaymentAdmin = async (orderId, paymentMethod = 'cash') => {
+    const handleConfirmPaymentAdmin = async (orderId, finalAmount = null) => {
         if (!orderId) return;
         Alert.alert(TRANSLATIONS.confirmPayment || 'Confirm Payment', TRANSLATIONS.confirmPaymentPrompt || 'Mark this order as paid?', [
             { text: TRANSLATIONS.cancel || 'Cancel', style: 'cancel' },
@@ -2752,18 +3959,20 @@ export default function AdminDashboard({ navigation }) {
                     setActionLoading(true);
                     try {
                         if (ordersService.confirmPaymentAdmin) {
-                            await ordersService.confirmPaymentAdmin(orderId, paymentMethod);
+                            await ordersService.confirmPaymentAdmin(orderId, { finalAmount });
                         } else {
                             await ordersService.updateOrder(orderId, {
                                 status: ORDER_STATUS.CONFIRMED,
                                 confirmed_at: new Date().toISOString(),
-                                payment_method: paymentMethod,
+                                final_price: finalAmount,
+                                payment_method: 'other',
                                 payment_proof_url: null
                             });
                         }
                         showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                         setDetailsOrder(null);
-                        loadOrders();
+                        markTabsDirty(['orders', 'analytics', 'people'], 'payment_confirm_admin');
+                        loadOrders({ reason: 'payment_confirm_admin' });
                         loadStats();
                     } catch (e) {
                         showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
@@ -2780,18 +3989,90 @@ export default function AdminDashboard({ navigation }) {
             showToast?.(TRANSLATIONS.toastNoOrderSelected || 'No order selected', 'error');
             return;
         }
+        const rawFinalAmount = String(paymentData?.finalAmount ?? '').trim();
+        if (!rawFinalAmount) {
+            showToast?.(TRANSLATIONS.labelFinalAmountRequired || 'Final amount is required', 'error');
+            return;
+        }
+        const parsedFinalAmount = Number(rawFinalAmount);
+        if (!Number.isFinite(parsedFinalAmount) || parsedFinalAmount <= 0) {
+            showToast?.(TRANSLATIONS.labelFinalAmountInvalid || 'Final amount must be a positive number', 'error');
+            return;
+        }
         setActionLoading(true);
         try {
-            const result = await ordersService.confirmPaymentAdmin(paymentOrder.id, paymentData.method, paymentData.proofUrl || null);
+            const result = paymentOrder?.is_disputed
+                ? await ordersService.resolveDisputedOrderAdmin(paymentOrder.id, { finalAmount: parsedFinalAmount })
+                : await ordersService.confirmPaymentAdmin(paymentOrder.id, { finalAmount: parsedFinalAmount });
             if (result.success) {
-                showToast(TRANSLATIONS.toastPaymentConfirmed || 'Payment confirmed', 'success');
+                showToast(
+                    paymentOrder?.is_disputed
+                        ? (TRANSLATIONS.toastDisputeResolved || 'Dispute resolved')
+                        : (TRANSLATIONS.toastPaymentConfirmed || 'Payment confirmed'),
+                    'success',
+                );
                 setShowPaymentModal(false);
                 setPaymentOrder(null);
-                setPaymentData({ method: 'cash', proofUrl: '' });
-                loadOrders();
-                loadStats();
+                setPaymentData({ ...DEFAULT_PAYMENT_CONFIRMATION_DATA });
+                setDetailsOrder(null);
+                markTabsDirty(['orders', 'analytics', 'people', 'disputes'], paymentOrder?.is_disputed ? 'dispute_resolve_modal' : 'payment_confirm_modal');
+                await Promise.all([
+                    loadOrders({ reason: paymentOrder?.is_disputed ? 'dispute_resolve_modal' : 'payment_confirm_modal' }),
+                    loadStats(),
+                    loadDisputes(),
+                ]);
             } else {
-                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                showToast(result.message || ((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error')), 'error');
+            }
+        } catch (e) {
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleReportMasterFromPaymentModal = async () => {
+        if (!paymentOrder?.id) {
+            showToast?.(TRANSLATIONS.toastNoOrderSelected || 'No order selected', 'error');
+            return;
+        }
+        if (paymentOrder?.is_disputed) {
+            showToast?.(TRANSLATIONS.toastMasterAlreadyReported || 'Order already has a dispute report', 'info');
+            return;
+        }
+        const reason = String(paymentData?.reportReason || '').trim();
+        if (!reason) {
+            showToast?.(TRANSLATIONS.labelReportReasonRequired || 'Please add a report reason', 'error');
+            return;
+        }
+        const parsedFinalAmount = Number(String(paymentData?.finalAmount ?? '').trim());
+        const normalizedFinalAmount = Number.isFinite(parsedFinalAmount) && parsedFinalAmount > 0
+            ? parsedFinalAmount
+            : null;
+
+        setActionLoading(true);
+        try {
+            const result = await ordersService.reportPaymentDispute(paymentOrder.id, {
+                reason,
+                disputeType: 'price_disagreement',
+                source: 'payment_confirmation',
+                reportedFinalAmount: normalizedFinalAmount,
+                masterFinalAmount: paymentOrder?.final_price ?? paymentOrder?.initial_price ?? null,
+                workPerformed: paymentOrder?.work_performed || paymentData?.workPerformed || null,
+                hoursWorked: paymentOrder?.hours_worked ?? paymentData?.hoursWorked ?? null,
+            });
+            if (result.success) {
+                showToast(TRANSLATIONS.toastMasterReported || 'Master reported for review', 'success');
+                setShowPaymentModal(false);
+                setPaymentOrder(null);
+                setPaymentData({ ...DEFAULT_PAYMENT_CONFIRMATION_DATA });
+                markTabsDirty(['orders', 'analytics', 'people', 'disputes'], 'payment_report_master');
+                await Promise.all([
+                    loadOrders({ reason: 'payment_report_master' }),
+                    loadDisputes(),
+                ]);
+            } else {
+                showToast(result.message || ((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error')), 'error');
             }
         } catch (e) {
             showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
@@ -2843,7 +4124,8 @@ export default function AdminDashboard({ navigation }) {
                 if (result.success) {
                     showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                     setDetailsOrder(null);
-                    loadOrders();
+                    markTabsDirty(['orders', 'analytics', 'people'], 'order_cancel_admin');
+                    loadOrders({ reason: 'order_cancel_admin' });
                     loadStats();
                 } else {
                     showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
@@ -2875,7 +4157,8 @@ export default function AdminDashboard({ navigation }) {
                 if (result.success) {
                     showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                     setDetailsOrder(null);
-                    loadOrders();
+                    markTabsDirty(['orders', 'analytics', 'people'], 'order_unassign_master');
+                    loadOrders({ reason: 'order_unassign_master' });
                 } else {
                     showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
                 }
@@ -2905,47 +4188,132 @@ export default function AdminDashboard({ navigation }) {
     const openTransferPicker = (order) => {
         if (!order) return;
         const currentAssigned = order.assigned_dispatcher_id || order.dispatcher_id;
-        const options = [
-            ...(dispatchers || []).map(d => ({
-                id: d.id,
-                label: d.full_name || d.email || d.phone || `Dispatcher ${String(d.id).slice(0, 6)}`
-            })),
-            ...(adminUsers || []).map(a => ({
-                id: a.id,
-                label: a.full_name || a.email || a.phone || `Admin ${String(a.id).slice(0, 6)}`
-            })),
-        ].filter(opt => opt.id && String(opt.id) !== String(currentAssigned));
+        const buildTransferOptions = (dispatcherRows = [], adminRows = []) => {
+            const map = new Map();
+            const pushOption = (row, roleFallback, fallbackPrefix) => {
+                if (!row?.id) return;
+                const id = String(row.id);
+                if (String(id) === String(currentAssigned)) return;
+                if (map.has(id)) return;
+                const role = row.role || roleFallback;
+                const roleLabel = role === 'admin'
+                    ? (TRANSLATIONS.adminRole || TRANSLATIONS.admin || 'Admin')
+                    : (TRANSLATIONS.dispatcherRole || TRANSLATIONS.analyticsDispatcher || 'Dispatcher');
+                const subtitleParts = [row.phone, row.email, roleLabel].filter(Boolean);
+                map.set(id, {
+                    id,
+                    label: row.full_name || row.name || row.email || row.phone || `${fallbackPrefix} ${id.slice(0, 6)}`,
+                    full_name: row.full_name || row.name || '',
+                    phone: row.phone || '',
+                    email: row.email || '',
+                    role,
+                    subtitle: subtitleParts.join(' | '),
+                });
+            };
+            (dispatcherRows || []).forEach((row) => pushOption(row, 'dispatcher', 'Dispatcher'));
+            (adminRows || []).forEach((row) => pushOption(row, 'admin', 'Admin'));
+            return Array.from(map.values()).sort((a, b) => String(a.label || '').localeCompare(String(b.label || '')));
+        };
+
+        const options = buildTransferOptions(dispatchers, adminUsers);
 
         if (options.length === 0) {
             showToast?.(TRANSLATIONS.noDispatchersFound || 'No other dispatchers found', 'info');
             return;
         }
+
+        const searchTransferOptions = async (queryText) => {
+            const query = normalizeSearchTerm(queryText);
+            if (!query || query.length < 2) {
+                return options;
+            }
+            const localMatches = options.filter((opt) => optionMatchesSearch(opt, query, ['label', 'full_name', 'phone', 'email', 'role']));
+            try {
+                const [dispatcherRows, adminRows] = await Promise.all([
+                    authService.getAllDispatchers ? authService.getAllDispatchers({ search: query, force: true, pageSize: 80 }) : Promise.resolve([]),
+                    authService.getAllAdmins ? authService.getAllAdmins({ search: query, force: true, pageSize: 80 }) : Promise.resolve([]),
+                ]);
+                const remoteOptions = buildTransferOptions(dispatcherRows || [], adminRows || []);
+                return remoteOptions.length > 0 ? remoteOptions : localMatches;
+            } catch (error) {
+                console.error(`${LOG_PREFIX} transfer picker search failed`, error);
+                return localMatches;
+            }
+        };
+
         setPickerModal({
             visible: true,
             title: TRANSLATIONS.pickerDispatcher || 'Select dispatcher',
             options,
             value: '',
-            onChange: async (targetId) => handleTransferDispatcher(order, targetId),
+            onChange: async (targetId) => {
+                const selectedOption = options.find((opt) => String(opt?.id) === String(targetId));
+                await handleTransferDispatcher(order, selectedOption || targetId);
+            },
+            searchable: true,
+            searchFields: ['label', 'full_name', 'phone', 'email', 'role'],
+            searchPlaceholder: TRANSLATIONS.placeholderSearch || 'Search by name, phone, email',
+            onSearch: searchTransferOptions,
+            emptyText: TRANSLATIONS.noDispatchersFound || 'No dispatchers found',
         });
     };
 
-    const handleTransferDispatcher = async (order, targetDispatcherId) => {
+    const handleTransferDispatcher = async (order, targetDispatcher) => {
+        const targetDispatcherId = typeof targetDispatcher === 'object' ? targetDispatcher?.id : targetDispatcher;
         if (!order?.id || !user?.id || !targetDispatcherId) return;
-        setActionLoading(true);
-        try {
-            const result = await ordersService.transferOrderToDispatcher(order.id, user.id, targetDispatcherId, user?.role);
-            if (result.success) {
-                showToast?.(TRANSLATIONS.toastTransferSuccess || 'Order transferred', 'success');
-                setDetailsOrder(null);
-                loadOrders();
-            } else {
+        const targetId = String(targetDispatcherId);
+        const knownTarget = [...(dispatchers || []), ...(adminUsers || [])]
+            .find((person) => String(person?.id || '') === targetId);
+        const fallbackName = `${TRANSLATIONS.pickerDispatcher || 'Dispatcher'} ${targetId.slice(0, 6)}`;
+        const targetLabel = (typeof targetDispatcher === 'object'
+            ? (
+                targetDispatcher?.label
+                || targetDispatcher?.full_name
+                || targetDispatcher?.email
+                || targetDispatcher?.phone
+            )
+            : null)
+            || knownTarget?.full_name
+            || knownTarget?.name
+            || knownTarget?.email
+            || knownTarget?.phone
+            || fallbackName;
+        const confirmTemplate = TRANSLATIONS.alertTransferMsg || 'Transfer this order to {0}?';
+        const confirmMessage = String(confirmTemplate).includes('{0}')
+            ? String(confirmTemplate).replace('{0}', targetLabel)
+            : `${confirmTemplate}\n${targetLabel}`;
+        const executeTransfer = async () => {
+            setActionLoading(true);
+            try {
+                const result = await ordersService.transferOrderToDispatcher(order.id, user.id, targetId, user?.role);
+                if (result.success) {
+                    showToast?.(TRANSLATIONS.toastTransferSuccess || 'Order transferred', 'success');
+                    setDetailsOrder(null);
+                    markTabsDirty(['orders', 'analytics', 'people'], 'order_transfer_dispatcher');
+                    loadOrders({ reason: 'order_transfer_dispatcher' });
+                } else {
+                    showToast?.(TRANSLATIONS.toastTransferFailed || 'Transfer failed', 'error');
+                }
+            } catch (e) {
                 showToast?.(TRANSLATIONS.toastTransferFailed || 'Transfer failed', 'error');
+            } finally {
+                setActionLoading(false);
             }
-        } catch (e) {
-            showToast?.(TRANSLATIONS.toastTransferFailed || 'Transfer failed', 'error');
-        } finally {
-            setActionLoading(false);
+        };
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            if (window.confirm(confirmMessage)) {
+                await executeTransfer();
+            }
+            return;
         }
+        Alert.alert(
+            TRANSLATIONS.transferOrder || 'Transfer Order',
+            confirmMessage,
+            [
+                { text: TRANSLATIONS.cancel || 'Cancel', style: 'cancel' },
+                { text: TRANSLATIONS.confirm || 'Confirm', onPress: () => { void executeTransfer(); } },
+            ],
+        );
     };
 
     const handleVerifyPaymentProof = async (orderId, isValid) => {
@@ -2955,7 +4323,8 @@ export default function AdminDashboard({ navigation }) {
             if (result.success) {
                 showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 setDetailsOrder(null);
-                loadOrders();
+                markTabsDirty(['orders', 'analytics', 'people'], 'payment_proof_verify');
+                loadOrders({ reason: 'payment_proof_verify' });
             } else {
                 showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
@@ -2963,15 +4332,179 @@ export default function AdminDashboard({ navigation }) {
         finally { setActionLoading(false); }
     };
 
+    const closeBalanceModal = useCallback(() => {
+        setShowBalanceModal(false);
+        setBalanceData({ amount: '', type: 'top_up', notes: '' });
+    }, []);
+
+    const openMasterOverlayModal = useCallback((onOpen) => {
+        if (typeof onOpen !== 'function') return;
+        if (detailsPerson?.id) {
+            setIsEditingPerson(false);
+            setIsEditingMasterPerformance(false);
+            setEditPersonPhoneError('');
+            setDetailsPerson(null);
+            setTimeout(() => {
+                onOpen();
+            }, Platform.OS === 'web' ? 40 : 180);
+            return;
+        }
+        onOpen();
+    }, [detailsPerson?.id]);
+
+    const openMasterBalanceModal = useCallback((person, mode = 'top_up') => {
+        if (!person?.id) return;
+        const nextType = mode === 'adjustment' ? 'adjustment' : 'top_up';
+        setIsEditingPerson(false);
+        setEditPersonPhoneError('');
+        openMasterOverlayModal(() => {
+            setSelectedMaster(person);
+            setBalanceData({ amount: '', type: nextType, notes: '' });
+            setShowBalanceModal(true);
+        });
+    }, [openMasterOverlayModal]);
+
+    const openMasterPerformanceEditor = useCallback((person) => {
+        if (!person?.id) return;
+        setIsEditingPerson(false);
+        setEditPersonPhoneError('');
+        setMasterPerformanceTarget(person);
+        setMasterPerformanceData({
+            max_active_jobs: person?.max_active_jobs === null || person?.max_active_jobs === undefined ? '' : String(person.max_active_jobs),
+            max_immediate_orders: person?.max_immediate_orders === null || person?.max_immediate_orders === undefined ? '' : String(person.max_immediate_orders),
+            max_pending_confirmation: person?.max_pending_confirmation === null || person?.max_pending_confirmation === undefined ? '' : String(person.max_pending_confirmation),
+        });
+        setIsEditingMasterPerformance(true);
+    }, []);
+
+    const closeMasterPerformanceEditor = useCallback(() => {
+        setIsEditingMasterPerformance(false);
+        setMasterPerformanceTarget(null);
+        setMasterPerformanceData({
+            max_active_jobs: '',
+            max_immediate_orders: '',
+            max_pending_confirmation: '',
+        });
+    }, []);
+
+    const handleCancelPartnerTermsEditor = useCallback(() => {
+        const activePartner = detailsPerson?.type === 'partner' ? detailsPerson : null;
+        const commissionPercent = Number(activePartner?.partner_commission_rate || 0) * 100;
+        setPartnerCommissionInput(Number.isFinite(commissionPercent) ? String(commissionPercent) : '10');
+        setPartnerMinPayoutInput(String(activePartner?.partner_min_payout ?? 50));
+        setIsEditingPartnerTerms(false);
+    }, [detailsPerson]);
+
+    const handleCancelPartnerBalanceEditor = useCallback(() => {
+        setIsEditingPartnerBalance(false);
+        setPartnerBalanceActionType('top_up');
+        setPartnerDeductAmount('');
+        setPartnerDeductReason('');
+    }, []);
+
+    const handleOpenPartnerTermsEditor = useCallback(() => {
+        const activePartner = detailsPerson?.type === 'partner' ? detailsPerson : null;
+        if (!activePartner?.id) return;
+        const commissionPercent = Number(activePartner.partner_commission_rate || 0) * 100;
+        setPartnerCommissionInput(Number.isFinite(commissionPercent) ? String(commissionPercent) : '10');
+        setPartnerMinPayoutInput(String(activePartner.partner_min_payout ?? 50));
+        setIsPartnerFinanceExpanded(true);
+        setIsEditingPartnerBalance(false);
+        setIsEditingPartnerTerms(true);
+    }, [detailsPerson]);
+
+    const handleOpenPartnerBalanceEditor = useCallback((mode = 'top_up') => {
+        const activePartner = detailsPerson?.type === 'partner' ? detailsPerson : null;
+        if (!activePartner?.id) return;
+        setIsPartnerFinanceExpanded(true);
+        setIsEditingPartnerTerms(false);
+        setIsEditingPartnerBalance(true);
+        setPartnerBalanceActionType(mode === 'deduct' ? 'deduct' : 'top_up');
+        setPartnerDeductAmount('');
+        setPartnerDeductReason('');
+    }, [detailsPerson]);
+
+    const handleCloseDetailsDrawer = useCallback(() => {
+        if (isEditingPerson) {
+            setIsEditingPerson(false);
+            setEditPersonPhoneError('');
+            return;
+        }
+        if (isEditingMasterPerformance) {
+            closeMasterPerformanceEditor();
+            return;
+        }
+        if (isEditingPartnerTerms) {
+            handleCancelPartnerTermsEditor();
+            return;
+        }
+        if (isEditingPartnerBalance) {
+            handleCancelPartnerBalanceEditor();
+            return;
+        }
+        setDetailsPerson(null);
+    }, [
+        closeMasterPerformanceEditor,
+        handleCancelPartnerBalanceEditor,
+        handleCancelPartnerTermsEditor,
+        isEditingMasterPerformance,
+        isEditingPartnerBalance,
+        isEditingPartnerTerms,
+        isEditingPerson,
+    ]);
+
+    useEffect(() => {
+        if (
+            detailsPerson?.type === 'master'
+            && detailsPerson?.id
+            && masterPerformanceTarget?.id
+            && String(masterPerformanceTarget.id) === String(detailsPerson.id)
+        ) {
+            return;
+        }
+        closeMasterPerformanceEditor();
+    }, [closeMasterPerformanceEditor, detailsPerson?.id, detailsPerson?.type, masterPerformanceTarget?.id]);
+
     const handleAddMasterBalance = async (masterId, amount, type, notes) => {
+        const transactionType = type === 'adjustment' ? 'adjustment' : 'top_up';
+        const parsedAmount = Number(String(amount || '').replace(',', '.'));
+        if (!masterId) {
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+            return;
+        }
+        if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+            showToast(TRANSLATIONS.amountSom || 'Amount (som)', 'error');
+            return;
+        }
+        const signedAmount = transactionType === 'adjustment'
+            ? -Math.abs(parsedAmount)
+            : Math.abs(parsedAmount);
+
         setActionLoading(true);
         try {
-            const result = await earningsService.addMasterBalance(masterId, parseFloat(amount), type, notes);
+            const result = await earningsService.addMasterBalance(masterId, signedAmount, transactionType, notes);
             if (result.success) {
                 showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
-                setShowBalanceModal(false);
-                setBalanceData({ amount: '', type: 'top_up', notes: '' });
-                loadMasters();
+                closeBalanceModal();
+                topUpHistoryCache.current.delete(`master:${masterId}`);
+                setDetailsPerson((prev) => {
+                    if (!prev || prev.id !== masterId) return prev;
+                    const nextBalance = Number(result.balanceAfter);
+                    return {
+                        ...prev,
+                        prepaid_balance: Number.isFinite(nextBalance) ? nextBalance : prev.prepaid_balance,
+                    };
+                });
+                setSelectedMaster((prev) => {
+                    if (!prev || prev.id !== masterId) return prev;
+                    const nextBalance = Number(result.balanceAfter);
+                    return {
+                        ...prev,
+                        prepaid_balance: Number.isFinite(nextBalance) ? nextBalance : prev.prepaid_balance,
+                    };
+                });
+                markTabsDirty(['people', 'analytics'], transactionType === 'adjustment' ? 'master_balance_deduct' : 'master_balance_topup');
+                loadMasters({ force: true });
                 loadCommissionData();
             } else {
                 showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
@@ -2987,7 +4520,8 @@ export default function AdminDashboard({ navigation }) {
             if (result.success) {
                 showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 setShowDepositModal(false);
-                loadMasters();
+                markTabsDirty(['people', 'analytics'], 'master_initial_deposit');
+                loadMasters({ force: true });
             } else {
                 showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
@@ -2996,19 +4530,191 @@ export default function AdminDashboard({ navigation }) {
     };
     // ----------------------
 
+    const parseOptionalNonNegativeInteger = useCallback((value, label) => {
+        const raw = String(value ?? '').trim();
+        if (!raw) return { ok: true, value: null };
+        if (!/^\d+$/.test(raw)) {
+            return { ok: false, value: null, error: `${label} must be a non-negative whole number` };
+        }
+        return { ok: true, value: Number.parseInt(raw, 10) };
+    }, []);
+
+    const parseOptionalNonNegativeDecimal = useCallback((value, label) => {
+        const raw = String(value ?? '').trim();
+        if (!raw) return { ok: true, value: null };
+        const parsed = Number(raw.replace(',', '.'));
+        if (!Number.isFinite(parsed) || parsed < 0) {
+            return { ok: false, value: null, error: `${label} must be a non-negative number` };
+        }
+        return { ok: true, value: parsed };
+    }, []);
+
+    const handleSaveMasterPerformance = async () => {
+        if (!masterPerformanceTarget?.id) return;
+
+        const maxActiveParsed = parseOptionalNonNegativeInteger(masterPerformanceData?.max_active_jobs, TRANSLATIONS.maxActiveJobs || 'Max active jobs');
+        if (!maxActiveParsed.ok) {
+            showToast(maxActiveParsed.error, 'error');
+            return;
+        }
+
+        const maxImmediateParsed = parseOptionalNonNegativeInteger(masterPerformanceData?.max_immediate_orders, TRANSLATIONS.maxImmediateOrders || 'Max immediate orders');
+        if (!maxImmediateParsed.ok) {
+            showToast(maxImmediateParsed.error, 'error');
+            return;
+        }
+
+        const maxPendingParsed = parseOptionalNonNegativeInteger(masterPerformanceData?.max_pending_confirmation, TRANSLATIONS.maxPendingConfirmation || 'Max pending confirmation');
+        if (!maxPendingParsed.ok) {
+            showToast(maxPendingParsed.error, 'error');
+            return;
+        }
+
+        const updates = {
+            max_active_jobs: maxActiveParsed.value,
+            max_immediate_orders: maxImmediateParsed.value,
+            max_pending_confirmation: maxPendingParsed.value,
+        };
+
+        setActionLoading(true);
+        try {
+            const result = await authService.updateProfile(masterPerformanceTarget.id, updates);
+            if (!result?.success) {
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (result?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                return;
+            }
+            const updatedProfile = result?.user || {};
+            setDetailsPerson((prev) => {
+                if (!prev || prev.id !== masterPerformanceTarget.id) return prev;
+                return {
+                    ...prev,
+                    max_active_jobs: updatedProfile.max_active_jobs ?? updates.max_active_jobs,
+                    max_immediate_orders: updatedProfile.max_immediate_orders ?? updates.max_immediate_orders,
+                    max_pending_confirmation: updatedProfile.max_pending_confirmation ?? updates.max_pending_confirmation,
+                };
+            });
+            showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
+            closeMasterPerformanceEditor();
+            markTabsDirty(['people', 'analytics', 'orders'], 'master_performance_update');
+            loadMasters({ force: true });
+        } catch (error) {
+            console.error('Master performance update failed:', error);
+            showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const closeAddUserModal = useCallback(() => {
+        setShowAddUserModal(false);
+        setNewUserData(createEmptyNewUserData());
+        setNewUserPhoneError('');
+    }, []);
+
+    const handleNewUserPhoneChange = useCallback((text) => {
+        const rawValue = String(text || '');
+        const normalized = normalizeKyrgyzPhone(rawValue);
+        const nextValue = normalized || rawValue;
+        setNewUserData((prev) => ({ ...prev, phone: nextValue }));
+        setNewUserPhoneError(nextValue && !isValidKyrgyzPhone(nextValue)
+            ? (TRANSLATIONS.errorPhoneFormat || 'Invalid format (+996...)')
+            : '');
+    }, [TRANSLATIONS.errorPhoneFormat]);
+
+    const handleNewUserPhoneBlur = useCallback(() => {
+        const rawValue = String(newUserData?.phone || '').trim();
+        if (!rawValue) {
+            setNewUserPhoneError('');
+            return;
+        }
+        const normalized = normalizeKyrgyzPhone(rawValue);
+        if (!normalized) {
+            setNewUserPhoneError(TRANSLATIONS.errorPhoneFormat || 'Invalid format (+996...)');
+            return;
+        }
+        setNewUserData((prev) => ({ ...prev, phone: normalized }));
+        setNewUserPhoneError('');
+    }, [newUserData?.phone, TRANSLATIONS.errorPhoneFormat]);
+
+    const handleEditPersonPhoneChange = useCallback((text) => {
+        const rawValue = String(text || '');
+        const normalized = normalizeKyrgyzPhone(rawValue);
+        const nextValue = normalized || rawValue;
+        setEditPersonData((prev) => ({ ...prev, phone: nextValue }));
+        setEditPersonPhoneError(nextValue && !isValidKyrgyzPhone(nextValue)
+            ? (TRANSLATIONS.errorPhoneFormat || 'Invalid format (+996...)')
+            : '');
+    }, [TRANSLATIONS.errorPhoneFormat]);
+
+    const handleEditPersonPhoneBlur = useCallback(() => {
+        const rawValue = String(editPersonData?.phone || '').trim();
+        if (!rawValue) {
+            setEditPersonPhoneError('');
+            return;
+        }
+        const normalized = normalizeKyrgyzPhone(rawValue);
+        if (!normalized) {
+            setEditPersonPhoneError(TRANSLATIONS.errorPhoneFormat || 'Invalid format (+996...)');
+            return;
+        }
+        setEditPersonData((prev) => ({ ...prev, phone: normalized }));
+        setEditPersonPhoneError('');
+    }, [editPersonData?.phone, TRANSLATIONS.errorPhoneFormat]);
+
     // Handle save person profile
     const handleSavePersonProfile = async () => {
+        const fullName = String(editPersonData?.full_name || '').trim();
+        const email = String(editPersonData?.email || '').trim().toLowerCase();
+        const rawPhone = String(editPersonData?.phone || '').trim();
+        const normalizedPhone = rawPhone ? normalizeKyrgyzPhone(rawPhone) : '';
+
+        if (!fullName) {
+            showToast(TRANSLATIONS.toastFillRequired || 'Please fill required fields', 'error');
+            return;
+        }
+
+        if (email && !EMAIL_FORMAT_REGEX.test(email)) {
+            showToast(TRANSLATIONS.invalidEmail || 'Invalid email format', 'error');
+            return;
+        }
+
+        if (rawPhone && !normalizedPhone) {
+            setEditPersonPhoneError(TRANSLATIONS.errorPhoneFormat || 'Invalid format (+996...)');
+            showToast(TRANSLATIONS.toastFixPhone || 'Fix phone format', 'error');
+            return;
+        }
+
+        const maxActiveParsed = parseOptionalNonNegativeInteger(editPersonData?.max_active_jobs, TRANSLATIONS.maxActiveJobs || 'Max active jobs');
+        if (detailsPerson?.type === 'master' && !maxActiveParsed.ok) {
+            showToast(maxActiveParsed.error, 'error');
+            return;
+        }
+
+        const maxImmediateParsed = parseOptionalNonNegativeInteger(editPersonData?.max_immediate_orders, TRANSLATIONS.maxImmediateOrders || 'Max immediate orders');
+        if (detailsPerson?.type === 'master' && !maxImmediateParsed.ok) {
+            showToast(maxImmediateParsed.error, 'error');
+            return;
+        }
+
+        const maxPendingParsed = parseOptionalNonNegativeInteger(editPersonData?.max_pending_confirmation, TRANSLATIONS.maxPendingConfirmation || 'Max pending confirmation');
+        if (detailsPerson?.type === 'master' && !maxPendingParsed.ok) {
+            showToast(maxPendingParsed.error, 'error');
+            return;
+        }
+
         setActionLoading(true);
         try {
             const updates = {
-                full_name: editPersonData.full_name,
-                phone: editPersonData.phone,
-                email: editPersonData.email,
+                full_name: fullName,
+                phone: normalizedPhone || '',
+                email,
             };
 
             if (detailsPerson?.type === 'master') {
-                updates.service_area = editPersonData.service_area;
-                updates.experience_years = editPersonData.experience_years;
+                updates.service_area = String(editPersonData?.service_area || '').trim();
+                updates.max_active_jobs = maxActiveParsed.value;
+                updates.max_immediate_orders = maxImmediateParsed.value;
+                updates.max_pending_confirmation = maxPendingParsed.value;
             }
 
             const result = await authService.updateProfile(detailsPerson?.id, updates);
@@ -3016,9 +4722,12 @@ export default function AdminDashboard({ navigation }) {
             if (result.success) {
                 showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
                 setIsEditingPerson(false);
+                setEditPersonPhoneError('');
                 setDetailsPerson(null);
-                if (detailsPerson?.type === 'master') loadMasters();
-                else loadDispatchers();
+                markTabsDirty(['people', 'analytics', 'orders'], 'person_profile_update');
+                if (detailsPerson?.type === 'master') loadMasters({ force: true });
+                else if (detailsPerson?.type === 'partner') loadPartners({ force: true });
+                else loadDispatchers({ force: true });
             } else {
                 showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
@@ -3029,28 +4738,105 @@ export default function AdminDashboard({ navigation }) {
         finally { setActionLoading(false); }
     };
 
-    // Handle create new user (master/dispatcher)
+    // Handle create new user (master/dispatcher/partner)
     const handleCreateUser = async () => {
-        if (!newUserData.email || !newUserData.password || !newUserData.full_name) {
+        const email = String(newUserData?.email || '').trim().toLowerCase();
+        const password = String(newUserData?.password || '');
+        const fullName = String(newUserData?.full_name || '').trim();
+        const rawPhone = String(newUserData?.phone || '').trim();
+        const normalizedPhone = rawPhone ? normalizeKyrgyzPhone(rawPhone) : '';
+        const serviceArea = String(newUserData?.service_area || '').trim();
+
+        if (!email || !password || !fullName) {
             showToast(TRANSLATIONS.toastFillRequired || 'Please fill required fields', 'error');
             return;
         }
 
+        if (!EMAIL_FORMAT_REGEX.test(email)) {
+            showToast(TRANSLATIONS.invalidEmail || 'Invalid email format', 'error');
+            return;
+        }
+
+        if (password.length < 6) {
+            showToast(TRANSLATIONS.minCharacters || 'Minimum 6 characters', 'error');
+            return;
+        }
+
+        if (rawPhone && !normalizedPhone) {
+            setNewUserPhoneError(TRANSLATIONS.errorPhoneFormat || 'Invalid format (+996...)');
+            showToast(TRANSLATIONS.toastFixPhone || 'Fix phone format', 'error');
+            return;
+        }
+
+        const maxActiveParsed = parseOptionalNonNegativeInteger(newUserData?.max_active_jobs, TRANSLATIONS.maxActiveJobs || 'Max active jobs');
+        if (addUserRole === 'master' && !maxActiveParsed.ok) {
+            showToast(maxActiveParsed.error, 'error');
+            return;
+        }
+
+        const maxImmediateParsed = parseOptionalNonNegativeInteger(newUserData?.max_immediate_orders, TRANSLATIONS.maxImmediateOrders || 'Max immediate orders');
+        if (addUserRole === 'master' && !maxImmediateParsed.ok) {
+            showToast(maxImmediateParsed.error, 'error');
+            return;
+        }
+
+        const maxPendingParsed = parseOptionalNonNegativeInteger(newUserData?.max_pending_confirmation, TRANSLATIONS.maxPendingConfirmation || 'Max pending confirmation');
+        if (addUserRole === 'master' && !maxPendingParsed.ok) {
+            showToast(maxPendingParsed.error, 'error');
+            return;
+        }
+
+        const partnerCommissionParsed = parseOptionalNonNegativeDecimal(newUserData?.partner_commission_rate, TRANSLATIONS.commissionRate || 'Commission');
+        if (addUserRole === 'partner' && (!partnerCommissionParsed.ok || (partnerCommissionParsed.value !== null && partnerCommissionParsed.value > 100))) {
+            showToast(partnerCommissionParsed.error || (TRANSLATIONS.errorGeneric || 'Commission must be between 0 and 100'), 'error');
+            return;
+        }
+
+        const partnerMinPayoutParsed = parseOptionalNonNegativeDecimal(newUserData?.partner_min_payout, TRANSLATIONS.partnerMinPayout || 'Min payout');
+        if (addUserRole === 'partner' && !partnerMinPayoutParsed.ok) {
+            showToast(partnerMinPayoutParsed.error, 'error');
+            return;
+        }
+
+        const createPayload = {
+            ...newUserData,
+            email,
+            password,
+            full_name: fullName,
+            phone: normalizedPhone || '',
+            service_area: serviceArea,
+            role: addUserRole,
+        };
+
+        if (addUserRole === 'master') {
+            if (String(newUserData?.max_active_jobs ?? '').trim() !== '') createPayload.max_active_jobs = maxActiveParsed.value;
+            if (String(newUserData?.max_immediate_orders ?? '').trim() !== '') createPayload.max_immediate_orders = maxImmediateParsed.value;
+            if (String(newUserData?.max_pending_confirmation ?? '').trim() !== '') createPayload.max_pending_confirmation = maxPendingParsed.value;
+        }
+
+        if (addUserRole === 'partner') {
+            createPayload.partner_commission_rate = partnerCommissionParsed.value ?? null;
+            createPayload.partner_min_payout = partnerMinPayoutParsed.value ?? null;
+        }
+
         setActionLoading(true);
         try {
-            const result = await authService.createUser({
-                ...newUserData,
-                role: addUserRole
-            });
+            const result = await authService.createUser(
+                createPayload,
+                {
+                    creatorRole: user?.role || authUser?.role || 'admin',
+                }
+            );
 
             if (result.success) {
-                showToast(TRANSLATIONS.toastUpdated || 'Updated', 'success');
-                setShowAddUserModal(false);
-                setNewUserData({ email: '', password: '', full_name: '', phone: '', service_area: '', experience_years: '' });
-                if (addUserRole === 'master') loadMasters();
-                else loadDispatchers();
+                showToast(result.message || (TRANSLATIONS.toastUpdated || 'Updated'), 'success');
+                closeAddUserModal();
+                markTabsDirty(['people', 'analytics', 'orders'], 'user_create');
+                if (addUserRole === 'master') loadMasters({ force: true });
+                else if (addUserRole === 'partner') loadPartners({ force: true });
+                else loadDispatchers({ force: true });
             } else {
-                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+                showToast((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (result?.message || TRANSLATIONS.errorGeneric || 'Error'), 'error');
             }
         } catch (e) {
             console.error('Create user failed:', e);
@@ -3090,6 +4876,80 @@ export default function AdminDashboard({ navigation }) {
         finally { setActionLoading(false); }
     };
 
+    const handleDeleteUser = async (person, explicitRole = null) => {
+        const targetId = person?.id;
+        if (!targetId) return;
+
+        const role = String(explicitRole || person?.type || person?.role || '').toLowerCase();
+        const roleLabel = role === 'master'
+            ? (TRANSLATIONS.masterRole || 'Master')
+            : role === 'partner'
+                ? (TRANSLATIONS.partnerRole || 'Partner')
+                : (TRANSLATIONS.dispatcherRole || 'Dispatcher');
+        const displayName = person?.full_name || person?.email || person?.phone || String(targetId).slice(0, 8);
+        const deleteTitle = TRANSLATIONS.deleteUser || TRANSLATIONS.delete || 'Delete User';
+        const deleteMessage = `${TRANSLATIONS.confirmDeleteUser || 'Permanently delete this user? This cannot be undone.'}\n\n${roleLabel}: ${displayName}`;
+
+        confirmDestructive(deleteTitle, deleteMessage, async () => {
+            setActionLoading(true);
+            try {
+                const result = await authService.hardDeleteUser(
+                    targetId,
+                    `admin_panel_delete:${role || 'user'}`
+                );
+
+                if (!result?.success) {
+                    const blockers = result?.blockers || {};
+                    const blockerSuffix = (Number(blockers.reviews || 0) > 0 || Number(blockers.disputes || 0) > 0)
+                        ? ` (reviews: ${Number(blockers.reviews || 0)}, disputes: ${Number(blockers.disputes || 0)})`
+                        : '';
+                    showToast(
+                        (TRANSLATIONS.toastFailedPrefix || 'Failed: ')
+                        + (result?.message || TRANSLATIONS.errorGeneric || 'Error')
+                        + blockerSuffix,
+                        'error'
+                    );
+                    return;
+                }
+
+                showToast(result.message || (TRANSLATIONS.toastUpdated || 'Updated'), 'success');
+                setIsEditingPerson(false);
+                if (detailsPerson?.id && String(detailsPerson.id) === String(targetId)) {
+                    setDetailsPerson(null);
+                }
+                if (passwordResetTarget?.id && String(passwordResetTarget.id) === String(targetId)) {
+                    setShowPasswordResetModal(false);
+                    setPasswordResetTarget(null);
+                    setNewPassword('');
+                    setConfirmPassword('');
+                }
+
+                markTabsDirty(['people', 'analytics', 'orders'], 'user_delete');
+                if (role === 'master') {
+                    await loadMasters({ force: true });
+                } else if (role === 'partner') {
+                    await loadPartners({ force: true });
+                } else if (role === 'dispatcher') {
+                    await loadDispatchers({ force: true });
+                } else {
+                    await Promise.all([
+                        loadMasters({ force: true }),
+                        loadPartners({ force: true }),
+                        loadDispatchers({ force: true }),
+                    ]);
+                }
+            } catch (error) {
+                showToast(
+                    (TRANSLATIONS.toastFailedPrefix || 'Failed: ')
+                    + (error?.message || TRANSLATIONS.errorGeneric || 'Error'),
+                    'error'
+                );
+            } finally {
+                setActionLoading(false);
+            }
+        });
+    };
+
     // Load order history when modal opens (works for both masters and dispatchers)
     const loadOrderHistory = async (person, force = false) => {
         if (!person?.id) return;
@@ -3105,7 +4965,12 @@ export default function AdminDashboard({ navigation }) {
         setOrderHistoryLoading(true);
         try {
             let history;
-            if (person?.type === 'dispatcher' || person?.role === 'dispatcher') {
+            if (
+                person?.type === 'dispatcher'
+                || person?.role === 'dispatcher'
+                || person?.type === 'partner'
+                || person?.role === 'partner'
+            ) {
                 // Get orders created/handled by this dispatcher
                 history = await ordersService.getDispatcherOrderHistory(person.id);
             } else {
@@ -3131,6 +4996,10 @@ export default function AdminDashboard({ navigation }) {
         await loadOrderHistory(person, true);
     };
 
+    const closeOrderHistoryModal = useCallback(() => {
+        setShowOrderHistoryModal(false);
+    }, []);
+
     useEffect(() => {
         if (showOrderHistoryModal && selectedMaster?.id && masterOrderHistory.length === 0) {
             loadOrderHistory(selectedMaster);
@@ -3152,7 +5021,7 @@ export default function AdminDashboard({ navigation }) {
         setTopUpHistoryLoading(true);
         try {
             const history = await earningsService.getBalanceTransactions(person.id, 50);
-            const filtered = (history || []).filter(tx => ['top_up', 'initial_deposit'].includes(tx.transaction_type));
+            const filtered = (history || []).filter(tx => ['top_up', 'initial_deposit', 'adjustment'].includes(tx.transaction_type));
             topUpHistoryCache.current.set(cacheKey, filtered);
             setTopUpHistory(filtered);
         } catch (e) {
@@ -3171,11 +5040,227 @@ export default function AdminDashboard({ navigation }) {
         await loadTopUpHistory(person, true);
     };
 
+    const closeTopUpHistoryModal = useCallback(() => {
+        setShowTopUpHistoryModal(false);
+    }, []);
+
+    const openPartnerHistoryModal = useCallback(() => {
+        setShowPartnerHistoryModal(true);
+    }, []);
+
+    const closePartnerHistoryModal = useCallback(() => {
+        setShowPartnerHistoryModal(false);
+        setPartnerHistorySearchQuery('');
+    }, []);
+
     useEffect(() => {
         if (showTopUpHistoryModal && selectedMaster?.id && topUpHistory.length === 0) {
             loadTopUpHistory(selectedMaster);
         }
     }, [showTopUpHistoryModal, selectedMaster, topUpHistory.length]);
+
+    const normalizePartnerFinanceSummary = useCallback((summary) => {
+        const fallback = createEmptyPartnerFinanceSummary();
+        const source = summary && typeof summary === 'object' ? summary : {};
+        return {
+            ...fallback,
+            ...source,
+            balance: Number(source.balance ?? fallback.balance),
+            commissionRatePercent: Number(source.commissionRatePercent ?? fallback.commissionRatePercent),
+            minPayout: Number(source.minPayout ?? fallback.minPayout),
+            earnedTotal: Number(source.earnedTotal ?? fallback.earnedTotal),
+            deductedTotal: Number(source.deductedTotal ?? fallback.deductedTotal),
+            paidTotal: Number(source.paidTotal ?? fallback.paidTotal),
+            requestedTotal: Number(source.requestedTotal ?? fallback.requestedTotal),
+            pendingRequests: Number(source.pendingRequests ?? fallback.pendingRequests),
+            transactions: Array.isArray(source.transactions) ? source.transactions : [],
+            payoutRequests: Array.isArray(source.payoutRequests) ? source.payoutRequests : [],
+        };
+    }, []);
+
+    const loadPartnerFinanceSummary = useCallback(async (partner, force = false) => {
+        if (!partner?.id) return createEmptyPartnerFinanceSummary();
+        const cacheKey = `partner:${partner.id}`;
+
+        if (!force && partnerFinanceCache.current.has(cacheKey)) {
+            const cached = partnerFinanceCache.current.get(cacheKey);
+            setPartnerFinanceSummary(cached);
+            return cached;
+        }
+
+        if (partnerFinanceLoading && !force) return partnerFinanceSummary;
+
+        setPartnerFinanceLoading(true);
+        try {
+            const summary = await partnerFinanceService.getPartnerFinanceSummary(partner.id);
+            const normalized = normalizePartnerFinanceSummary(summary);
+            partnerFinanceCache.current.set(cacheKey, normalized);
+            setPartnerFinanceSummary(normalized);
+            setPartnerPayoutRequests(normalized.payoutRequests || []);
+            return normalized;
+        } catch (error) {
+            console.error('Failed to load partner finance summary:', error);
+            const fallback = createEmptyPartnerFinanceSummary();
+            setPartnerFinanceSummary(fallback);
+            return fallback;
+        } finally {
+            setPartnerFinanceLoading(false);
+        }
+    }, [normalizePartnerFinanceSummary, partnerFinanceLoading, partnerFinanceSummary]);
+
+    useEffect(() => {
+        if (detailsPerson?.type !== 'partner' || !detailsPerson?.id || !isPartnerFinanceExpanded) return;
+        void loadPartnerFinanceSummary(detailsPerson);
+    }, [detailsPerson, isPartnerFinanceExpanded, loadPartnerFinanceSummary]);
+
+    const formatDateTimeLabel = useCallback((value) => {
+        if (!value) return TRANSLATIONS.noData || 'N/A';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return TRANSLATIONS.noData || 'N/A';
+        return date.toLocaleString();
+    }, [TRANSLATIONS.noData]);
+
+    const buildPersonCurrentActivity = useCallback((personType, personId) => {
+        if (!personType || !personId) return null;
+        const targetId = String(personId);
+        const relatedOrders = (orders || []).filter((orderItem) => {
+            const masterId = String(orderItem?.master_id || orderItem?.master?.id || '');
+            const dispatcherId = String(orderItem?.dispatcher_id || orderItem?.dispatcher?.id || '');
+            const assignedDispatcherId = String(orderItem?.assigned_dispatcher_id || orderItem?.assigned_dispatcher?.id || '');
+            if (personType === 'master') return masterId === targetId;
+            if (personType === 'dispatcher' || personType === 'partner') {
+                return dispatcherId === targetId || assignedDispatcherId === targetId;
+            }
+            return false;
+        });
+
+        const activeCount = relatedOrders.filter((orderItem) => {
+            const status = normalizeStatus(orderItem?.status);
+            if (personType === 'master') return ['claimed', 'started', 'wip'].includes(status);
+            return !COMPLETED_STATUSES.has(status) && !CANCELED_STATUSES.has(status) && status !== 'reopened';
+        }).length;
+        const awaitingPaymentCount = relatedOrders.filter((orderItem) => normalizeStatus(orderItem?.status) === 'completed').length;
+        const reopenedCount = relatedOrders.filter((orderItem) => normalizeStatus(orderItem?.status) === 'reopened').length;
+        const latestOrder = [...relatedOrders].sort((a, b) => {
+            const bTime = new Date(b?.updated_at || b?.created_at || 0).getTime();
+            const aTime = new Date(a?.updated_at || a?.created_at || 0).getTime();
+            return bTime - aTime;
+        })[0];
+        const latestStatusLabel = latestOrder
+            ? getOrderStatusLabel(latestOrder?.status, TRANSLATIONS)
+            : (TRANSLATIONS.noData || 'N/A');
+        const latestAtLabel = latestOrder
+            ? formatDateTimeLabel(latestOrder?.updated_at || latestOrder?.created_at)
+            : (TRANSLATIONS.noData || 'N/A');
+        const stateLabel = activeCount > 0
+            ? `${TRANSLATIONS.active || 'Active'} (${activeCount})`
+            : (TRANSLATIONS.available || 'Available');
+
+        return {
+            activeCount,
+            awaitingPaymentCount,
+            reopenedCount,
+            latestStatusLabel,
+            latestAtLabel,
+            stateLabel,
+            relatedCount: relatedOrders.length,
+        };
+    }, [orders, TRANSLATIONS, formatDateTimeLabel]);
+
+    const masterCurrentActivity = useMemo(() => (
+        detailsPerson?.type === 'master' && detailsPerson?.id
+            ? buildPersonCurrentActivity('master', detailsPerson.id)
+            : null
+    ), [detailsPerson?.id, detailsPerson?.type, buildPersonCurrentActivity]);
+
+    const dispatcherCurrentActivity = useMemo(() => (
+        detailsPerson?.type === 'dispatcher' && detailsPerson?.id
+            ? buildPersonCurrentActivity('dispatcher', detailsPerson.id)
+            : null
+    ), [detailsPerson?.id, detailsPerson?.type, buildPersonCurrentActivity]);
+
+    const partnerCurrentActivity = useMemo(() => (
+        detailsPerson?.type === 'partner' && detailsPerson?.id
+            ? buildPersonCurrentActivity('partner', detailsPerson.id)
+            : null
+    ), [detailsPerson?.id, detailsPerson?.type, buildPersonCurrentActivity]);
+
+    const partnerPendingRequestsCount = useMemo(() => (
+        (partnerPayoutRequests || []).filter((item) => String(item?.status || '').toLowerCase() === 'requested').length
+    ), [partnerPayoutRequests]);
+
+    const partnerFinanceCurrentRequest = useMemo(() => (
+        (partnerFinanceSummary?.payoutRequests || []).find((item) => String(item?.status || '').toLowerCase() === 'requested') || null
+    ), [partnerFinanceSummary]);
+
+    const partnerHistoryRequests = useMemo(() => (
+        Array.isArray(partnerFinanceSummary?.payoutRequests) ? partnerFinanceSummary.payoutRequests : []
+    ), [partnerFinanceSummary?.payoutRequests]);
+
+    const partnerHistoryTransactions = useMemo(() => (
+        Array.isArray(partnerFinanceSummary?.transactions) ? partnerFinanceSummary.transactions : []
+    ), [partnerFinanceSummary?.transactions]);
+
+    const partnerHistorySearchNormalized = normalizeSearchTerm(partnerHistorySearchQuery);
+    const filteredPartnerHistoryRequests = useMemo(() => {
+        if (!partnerHistorySearchNormalized) return partnerHistoryRequests;
+        return partnerHistoryRequests.filter((item) => {
+            const haystack = [
+                item?.status,
+                item?.requested_amount,
+                item?.approved_amount,
+                item?.requested_note,
+                item?.admin_note,
+                item?.created_at,
+                item?.processed_at,
+            ].map((v) => String(v ?? '').toLowerCase()).join(' ');
+            return haystack.includes(partnerHistorySearchNormalized);
+        });
+    }, [partnerHistoryRequests, partnerHistorySearchNormalized]);
+    const filteredPartnerHistoryTransactions = useMemo(() => {
+        if (!partnerHistorySearchNormalized) return partnerHistoryTransactions;
+        return partnerHistoryTransactions.filter((item) => {
+            const haystack = [
+                item?.transaction_type,
+                item?.amount,
+                item?.notes,
+                item?.created_at,
+                item?.balance_before,
+                item?.balance_after,
+            ].map((v) => String(v ?? '').toLowerCase()).join(' ');
+            return haystack.includes(partnerHistorySearchNormalized);
+        });
+    }, [partnerHistoryTransactions, partnerHistorySearchNormalized]);
+
+    const shouldShowPartnerRequests = partnerHistoryFilter === 'all' || partnerHistoryFilter === 'requests';
+    const shouldShowPartnerTransactions = partnerHistoryFilter === 'all' || partnerHistoryFilter === 'transactions';
+    const isPersonSubSidebarOpen = showOrderHistoryModal || showTopUpHistoryModal || showPartnerHistoryModal;
+
+    useEffect(() => {
+        setPartnerHistoryRequestsLimit(PARTNER_HISTORY_PAGE_SIZE);
+        setPartnerHistoryTransactionsLimit(PARTNER_HISTORY_PAGE_SIZE);
+    }, [partnerHistoryFilter, partnerHistorySearchNormalized]);
+
+    const platformDefaultLimits = useMemo(() => {
+        const toPositiveInt = (value, fallback) => {
+            const parsed = Number(value);
+            return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : fallback;
+        };
+        return {
+            maxActiveJobs: toPositiveInt(settings?.default_max_active_jobs, 2),
+            maxImmediateOrders: toPositiveInt(settings?.default_max_immediate_orders, 1),
+            maxPendingConfirmation: toPositiveInt(settings?.default_max_pending_confirmation, 3),
+        };
+    }, [
+        settings?.default_max_active_jobs,
+        settings?.default_max_immediate_orders,
+        settings?.default_max_pending_confirmation,
+    ]);
+
+    const getPlatformDefaultPlaceholder = useCallback((value) => {
+        const base = TRANSLATIONS.usePlatformDefault || 'Leave empty for platform default';
+        return `${base} (${value})`;
+    }, [TRANSLATIONS.usePlatformDefault]);
 
     const clearAnalyticsTooltipTimer = useCallback(() => {
         if (analyticsTooltipTimer.current) {
@@ -3254,7 +5339,58 @@ export default function AdminDashboard({ navigation }) {
     // RENDERERS
     // ============================================
 
+    const payoutStatusCounts = useMemo(() => {
+        return (adminPayoutRequests || []).reduce((acc, item) => {
+            const key = String(item?.status || 'requested').toLowerCase();
+            acc.all += 1;
+            acc[key] = (acc[key] || 0) + 1;
+            return acc;
+        }, { all: 0, requested: 0, paid: 0, rejected: 0, canceled: 0 });
+    }, [adminPayoutRequests]);
+    const pendingPayoutRequestsCount = useMemo(
+        () => Number(payoutStatusCounts?.requested || 0),
+        [payoutStatusCounts]
+    );
+    const filteredPayoutRequests = useMemo(() => {
+        const statusFilter = String(adminPayoutStatusFilter || 'requested').toLowerCase();
+        const needle = normalizeSearchTerm(searchQuery);
+        const needleDigits = normalizeSearchDigits(searchQuery);
+        return (adminPayoutRequests || []).filter((item) => {
+            const status = String(item?.status || 'requested').toLowerCase();
+            if (statusFilter !== 'all' && status !== statusFilter) {
+                return false;
+            }
+            if (!needle && !needleDigits) return true;
+            const partner = item?.partner || {};
+            const searchFields = [
+                partner?.full_name,
+                partner?.email,
+                partner?.phone,
+                item?.requested_note,
+                item?.admin_note,
+                item?.requested_amount,
+                item?.approved_amount,
+                item?.id,
+            ].map((value) => String(value || '').toLowerCase()).join(' ');
+            if (needle && searchFields.includes(needle)) return true;
+            if (!needleDigits) return false;
+            return normalizeSearchDigits(partner?.phone || '').includes(needleDigits);
+        });
+    }, [adminPayoutRequests, adminPayoutStatusFilter, searchQuery]);
+
     const menuItems = useMemo(() => buildAdminMenuItems(TRANSLATIONS), [TRANSLATIONS]);
+    const activeDisputes = useMemo(
+        () => (disputes || []).filter((item) => {
+            const disputeStatus = String(item?.status || 'open').toLowerCase();
+            if (!['open', 'in_review'].includes(disputeStatus)) return false;
+            const orderStatus = normalizeStatus(item?.order?.status || '');
+            if (orderStatus === 'confirmed') return false;
+            if (item?.order && item.order.is_disputed === false) return false;
+            return true;
+        }),
+        [disputes]
+    );
+    const openDisputesCount = useMemo(() => activeDisputes.length, [activeDisputes]);
 
     // Hamburger Sidebar (Modal-based like Dispatcher)
     const renderSidebar = () => (
@@ -3283,7 +5419,14 @@ export default function AdminDashboard({ navigation }) {
                                 <TouchableOpacity
                                     key={item.key}
                                     style={[styles.sidebarNavItem, isActive && styles.sidebarNavItemActive]}
-                                    onPress={() => { setActiveTab(item.key); setIsSidebarOpen(false); }}
+                                    onPress={async () => {
+                                        setIsSidebarOpen(false);
+                                        if (isActive) {
+                                            await ensureTabData(item.key, { force: true, reason: 'tab_reselect' });
+                                            return;
+                                        }
+                                        setActiveTab(item.key);
+                                    }}
                                 >
                                     <View style={styles.sidebarNavRow}>
                                         <Text style={[styles.sidebarNavText, isActive && styles.sidebarNavTextActive]}>
@@ -3292,6 +5435,16 @@ export default function AdminDashboard({ navigation }) {
                                         {item.key === 'orders' && needsActionCount > 0 && (
                                             <View style={styles.sidebarBadge}>
                                                 <Text style={styles.sidebarBadgeText}>{needsActionCount}</Text>
+                                            </View>
+                                        )}
+                                        {item.key === 'disputes' && openDisputesCount > 0 && (
+                                            <View style={styles.sidebarBadge}>
+                                                <Text style={styles.sidebarBadgeText}>{openDisputesCount}</Text>
+                                            </View>
+                                        )}
+                                        {item.key === 'payouts' && pendingPayoutRequestsCount > 0 && (
+                                            <View style={styles.sidebarBadge}>
+                                                <Text style={styles.sidebarBadgeText}>{pendingPayoutRequestsCount}</Text>
                                             </View>
                                         )}
                                     </View>
@@ -3429,6 +5582,8 @@ export default function AdminDashboard({ navigation }) {
             masterRevenueSeries={masterRevenueSeries}
             masterStatusBreakdown={masterStatusBreakdown}
             masterTrendWindow={masterTrendWindow}
+            onSearchAnalyticsDispatchers={searchAnalyticsDispatcherOptions}
+            onSearchAnalyticsMasters={searchAnalyticsMasterOptions}
             openAnalyticsOrdersModal={openAnalyticsOrdersModal}
             priceDistChartWidth={priceDistChartWidth}
             priceDistData={priceDistData}
@@ -3523,28 +5678,75 @@ export default function AdminDashboard({ navigation }) {
     const renderPickerModal = () => (
         <Modal visible={pickerModal.visible} transparent animationType="fade">
             <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setPickerModal(prev => ({ ...prev, visible: false }))}>
-                <View style={styles.pickerContent}>
+                <TouchableOpacity activeOpacity={1} onPress={() => { }} style={styles.pickerContent}>
                     <View style={styles.pickerHeader}>
                         <Text style={styles.pickerTitle}>{pickerModal.title}</Text>
                         <TouchableOpacity onPress={() => setPickerModal(prev => ({ ...prev, visible: false }))}>
                             <Ionicons name="close" size={24} color="#94a3b8" />
                         </TouchableOpacity>
                     </View>
-                    <ScrollView style={styles.pickerScroll}>
-                        {pickerModal.options.map((opt, idx) => (
-                            <TouchableOpacity key={`${opt.id}-${idx}`} style={[styles.pickerOption, pickerModal.value === opt.id && styles.pickerOptionActive]}
-                                onPress={() => {
-                                    if (pickerModal.onChange) pickerModal.onChange(opt.id);
-                                    setPickerModal(prev => ({ ...prev, visible: false }));
-                                }}>
-                                <Text style={[styles.pickerOptionText, pickerModal.value === opt.id && styles.pickerOptionTextActive]}>
-                                    {opt.label}
-                                </Text>
-                                {pickerModal.value === opt.id && <Ionicons name="checkmark" size={20} color="#3b82f6" />}
-                            </TouchableOpacity>
-                        ))}
-                    </ScrollView>
-                </View>
+                    {pickerModal.searchable && (
+                        <View style={styles.pickerSearchInputWrapper}>
+                            <Ionicons name="search" size={16} color="#64748b" style={styles.searchIconText} />
+                            <TextInput
+                                style={styles.pickerSearchInput}
+                                placeholder={pickerModal.searchPlaceholder || TRANSLATIONS.placeholderSearch || 'Search...'}
+                                placeholderTextColor="#64748b"
+                                value={pickerSearchQuery}
+                                onChangeText={setPickerSearchQuery}
+                                autoCorrect={false}
+                                autoCapitalize="none"
+                            />
+                            {pickerSearchLoading ? (
+                                <ActivityIndicator size="small" color="#64748b" />
+                            ) : pickerSearchQuery ? (
+                                <TouchableOpacity onPress={() => setPickerSearchQuery('')} style={styles.searchClear}>
+                                    <Ionicons name="close-circle" size={16} color="#64748b" />
+                                </TouchableOpacity>
+                            ) : null}
+                        </View>
+                    )}
+                    <FlatList
+                        style={styles.pickerScroll}
+                        data={pickerVisibleOptions}
+                        keyExtractor={(item, index) => String(item?.id ?? index)}
+                        keyboardShouldPersistTaps="handled"
+                        renderItem={({ item, index }) => {
+                            const isSelected = String(pickerModal.value ?? '') === String(item?.id ?? '');
+                            return (
+                                <TouchableOpacity
+                                    key={`${item?.id ?? index}-${index}`}
+                                    style={[styles.pickerOption, isSelected && styles.pickerOptionActive]}
+                                    onPress={() => {
+                                        if (pickerModal.onChange) pickerModal.onChange(item.id);
+                                        if (pickerModal.closeOnSelect !== false) {
+                                            setPickerModal(prev => ({ ...prev, visible: false }));
+                                        }
+                                    }}
+                                >
+                                    <View style={styles.pickerOptionInfo}>
+                                        <Text style={[styles.pickerOptionText, isSelected && styles.pickerOptionTextActive]}>
+                                            {item?.label}
+                                        </Text>
+                                        {item?.subtitle ? (
+                                            <Text style={[styles.pickerOptionSubText, isSelected && styles.pickerOptionSubTextActive]}>
+                                                {item.subtitle}
+                                            </Text>
+                                        ) : null}
+                                    </View>
+                                    {isSelected && <Ionicons name="checkmark" size={20} color="#3b82f6" />}
+                                </TouchableOpacity>
+                            );
+                        }}
+                        ListEmptyComponent={(
+                            <Text style={{ color: '#64748b', textAlign: 'center', paddingVertical: 20 }}>
+                                {pickerSearchLoading
+                                    ? (TRANSLATIONS.loading || 'Loading...')
+                                    : (pickerModal.emptyText || TRANSLATIONS.msgNoMatch || TRANSLATIONS.emptyList || 'No items found')}
+                            </Text>
+                        )}
+                    />
+                </TouchableOpacity>
             </TouchableOpacity>
         </Modal>
     );
@@ -3639,7 +5841,11 @@ export default function AdminDashboard({ navigation }) {
                             title: TRANSLATIONS.pickerDispatcher || 'Dispatcher',
                             options: dispatcherOptionsWithCounts,
                             value: filterDispatcher,
-                            onChange: setFilterDispatcher
+                            onChange: setFilterDispatcher,
+                            searchable: true,
+                            searchFields: ['label', 'full_name', 'phone', 'email', 'role'],
+                            searchPlaceholder: TRANSLATIONS.placeholderSearch || 'Search dispatcher',
+                            emptyText: TRANSLATIONS.noDispatchersFound || 'No dispatchers found',
                         })}>
                             <Text style={[styles.filterDropdownText, !isDark && styles.textDark]}>
                                 {currentDispatcherLabel} ({currentDispatcherCount})
@@ -3732,10 +5938,171 @@ export default function AdminDashboard({ navigation }) {
             viewMode={viewMode}
         />
     );
-    const renderMasters = () => {
-        const filtered = masters.filter(m =>
-            !searchQuery || m.full_name?.toLowerCase().includes(searchQuery.toLowerCase())
+
+    const openDisputeOrder = async (dispute) => {
+        try {
+            const orderId = dispute?.order?.id || dispute?.order_id;
+            if (!orderId) return;
+            const parsedDisputeNotes = parseDisputeClientNotes(dispute?.client_notes);
+            const disputeContext = {
+                id: dispute?.id || null,
+                status: String(dispute?.status || 'open'),
+                reason: String(dispute?.reason || '').trim(),
+                createdAt: dispute?.created_at || null,
+                reporterName: dispute?.dispatcher?.full_name || dispute?.client?.full_name || null,
+                reporterRole: parsedDisputeNotes?.reporterRole || null,
+                reportText: parsedDisputeNotes?.plainNotes || '',
+                reportedFinalAmount: parsedDisputeNotes?.reportedFinalAmount,
+                masterFinalAmount: parsedDisputeNotes?.masterFinalAmount,
+                workPerformed: parsedDisputeNotes?.workPerformed || '',
+                hoursWorked: parsedDisputeNotes?.hoursWorked,
+            };
+            const mergeWithDisputeContext = (order) => ({
+                ...(order || {}),
+                active_dispute: disputeContext,
+            });
+            const cachedOrder = (queueOrders || []).find(o => String(o?.id) === String(orderId))
+                || (orders || []).find(o => String(o?.id) === String(orderId));
+            if (cachedOrder) {
+                openOrderDetails(mergeWithDisputeContext(cachedOrder));
+                return;
+            }
+            const order = await ordersService.getOrderById(orderId);
+            if (!order) {
+                showToast?.(TRANSLATIONS.errorOrderNotFound || 'Order not found', 'error');
+                return;
+            }
+            openOrderDetails(mergeWithDisputeContext(order));
+        } catch (error) {
+            showToast?.((TRANSLATIONS.toastFailedPrefix || 'Failed: ') + (TRANSLATIONS.errorGeneric || 'Error'), 'error');
+        }
+    };
+
+    const getDisputeStatusLabel = useCallback((status) => {
+        const key = String(status || 'open').toLowerCase();
+        if (key === 'open') return TRANSLATIONS.disputeStatusOpen || TRANSLATIONS.priceOpen || 'OPEN';
+        if (key === 'in_review') return TRANSLATIONS.disputeStatusInReview || 'IN REVIEW';
+        if (key === 'resolved') return TRANSLATIONS.disputeStatusResolved || 'RESOLVED';
+        if (key === 'closed') return TRANSLATIONS.disputeStatusClosed || 'CLOSED';
+        return key.replace(/_/g, ' ').toUpperCase();
+    }, [TRANSLATIONS]);
+
+    const getPayoutStatusLabel = useCallback((status) => {
+        const key = String(status || 'requested').toLowerCase();
+        if (key === 'requested') return TRANSLATIONS.statusRequested || TRANSLATIONS.requested || 'Requested';
+        if (key === 'paid') return TRANSLATIONS.statusPaid || TRANSLATIONS.paid || 'Paid';
+        if (key === 'rejected') return TRANSLATIONS.statusRejected || TRANSLATIONS.rejected || 'Rejected';
+        if (key === 'canceled') return TRANSLATIONS.statusCanceled || TRANSLATIONS.canceled || 'Canceled';
+        return key.replace(/_/g, ' ').replace(/^\w/, (m) => m.toUpperCase());
+    }, [TRANSLATIONS]);
+
+    const renderDisputes = () => {
+        const activeDisputeIds = new Set(activeDisputes.map((item) => String(item?.id || '')));
+        const counts = (disputes || []).reduce((acc, item) => {
+            const key = String(item?.status || 'open').toLowerCase();
+            if ((key === 'open' || key === 'in_review') && !activeDisputeIds.has(String(item?.id || ''))) {
+                return acc;
+            }
+            acc[key] = (acc[key] || 0) + 1;
+            return acc;
+        }, {});
+        const statusColors = {
+            open: '#ef4444',
+            in_review: '#f59e0b',
+            resolved: '#22c55e',
+            closed: '#64748b',
+        };
+
+        return (
+            <View style={{ flex: 1, paddingHorizontal: 16 }}>
+                {renderHeader(TRANSLATIONS.disputes || 'Disputes')}
+
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>
+                        {TRANSLATIONS.disputesOverview || 'Reports overview'}
+                    </Text>
+                    <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>
+                        {(TRANSLATIONS.disputesSummary || 'Open: {0} | In review: {1} | Resolved: {2}')
+                            .replace('{0}', String(counts.open || 0))
+                            .replace('{1}', String(counts.in_review || 0))
+                            .replace('{2}', String(counts.resolved || 0))}
+                    </Text>
+                </View>
+
+                <FlatList
+                    data={activeDisputes}
+                    keyExtractor={item => String(item.id)}
+                    contentContainerStyle={styles.listContent}
+                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={isDark ? '#3b82f6' : '#0f172a'} />}
+                    renderItem={({ item }) => {
+                        const parsedDisputeNotes = parseDisputeClientNotes(item?.client_notes);
+                        const statusKey = String(item?.status || 'open');
+                        const statusColor = statusColors[statusKey] || '#64748b';
+                        const orderRefId = item?.order?.id || item?.order_id || null;
+                        const orderRefLabel = formatOrderRefLabel(
+                            TRANSLATIONS.modalOrderPrefix || TRANSLATIONS.drawerTitle || 'Order #{0}',
+                            orderRefId,
+                        );
+                        const masterName = item?.master?.full_name || 'Master';
+                        const dispatcherName = item?.dispatcher?.full_name || item?.client?.full_name || '-';
+                        const reporterPrice = parsedDisputeNotes?.reportedFinalAmount;
+                        const masterPrice = parsedDisputeNotes?.masterFinalAmount;
+                        const cleanNote = parsedDisputeNotes?.plainNotes;
+                        return (
+                            <TouchableOpacity
+                                style={[styles.listItemCard, !isDark && styles.listItemCardLight]}
+                                onPress={() => openDisputeOrder(item)}
+                            >
+                                <View style={styles.peopleRow}>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.itemTitle, !isDark && styles.textDark]}>
+                                            {orderRefLabel}
+                                        </Text>
+                                        <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>
+                                            {TRANSLATIONS.masterRole || 'Master'}: {masterName}
+                                        </Text>
+                                        <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>
+                                            {TRANSLATIONS.dispatcherRole || TRANSLATIONS.partnerRole || 'Reported by'}: {dispatcherName}
+                                        </Text>
+                                    </View>
+                                    <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>
+                                        <Text style={styles.statusText}>{getDisputeStatusLabel(statusKey)}</Text>
+                                    </View>
+                                </View>
+                                <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary, { marginTop: 10 }]}>
+                                    {(item?.reason || '-')}
+                                </Text>
+                                {(reporterPrice !== null || masterPrice !== null) && (
+                                    <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>
+                                        {(TRANSLATIONS.labelFinal || 'Final')} ({TRANSLATIONS.dispatcherRole || TRANSLATIONS.partnerRole || 'Reporter'}): {reporterPrice !== null ? `${reporterPrice}c` : '-'} | {TRANSLATIONS.labelFinal || 'Final'} ({TRANSLATIONS.masterRole || 'Master'}): {masterPrice !== null ? `${masterPrice}c` : '-'}
+                                    </Text>
+                                )}
+                                {!!cleanNote && (
+                                    <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>
+                                        {cleanNote}
+                                    </Text>
+                                )}
+                            </TouchableOpacity>
+                        );
+                    }}
+                    ListEmptyComponent={
+                        <View style={styles.empty}>
+                            <Text style={[styles.emptyText, !isDark && styles.textSecondary]}>
+                                {TRANSLATIONS.emptyList || 'No items found'}
+                            </Text>
+                        </View>
+                    }
+                />
+            </View>
         );
+    };
+
+    const renderMasters = () => {
+        const normalizedSearch = normalizeSearchTerm(searchQuery);
+        const filtered = masters.filter(m => (
+            !normalizedSearch
+            || optionMatchesSearch(m, normalizedSearch, ['full_name', 'name', 'phone', 'email', 'service_area'])
+        ));
         const paginated = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
         return (
@@ -3768,60 +6135,53 @@ export default function AdminDashboard({ navigation }) {
                                         <Text style={[styles.itemTitle, !isDark && styles.textDark]} numberOfLines={1}>{item.full_name}</Text>
                                         <Text style={styles.itemSubtitle} numberOfLines={1}>{item.phone}</Text>
                                         <View style={styles.peopleMetaRow}>
-                                            <View style={[styles.peopleMetaChip, !isDark && styles.peopleMetaChipLight]}>
+                                            <View style={[
+                                                styles.peopleMetaChip,
+                                                {
+                                                    backgroundColor: item.is_verified ? 'rgba(34,197,94,0.14)' : 'rgba(239,68,68,0.14)',
+                                                    borderColor: item.is_verified ? 'rgba(34,197,94,0.35)' : 'rgba(239,68,68,0.35)',
+                                                    paddingVertical: 2,
+                                                    paddingHorizontal: 7,
+                                                },
+                                                !isDark && {
+                                                    backgroundColor: item.is_verified ? '#dcfce7' : '#fee2e2',
+                                                    borderColor: item.is_verified ? '#86efac' : '#fca5a5',
+                                                },
+                                            ]}>
                                                 <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
                                                     {(item.is_verified ? (TRANSLATIONS.verified || 'Verified') : (TRANSLATIONS.unverified || 'Unverified')).toUpperCase()}
-                                                </Text>
-                                            </View>
-                                            <View style={[styles.peopleMetaChip, !isDark && styles.peopleMetaChipLight]}>
-                                                <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
-                                                    {(TRANSLATIONS.completed || 'Completed')}: {formatNumber(Number(item.completed_jobs_count || 0))}
                                                 </Text>
                                             </View>
                                         </View>
                                     </View>
                                 </TouchableOpacity>
-                                <View style={styles.peopleRight}>
-                                    <View style={[
-                                        styles.peopleBadge,
-                                        {
-                                            backgroundColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                                            borderColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'
-                                        }
-                                    ]}>
-                                        <Text style={[
-                                            styles.peopleBadgeText,
-                                            { color: (item.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444' }
-                                        ]}>
-                                            {TRANSLATIONS.prepaidBalance || 'Balance'}: {item.prepaid_balance || 0} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
-                                        </Text>
-                                    </View>
-
-                                    <View style={styles.peopleActions}>
-                                        <TouchableOpacity
-                                            onPress={() => { setSelectedMaster(item); setShowBalanceModal(true); }}
-                                            style={[styles.miniActionBtn, { backgroundColor: 'rgba(59,130,246,0.1)', borderWidth: 1, borderColor: 'rgba(59,130,246,0.2)' }]}
-                                        >
-                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#3b82f6' }}>{TRANSLATIONS.topUp || 'TOP UP'}</Text>
-                                        </TouchableOpacity>
-
+                                    <View style={styles.peopleRight}>
+                                        <View style={styles.peopleInlineControls}>
+                                            <View style={[
+                                                styles.peopleBadge,
+                                                {
+                                                    backgroundColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                                                    borderColor: (item.prepaid_balance || 0) >= 0 ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                                                    marginBottom: 0,
+                                                }
+                                            ]}>
+                                                <Text style={[
+                                                    styles.peopleBadgeText,
+                                                    { color: (item.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444' }
+                                                ]} numberOfLines={1}>
+                                                    {Number(item.prepaid_balance || 0).toFixed(0)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                </Text>
+                                            </View>
+                                        </View>
                                         <TouchableOpacity
                                             onPress={() => setDetailsPerson({ ...item, type: 'master' })}
-                                            style={[styles.miniActionBtn, { backgroundColor: isDark ? '#334155' : '#e2e8f0', borderWidth: 1, borderColor: isDark ? '#475569' : '#cbd5e1' }]}
+                                            style={{ paddingVertical: 4, paddingHorizontal: 2 }}
                                         >
-                                            <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? '#94a3b8' : '#475569' }}>{TRANSLATIONS.btnEdit || 'EDIT'}</Text>
-                                        </TouchableOpacity>
-
-                                        <TouchableOpacity
-                                            onPress={() => handleVerifyMaster(item.id, item.is_verified)}
-                                            style={[styles.miniActionBtn, { backgroundColor: item.is_verified ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)', borderWidth: 1, borderColor: item.is_verified ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.2)' }]}
-                                        >
-                                            <Text style={{ fontSize: 10, fontWeight: '600', color: item.is_verified ? '#ef4444' : '#22c55e' }}>
-                                                {item.is_verified ? (TRANSLATIONS.unverify || 'UNVERIFY') : (TRANSLATIONS.verify || 'VERIFY')}
+                                            <Text style={{ color: '#64748b', fontSize: 11 }}>
+                                                {TRANSLATIONS.tapToEdit || TRANSLATIONS.tapViewDetails || 'Tap to edit'}
                                             </Text>
                                         </TouchableOpacity>
                                     </View>
-                                </View>
                             </View>
                         </View>
                     )}
@@ -3833,9 +6193,11 @@ export default function AdminDashboard({ navigation }) {
 
 
     const renderStaff = () => {
-        const filtered = dispatchers.filter(d =>
-            !searchQuery || d.full_name?.toLowerCase().includes(searchQuery.toLowerCase())
-        );
+        const normalizedSearch = normalizeSearchTerm(searchQuery);
+        const filtered = dispatchers.filter(d => (
+            !normalizedSearch
+            || optionMatchesSearch(d, normalizedSearch, ['full_name', 'name', 'phone', 'email'])
+        ));
         const paginated = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
         return (
@@ -3868,12 +6230,19 @@ export default function AdminDashboard({ navigation }) {
                                         <Text style={[styles.itemTitle, !isDark && styles.textDark]} numberOfLines={1}>{item.full_name}</Text>
                                         <Text style={styles.itemSubtitle} numberOfLines={1}>{item.phone || item.email}</Text>
                                         <View style={styles.peopleMetaRow}>
-                                            <View style={[styles.peopleMetaChip, !isDark && styles.peopleMetaChipLight]}>
-                                                <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
-                                                    {(TRANSLATIONS.dispatcherRole || 'Dispatcher').toUpperCase()}
-                                                </Text>
-                                            </View>
-                                            <View style={[styles.peopleMetaChip, !isDark && styles.peopleMetaChipLight]}>
+                                            <View style={[
+                                                styles.peopleMetaChip,
+                                                {
+                                                    backgroundColor: item.is_verified ? 'rgba(34,197,94,0.14)' : 'rgba(239,68,68,0.14)',
+                                                    borderColor: item.is_verified ? 'rgba(34,197,94,0.35)' : 'rgba(239,68,68,0.35)',
+                                                    paddingVertical: 2,
+                                                    paddingHorizontal: 7,
+                                                },
+                                                !isDark && {
+                                                    backgroundColor: item.is_verified ? '#dcfce7' : '#fee2e2',
+                                                    borderColor: item.is_verified ? '#86efac' : '#fca5a5',
+                                                },
+                                            ]}>
                                                 <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
                                                     {(item.is_verified ? (TRANSLATIONS.verified || 'Verified') : (TRANSLATIONS.unverified || 'Unverified')).toUpperCase()}
                                                 </Text>
@@ -3882,44 +6251,121 @@ export default function AdminDashboard({ navigation }) {
                                     </View>
                                 </TouchableOpacity>
                                 <View style={styles.peopleRight}>
-                                    <View style={[
-                                        styles.peopleBadge,
-                                        {
-                                            backgroundColor: item.is_verified ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                                            borderColor: item.is_verified ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'
-                                        }
-                                    ]}>
-                                        <Text style={[
-                                            styles.peopleBadgeText,
-                                            { color: item.is_verified ? '#22c55e' : '#ef4444' }
-                                        ]}>
-                                            {item.is_verified
-                                                ? (TRANSLATIONS.verified || 'Verified')
-                                                : (TRANSLATIONS.unverified || 'Unverified')}
+                                    <TouchableOpacity
+                                        onPress={() => setDetailsPerson({ ...item, type: 'dispatcher' })}
+                                        style={{ paddingVertical: 4, paddingHorizontal: 2 }}
+                                    >
+                                        <Text style={{ color: '#64748b', fontSize: 11 }}>
+                                            {TRANSLATIONS.tapToEdit || TRANSLATIONS.tapViewDetails || 'Tap to edit'}
                                         </Text>
-                                    </View>
-                                    <View style={styles.peopleActions}>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                        </View>
+                    )}
+                />
+            </View>
+        );
+    };
+
+    const renderPartners = () => {
+        const filtered = partners.filter((p) =>
+            !searchQuery
+            || p.full_name?.toLowerCase().includes(searchQuery.toLowerCase())
+            || p.phone?.toLowerCase().includes(searchQuery.toLowerCase())
+            || p.email?.toLowerCase().includes(searchQuery.toLowerCase())
+        );
+        const paginated = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+        return (
+            <View style={{ flex: 1 }}>
+                {renderSearchBar()}
+                <View style={styles.paginationTopRow}>
+                    <Pagination
+                        currentPage={currentPage}
+                        totalPages={Math.ceil(filtered.length / itemsPerPage)}
+                        onPageChange={setCurrentPage}
+                        className={styles.paginationTopCompact}
+                    />
+                </View>
+                <FlatList
+                    data={paginated}
+                    keyExtractor={(item) => String(item.id)}
+                    contentContainerStyle={{ gap: 8, paddingBottom: 20 }}
+                    ListEmptyComponent={<Text style={{ color: '#64748b', textAlign: 'center', marginTop: 20 }}>{TRANSLATIONS.noPartnersFound || 'No partners found'}</Text>}
+                    renderItem={({ item }) => {
+                        const commissionPercent = Number(item.partner_commission_rate || 0) * 100;
+                        const balanceValue = Number(item.partner_balance || 0);
+                        return (
+                            <View style={[styles.listItemCard, !isDark && styles.listItemCardLight]}>
+                                <View style={styles.peopleRow}>
+                                    <TouchableOpacity
+                                        style={styles.peopleLeft}
+                                        onPress={() => setDetailsPerson({ ...item, type: 'partner' })}
+                                    >
+                                        <View style={[styles.avatarCircle, { backgroundColor: item.is_verified ? '#0ea5e9' : '#64748b' }]}>
+                                            <Text style={{ color: '#fff' }}>{item.full_name?.charAt(0) || 'P'}</Text>
+                                        </View>
+                                        <View style={styles.peopleInfo}>
+                                        <Text style={[styles.itemTitle, !isDark && styles.textDark]} numberOfLines={1}>{item.full_name}</Text>
+                                        <Text style={styles.itemSubtitle} numberOfLines={1}>{item.phone || item.email || '-'}</Text>
+                                        <View style={styles.peopleMetaRow}>
+                                            <View style={[
+                                                styles.peopleMetaChip,
+                                                {
+                                                    backgroundColor: item.is_verified ? 'rgba(34,197,94,0.14)' : 'rgba(239,68,68,0.14)',
+                                                    borderColor: item.is_verified ? 'rgba(34,197,94,0.35)' : 'rgba(239,68,68,0.35)',
+                                                    paddingVertical: 2,
+                                                    paddingHorizontal: 7,
+                                                },
+                                                !isDark && {
+                                                    backgroundColor: item.is_verified ? '#dcfce7' : '#fee2e2',
+                                                    borderColor: item.is_verified ? '#86efac' : '#fca5a5',
+                                                },
+                                            ]}>
+                                                <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
+                                                    {(item.is_verified ? (TRANSLATIONS.verified || 'Verified') : (TRANSLATIONS.unverified || 'Unverified')).toUpperCase()}
+                                                </Text>
+                                            </View>
+                                            <View style={[styles.peopleMetaChip, !isDark && styles.peopleMetaChipLight]}>
+                                                <Text style={[styles.peopleMetaChipText, !isDark && styles.peopleMetaChipTextLight]}>
+                                                    {Number.isFinite(commissionPercent) ? commissionPercent.toFixed(1) : '0.0'}%
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        </View>
+                                    </TouchableOpacity>
+                                    <View style={styles.peopleRight}>
+                                        <View style={styles.peopleInlineControls}>
+                                            <View style={[
+                                                styles.peopleBadge,
+                                                {
+                                                    backgroundColor: balanceValue >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                                                    borderColor: balanceValue >= 0 ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                                                    marginBottom: 0,
+                                                }
+                                            ]}>
+                                                <Text style={[
+                                                    styles.peopleBadgeText,
+                                                    { color: balanceValue >= 0 ? '#22c55e' : '#ef4444' }
+                                                ]} numberOfLines={1}>
+                                                    {Number.isFinite(balanceValue) ? balanceValue.toFixed(0) : '0'} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                </Text>
+                                            </View>
+                                        </View>
                                         <TouchableOpacity
-                                            onPress={() => setDetailsPerson({ ...item, type: 'dispatcher' })}
-                                            style={[styles.miniActionBtn, { backgroundColor: 'rgba(139,92,246,0.1)', borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' }]}
+                                            onPress={() => setDetailsPerson({ ...item, type: 'partner' })}
+                                            style={{ paddingVertical: 4, paddingHorizontal: 2 }}
                                         >
-                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#8b5cf6' }}>{TRANSLATIONS.btnEdit || 'EDIT'}</Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            onPress={() => handleVerifyDispatcher(item.id, item.is_verified)}
-                                            style={[styles.miniActionBtn, { backgroundColor: item.is_verified ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)', borderWidth: 1, borderColor: item.is_verified ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.2)' }]}
-                                        >
-                                            <Text style={{ fontSize: 10, fontWeight: '600', color: item.is_verified ? '#ef4444' : '#22c55e' }}>
-                                                {item.is_verified
-                                                    ? (TRANSLATIONS.unverify || 'UNVERIFY')
-                                                    : (TRANSLATIONS.verify || 'VERIFY')}
+                                            <Text style={{ color: '#64748b', fontSize: 11 }}>
+                                                {TRANSLATIONS.tapToEdit || TRANSLATIONS.tapViewDetails || 'Tap to edit'}
                                             </Text>
                                         </TouchableOpacity>
                                     </View>
                                 </View>
                             </View>
-                        </View>
-                    )}
+                        );
+                    }}
                 />
             </View>
         );
@@ -3948,6 +6394,7 @@ export default function AdminDashboard({ navigation }) {
             actionLoading={actionLoading}
             showToast={showToast}
             loadSettings={loadSettings}
+            onSettingsUpdated={() => markTabsDirty(['analytics', 'create_order', 'orders'], 'platform_settings_save')}
             ordersService={ordersService}
             configurationCollapsed={configurationCollapsed}
             setDistrictModal={setDistrictModal}
@@ -4472,6 +6919,176 @@ export default function AdminDashboard({ navigation }) {
         </Modal>
     );
 
+    const renderPayouts = () => {
+        const statusOptions = [
+            { id: 'requested', label: TRANSLATIONS.statusRequested || 'Requested' },
+            { id: 'paid', label: TRANSLATIONS.statusPaid || 'Paid' },
+            { id: 'rejected', label: TRANSLATIONS.statusRejected || TRANSLATIONS.reject || 'Rejected' },
+            { id: 'canceled', label: TRANSLATIONS.statusCanceled || 'Canceled' },
+            { id: 'all', label: TRANSLATIONS.filterAll || 'All' },
+        ];
+        const statusColorMap = {
+            requested: '#f59e0b',
+            paid: '#22c55e',
+            rejected: '#ef4444',
+            canceled: '#64748b',
+        };
+
+        return (
+            <View style={{ flex: 1, paddingHorizontal: 16 }}>
+                {renderHeader(TRANSLATIONS.payouts || 'Payouts')}
+                {renderSearchBar()}
+
+                <View style={[styles.formSection, !isDark && styles.formSectionLight]}>
+                    <Text style={[styles.formSectionTitle, !isDark && styles.textDark]}>
+                        {TRANSLATIONS.payoutsOverview || 'Payout requests overview'}
+                    </Text>
+                    <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>
+                        {(TRANSLATIONS.payoutsSummary || 'Requested: {0} | Paid: {1} | Rejected: {2} | Canceled: {3}')
+                            .replace('{0}', String(payoutStatusCounts.requested || 0))
+                            .replace('{1}', String(payoutStatusCounts.paid || 0))
+                            .replace('{2}', String(payoutStatusCounts.rejected || 0))
+                            .replace('{3}', String(payoutStatusCounts.canceled || 0))}
+                    </Text>
+                </View>
+
+                <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={{ marginBottom: 12, flexGrow: 0 }}
+                    contentContainerStyle={{ gap: 8, paddingRight: 8, alignItems: 'center' }}
+                >
+                    {statusOptions.map((option) => {
+                        const isActive = adminPayoutStatusFilter === option.id;
+                        const count = Number(payoutStatusCounts?.[option.id] || 0);
+                        return (
+                            <TouchableOpacity
+                                key={option.id}
+                                style={[
+                                    styles.pillBtn,
+                                    isActive && styles.pillBtnActive,
+                                    !isDark && styles.pillBtnLight,
+                                    !isDark && isActive && styles.pillBtnActiveLight,
+                                    { alignSelf: 'flex-start' },
+                                ]}
+                                onPress={() => setAdminPayoutStatusFilter(option.id)}
+                            >
+                                <Text
+                                    style={[
+                                        styles.pillText,
+                                        !isDark && styles.pillTextLight,
+                                        isActive && styles.pillTextActive,
+                                        !isDark && isActive && styles.pillTextActiveLight,
+                                    ]}
+                                >
+                                    {option.label} ({count})
+                                </Text>
+                            </TouchableOpacity>
+                        );
+                    })}
+                </ScrollView>
+
+                <FlatList
+                    data={filteredPayoutRequests}
+                    keyExtractor={(item, index) => String(item?.id || index)}
+                    contentContainerStyle={styles.listContent}
+                    refreshControl={(
+                        <RefreshControl
+                            refreshing={refreshing || !!tabLoadingState.payouts}
+                            onRefresh={onRefresh}
+                            tintColor={isDark ? '#3b82f6' : '#0f172a'}
+                        />
+                    )}
+                    renderItem={({ item }) => {
+                        const status = String(item?.status || 'requested').toLowerCase();
+                        const statusColor = statusColorMap[status] || '#64748b';
+                        const partnerName = item?.partner?.full_name
+                            || item?.partner?.email
+                            || item?.partner?.phone
+                            || `${TRANSLATIONS.partnerRole || 'Partner'} ${String(item?.partner_id || '').slice(0, 6)}`;
+                        const partnerContact = item?.partner?.phone || item?.partner?.email || '-';
+                        const requestedAmount = Number(item?.requested_amount || 0);
+                        const approvedAmount = item?.approved_amount !== null && item?.approved_amount !== undefined
+                            ? Number(item?.approved_amount || 0)
+                            : null;
+                        const isRowLoading = actionLoading && String(adminPayoutActionId || '') === String(item?.id || '');
+
+                        return (
+                            <View style={[styles.listItemCard, !isDark && styles.listItemCardLight]}>
+                                <View style={styles.peopleRow}>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{partnerName}</Text>
+                                        <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>{partnerContact}</Text>
+                                    </View>
+                                    <View style={[styles.statusBadge, { backgroundColor: `${statusColor}22` }]}>
+                                        <Text style={[styles.statusText, { color: statusColor }]}>{getPayoutStatusLabel(status)}</Text>
+                                    </View>
+                                </View>
+                                <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary, { marginTop: 8 }]}>
+                                    {(TRANSLATIONS.requested || 'Requested')}: {requestedAmount.toFixed(2)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                </Text>
+                                {approvedAmount !== null && (
+                                    <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>
+                                        {(TRANSLATIONS.approved || 'Approved')}: {approvedAmount.toFixed(2)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                    </Text>
+                                )}
+                                <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>
+                                    {item?.created_at ? new Date(item.created_at).toLocaleString() : '-'}
+                                </Text>
+                                {!!item?.requested_note && (
+                                    <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>
+                                        {(TRANSLATIONS.labelRequestNote || TRANSLATIONS.note || 'Request note')}: {item.requested_note}
+                                    </Text>
+                                )}
+                                {!!item?.admin_note && (
+                                    <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>
+                                        {(TRANSLATIONS.note || 'Note')}: {item.admin_note}
+                                    </Text>
+                                )}
+                                {!!item?.processed_at && (
+                                    <Text style={[styles.itemSubtitle, !isDark && styles.textSecondary]}>
+                                        {(TRANSLATIONS.processedAt || 'Processed')}: {new Date(item.processed_at).toLocaleString()}
+                                    </Text>
+                                )}
+                                {status === 'requested' && (
+                                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { flex: 1, marginTop: 0, backgroundColor: '#16a34a', opacity: isRowLoading ? 0.7 : 1 }]}
+                                            onPress={() => handleProcessPayoutFromTab(item, 'paid')}
+                                            disabled={isRowLoading}
+                                        >
+                                            {isRowLoading ? (
+                                                <ActivityIndicator size="small" color="#fff" />
+                                            ) : (
+                                                <Text style={styles.actionButtonText}>{TRANSLATIONS.markPaid || 'Mark paid'}</Text>
+                                            )}
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { flex: 1, marginTop: 0, backgroundColor: '#dc2626', opacity: isRowLoading ? 0.7 : 1 }]}
+                                            onPress={() => handleProcessPayoutFromTab(item, 'rejected')}
+                                            disabled={isRowLoading}
+                                        >
+                                            {isRowLoading ? (
+                                                <ActivityIndicator size="small" color="#fff" />
+                                            ) : (
+                                                <Text style={styles.actionButtonText}>{TRANSLATIONS.reject || 'Reject'}</Text>
+                                            )}
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
+                            </View>
+                        );
+                    }}
+                    ListEmptyComponent={(
+                        <Text style={{ color: '#64748b', textAlign: 'center', marginTop: 20 }}>
+                            {TRANSLATIONS.noPayoutRequestsFound || TRANSLATIONS.noData || 'No payout requests found'}
+                        </Text>
+                    )}
+                />
+            </View>
+        );
+    };
+
     const renderPeople = () => (
         <AdminPeopleTab
             styles={styles}
@@ -4483,6 +7100,7 @@ export default function AdminDashboard({ navigation }) {
             setShowAddUserModal={setShowAddUserModal}
             renderMasters={renderMasters}
             renderStaff={renderStaff}
+            renderPartners={renderPartners}
             renderHeader={renderHeader}
         />
     );
@@ -4867,11 +7485,23 @@ export default function AdminDashboard({ navigation }) {
                     <View style={[styles.drawerHeader, !isDark && styles.drawerHeaderLight]}>
                         <View>
                             <Text style={[styles.drawerTitle, !isDark && styles.textDark]}>
-                                {(TRANSLATIONS.drawerTitle || 'Order #{0}').replace('{0}', detailsOrder.id?.slice(0, 8) || '')}
+                                {formatOrderRefLabel(TRANSLATIONS.drawerTitle || 'Order #{0}', detailsOrder.id)}
                             </Text>
                             <Text style={styles.drawerDate}>
                                 {detailsOrder.created_at ? new Date(detailsOrder.created_at).toLocaleString() : ''}
                             </Text>
+                            <View
+                                style={[
+                                    styles.drawerStatusBadge,
+                                    {
+                                        backgroundColor: STATUS_COLORS[detailsOrder.status] || '#64748b',
+                                        marginTop: 8,
+                                        alignSelf: 'flex-start',
+                                    },
+                                ]}
+                            >
+                                <Text style={styles.drawerStatusText}>{getOrderStatusLabel(detailsOrder.status, t)}</Text>
+                            </View>
                         </View>
                         <View style={styles.drawerActions}>
                             <TouchableOpacity
@@ -4908,30 +7538,20 @@ export default function AdminDashboard({ navigation }) {
                     </View>
 
                     <ScrollView style={styles.drawerBody}>
-                        <View style={styles.drawerSection}>
-                            <View style={styles.drawerStatusRow}>
-                                <View style={[styles.drawerStatusBadge, { backgroundColor: STATUS_COLORS[detailsOrder.status] || '#64748b' }]}>
-                                    <Text style={styles.drawerStatusText}>{getOrderStatusLabel(detailsOrder.status, t)}</Text>
-                                </View>
-                                {['placed', 'reopened'].includes(detailsOrder.status) && (
-                                    <TouchableOpacity style={styles.drawerBtn} onPress={() => openAssignModalFromQueue(detailsOrder)}>
-                                        <Text style={styles.drawerBtnText}>{TRANSLATIONS.actionAssign || TRANSLATIONS.actionClaim || 'Assign'}</Text>
-                                    </TouchableOpacity>
-                                )}
-                                {detailsOrder.status === 'completed' && (
-                                    <TouchableOpacity
-                                        style={styles.drawerBtn}
-                                        onPress={() => {
-                                            setPaymentOrder(detailsOrder);
-                                            setPaymentData({ method: detailsOrder.payment_method || 'cash', proofUrl: detailsOrder.payment_proof_url || '' });
-                                            setShowPaymentModal(true);
-                                        }}
-                                    >
-                                        <Text style={styles.drawerBtnText}>{TRANSLATIONS.confirmPayment || 'Confirm Payment'}</Text>
-                                    </TouchableOpacity>
-                                )}
+                        {detailsOrder.status === 'completed' && (
+                            <View style={styles.drawerSection}>
+                                <TouchableOpacity
+                                    style={styles.drawerBtn}
+                                    onPress={() => {
+                                        setPaymentOrder(detailsOrder);
+                                        setPaymentData(buildPaymentConfirmationData(detailsOrder));
+                                        setShowPaymentModal(true);
+                                    }}
+                                >
+                                    <Text style={styles.drawerBtnText}>{TRANSLATIONS.confirmPayment || 'Confirm Payment'}</Text>
+                                </TouchableOpacity>
                             </View>
-                        </View>
+                        )}
 
                         {isEditing ? (
                             <View style={styles.editSection}>
@@ -5084,30 +7704,79 @@ export default function AdminDashboard({ navigation }) {
                                     </View>
                                 </View>
 
-                                {detailsOrder.master && (
-                                    <View style={styles.drawerSection}>
-                                        <Text style={styles.drawerSectionTitle}>{TRANSLATIONS.sectionMaster || 'Master'}</Text>
-                                        <View style={[styles.drawerCard, !isDark && styles.drawerCardLight]}>
-                                            <View style={styles.masterHeaderRow}>
-                                                <Text style={[styles.drawerCardTitle, !isDark && styles.textDark]}>{detailsOrder.master.full_name}</Text>
-                                                <TouchableOpacity style={styles.masterDetailsBtn} onPress={() => openMasterDetails(detailsOrder.master)}>
-                                                    <Text style={styles.masterDetailsBtnText}>{TRANSLATIONS.btnDetails || 'Details'}</Text>
-                                                </TouchableOpacity>
-                                            </View>
-                                            <View style={styles.drawerRow}>
-                                                <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>{detailsOrder.master.phone}</Text>
-                                                <View style={styles.drawerRowBtns}>
-                                                    <TouchableOpacity onPress={() => copyToClipboard(detailsOrder.master.phone)} style={styles.drawerIconBtn}>
-                                                        <Text style={styles.drawerIconBtnText}>{TRANSLATIONS.btnCopy || 'Copy'}</Text>
-                                                    </TouchableOpacity>
-                                                    <TouchableOpacity onPress={() => Linking.openURL(`tel:${detailsOrder.master.phone}`)} style={styles.drawerIconBtn}>
-                                                        <Text style={styles.drawerIconBtnText}>{TRANSLATIONS.btnCall || 'Call'}</Text>
+                                <View style={styles.drawerSection}>
+                                    <Text style={styles.drawerSectionTitle}>{TRANSLATIONS.sectionMaster || 'Master'}</Text>
+                                    <View style={[styles.drawerCard, !isDark && styles.drawerCardLight]}>
+                                        {detailsOrder.master ? (
+                                            <>
+                                                <View style={styles.masterHeaderRow}>
+                                                    <Text style={[styles.drawerCardTitle, !isDark && styles.textDark]}>{detailsOrder.master.full_name}</Text>
+                                                    <TouchableOpacity style={styles.masterDetailsBtn} onPress={() => openMasterDetails(detailsOrder.master)}>
+                                                        <Text style={styles.masterDetailsBtnText}>{TRANSLATIONS.btnDetails || 'Details'}</Text>
                                                     </TouchableOpacity>
                                                 </View>
-                                            </View>
-                                        </View>
+                                                <View style={styles.drawerRow}>
+                                                    <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>{detailsOrder.master.phone}</Text>
+                                                    <View style={styles.drawerRowBtns}>
+                                                        <TouchableOpacity onPress={() => copyToClipboard(detailsOrder.master.phone)} style={styles.drawerIconBtn}>
+                                                            <Text style={styles.drawerIconBtnText}>{TRANSLATIONS.btnCopy || 'Copy'}</Text>
+                                                        </TouchableOpacity>
+                                                        <TouchableOpacity onPress={() => Linking.openURL(`tel:${detailsOrder.master.phone}`)} style={styles.drawerIconBtn}>
+                                                            <Text style={styles.drawerIconBtnText}>{TRANSLATIONS.btnCall || 'Call'}</Text>
+                                                        </TouchableOpacity>
+                                                    </View>
+                                                </View>
+                                            </>
+                                        ) : (
+                                            <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>
+                                                {TRANSLATIONS.unassigned || 'Unassigned'}
+                                            </Text>
+                                        )}
+                                        {['placed', 'reopened'].includes(detailsOrder.status) && (
+                                            <TouchableOpacity style={[styles.drawerBtn, { marginTop: 10 }]} onPress={() => openAssignModalFromQueue(detailsOrder)}>
+                                                <Text style={styles.drawerBtnText}>{TRANSLATIONS.actionAssign || TRANSLATIONS.actionClaim || 'Assign'}</Text>
+                                            </TouchableOpacity>
+                                        )}
                                     </View>
-                                )}
+                                </View>
+
+                                <View style={styles.drawerSection}>
+                                    <Text style={styles.drawerSectionTitle}>{TRANSLATIONS.sectionDispatcher || TRANSLATIONS.dispatcherRole || 'Dispatcher'}</Text>
+                                    <View style={[styles.drawerCard, !isDark && styles.drawerCardLight]}>
+                                        {(() => {
+                                            const assignedDispatcherId = detailsOrder.assigned_dispatcher_id || detailsOrder.dispatcher_id;
+                                            const assignedDispatcher = detailsOrder.assigned_dispatcher
+                                                || detailsOrder.dispatcher
+                                                || (dispatchers || []).find((d) => String(d?.id) === String(assignedDispatcherId || ''));
+                                            const dispatcherName = assignedDispatcher?.full_name
+                                                || (assignedDispatcherId
+                                                    ? `${TRANSLATIONS.dispatcherRole || 'Dispatcher'} ${String(assignedDispatcherId).slice(0, 6)}`
+                                                    : (TRANSLATIONS.unassigned || 'Unassigned'));
+                                            const dispatcherPhone = assignedDispatcher?.phone || null;
+                                            return (
+                                                <>
+                                                    <Text style={[styles.drawerCardTitle, !isDark && styles.textDark]}>{dispatcherName}</Text>
+                                                    {dispatcherPhone && (
+                                                        <View style={styles.drawerRow}>
+                                                            <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>{dispatcherPhone}</Text>
+                                                            <View style={styles.drawerRowBtns}>
+                                                                <TouchableOpacity onPress={() => copyToClipboard(dispatcherPhone)} style={styles.drawerIconBtn}>
+                                                                    <Text style={styles.drawerIconBtnText}>{TRANSLATIONS.btnCopy || 'Copy'}</Text>
+                                                                </TouchableOpacity>
+                                                                <TouchableOpacity onPress={() => Linking.openURL(`tel:${dispatcherPhone}`)} style={styles.drawerIconBtn}>
+                                                                    <Text style={styles.drawerIconBtnText}>{TRANSLATIONS.btnCall || 'Call'}</Text>
+                                                                </TouchableOpacity>
+                                                            </View>
+                                                        </View>
+                                                    )}
+                                                </>
+                                            );
+                                        })()}
+                                        <TouchableOpacity style={styles.transferBtn} onPress={() => openTransferPicker(detailsOrder)}>
+                                            <Text style={styles.transferText}>{TRANSLATIONS.transferOrder || 'Transfer Order'}</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
 
                                 <View style={styles.drawerSection}>
                                     <Text style={styles.drawerSectionTitle}>{TRANSLATIONS.sectionDetails || 'Order Details'}</Text>
@@ -5128,6 +7797,34 @@ export default function AdminDashboard({ navigation }) {
                                     </View>
                                 </View>
 
+                                {!!detailsOrder?.active_dispute && (
+                                    <View style={styles.drawerSection}>
+                                        <Text style={[styles.drawerSectionTitle, { color: '#ef4444' }]}>{TRANSLATIONS.disputes || 'Dispute'}</Text>
+                                        <View style={[styles.drawerCard, !isDark && styles.drawerCardLight]}>
+                                            {!!detailsOrder.active_dispute.reason && (
+                                                <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>
+                                                    {detailsOrder.active_dispute.reason}
+                                                </Text>
+                                            )}
+                                            {!!detailsOrder.active_dispute.reportText && (
+                                                <Text style={[styles.drawerRowText, !isDark && styles.textSecondary, { marginTop: 8 }]}>
+                                                    {detailsOrder.active_dispute.reportText}
+                                                </Text>
+                                            )}
+                                            {(detailsOrder.active_dispute.reportedFinalAmount !== null || detailsOrder.active_dispute.masterFinalAmount !== null) && (
+                                                <View style={{ marginTop: 10 }}>
+                                                    <Text style={[styles.drawerRowText, !isDark && styles.textSecondary]}>
+                                                        {TRANSLATIONS.labelFinal || 'Final'} ({TRANSLATIONS.dispatcherRole || TRANSLATIONS.partnerRole || 'Reporter'}): {detailsOrder.active_dispute.reportedFinalAmount !== null ? `${detailsOrder.active_dispute.reportedFinalAmount}c` : '-'}
+                                                    </Text>
+                                                    <Text style={[styles.drawerRowText, !isDark && styles.textSecondary, { marginTop: 4 }]}>
+                                                        {TRANSLATIONS.labelFinal || 'Final'} ({TRANSLATIONS.masterRole || 'Master'}): {detailsOrder.active_dispute.masterFinalAmount !== null ? `${detailsOrder.active_dispute.masterFinalAmount}c` : '-'}
+                                                    </Text>
+                                                </View>
+                                            )}
+                                        </View>
+                                    </View>
+                                )}
+
                                 {!!detailsOrder.dispatcher_note && (
                                     <View style={styles.drawerSection}>
                                         <Text style={[styles.drawerSectionTitle, { color: '#f59e0b' }]}>{TRANSLATIONS.sectionNote || 'Internal Note'}</Text>
@@ -5147,31 +7844,6 @@ export default function AdminDashboard({ navigation }) {
                                     </TouchableOpacity>
                                 )}
 
-                                <TouchableOpacity style={styles.transferBtn} onPress={() => openTransferPicker(detailsOrder)}>
-                                    <Text style={styles.transferText}>{TRANSLATIONS.transferOrder || 'Transfer Order'}</Text>
-                                </TouchableOpacity>
-
-                                {detailsOrder.status === 'completed' && detailsOrder.payment_method === 'transfer' && !!detailsOrder.payment_proof_url && (
-                                    <View style={{ marginTop: 12 }}>
-                                        <Text style={styles.drawerSectionTitle}>{TRANSLATIONS.paymentProofVerification || 'Payment Proof Verification'}</Text>
-                                        <View style={styles.editActionRow}>
-                                            <TouchableOpacity
-                                                style={[styles.editActionBtn, styles.editActionSuccess]}
-                                                onPress={() => handleVerifyPaymentProof(detailsOrder.id, true)}
-                                                disabled={actionLoading}
-                                            >
-                                                <Text style={styles.editActionText}>{TRANSLATIONS.approve || 'Approve'}</Text>
-                                            </TouchableOpacity>
-                                            <TouchableOpacity
-                                                style={[styles.editActionBtn, styles.editActionDanger]}
-                                                onPress={() => handleVerifyPaymentProof(detailsOrder.id, false)}
-                                                disabled={actionLoading}
-                                            >
-                                                <Text style={styles.editActionText}>{TRANSLATIONS.reject || 'Reject'}</Text>
-                                            </TouchableOpacity>
-                                        </View>
-                                    </View>
-                                )}
                             </View>
                         )}
                     </ScrollView>
@@ -5197,37 +7869,61 @@ export default function AdminDashboard({ navigation }) {
                 <View style={styles.modalContent}>
                     <Text style={styles.modalTitle}>{TRANSLATIONS.confirmPayment || 'Confirm Payment'}</Text>
                     <Text style={styles.modalSubtitle}>
-                        {(TRANSLATIONS.modalOrderPrefix || 'Order #{0}').replace('{0}', paymentOrder?.id?.slice(-8) || '')}
+                        {formatOrderRefLabel(TRANSLATIONS.modalOrderPrefix || 'Order #{0}', paymentOrder?.id)}
                     </Text>
                     <Text style={styles.modalAmount}>
-                        {(paymentOrder?.final_price || paymentOrder?.initial_price || 'N/A')}c
+                        {(paymentOrder?.final_price ?? paymentOrder?.initial_price ?? 'N/A')}c
                     </Text>
-                    <View style={styles.paymentMethods}>
-                        {['cash', 'transfer', 'card'].map(m => (
+                    <Text style={styles.inputLabel}>{TRANSLATIONS.labelFinal || 'Final Amount'}</Text>
+                    <TextInput
+                        style={styles.input}
+                        placeholder={TRANSLATIONS.labelFinal || 'Final Amount'}
+                        value={String(paymentData?.finalAmount ?? '')}
+                        onChangeText={value => setPaymentData((prev) => ({ ...prev, finalAmount: sanitizeNumberInput(value) }))}
+                        keyboardType="numeric"
+                        placeholderTextColor="#64748b"
+                    />
+
+                    <Text style={styles.inputLabel}>{TRANSLATIONS.labelWorkDone || 'Work Done'}</Text>
+                    <Text style={[styles.input, { minHeight: 56, textAlignVertical: 'top', paddingTop: 12 }]}>
+                        {paymentOrder?.work_performed || paymentData?.workPerformed || '-'}
+                    </Text>
+
+                    <Text style={styles.inputLabel}>{TRANSLATIONS.labelTimeSpent || 'Time Spent (hours)'}</Text>
+                    <Text style={[styles.input, { minHeight: 44, paddingTop: 12 }]}>
+                        {paymentOrder?.hours_worked ?? paymentData?.hoursWorked ?? '-'}
+                    </Text>
+
+                    {!paymentOrder?.is_disputed && (
+                        <>
+                            <Text style={styles.inputLabel}>{TRANSLATIONS.labelReportReason || 'Report Reason'}</Text>
+                            <TextInput
+                                style={[styles.input, styles.textArea]}
+                                value={paymentData?.reportReason || ''}
+                                onChangeText={value => setPaymentData((prev) => ({ ...prev, reportReason: value }))}
+                                multiline
+                                numberOfLines={3}
+                                placeholder={TRANSLATIONS.labelReportReasonHint || 'Required only if reporting master'}
+                                placeholderTextColor="#64748b"
+                            />
+
                             <TouchableOpacity
-                                key={m}
-                                style={[styles.paymentMethod, paymentData.method === m && styles.paymentMethodActive]}
-                                onPress={() => setPaymentData({ ...paymentData, method: m })}
+                                style={[styles.modalCancel, { marginTop: 10, backgroundColor: '#dc2626' }]}
+                                onPress={actionLoading ? undefined : handleReportMasterFromPaymentModal}
+                                disabled={actionLoading}
                             >
-                                <Text style={[styles.paymentMethodText, paymentData.method === m && { color: '#fff' }]}>
-                                    {TRANSLATIONS[`payment${m.charAt(0).toUpperCase() + m.slice(1)}`] || m}
-                                </Text>
+                                <Text style={styles.modalCancelText}>{TRANSLATIONS.reportMaster || 'Report Master'}</Text>
                             </TouchableOpacity>
-                        ))}
-                    </View>
-                    {paymentData.method === 'transfer' && (
-                        <TextInput
-                            style={styles.input}
-                            placeholder={TRANSLATIONS.labelProof || 'Proof URL'}
-                            value={paymentData.proofUrl}
-                            onChangeText={t => setPaymentData({ ...paymentData, proofUrl: t })}
-                            placeholderTextColor="#64748b"
-                        />
+                        </>
                     )}
                     <View style={styles.modalButtons}>
                         <TouchableOpacity
                             style={styles.modalCancel}
-                            onPress={() => { setShowPaymentModal(false); setPaymentOrder(null); }}
+                            onPress={() => {
+                                setShowPaymentModal(false);
+                                setPaymentOrder(null);
+                                setPaymentData({ ...DEFAULT_PAYMENT_CONFIRMATION_DATA });
+                            }}
                         >
                             <Text style={styles.modalCancelText}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                         </TouchableOpacity>
@@ -5235,7 +7931,13 @@ export default function AdminDashboard({ navigation }) {
                             style={[styles.modalConfirm, actionLoading && styles.pointerEventsNone]}
                             onPress={actionLoading ? undefined : handleConfirmPaymentModal}
                         >
-                            {actionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.modalConfirmText}>{TRANSLATIONS.confirm || 'Confirm'}</Text>}
+                            {actionLoading
+                                ? <ActivityIndicator color="#fff" />
+                                : <Text style={styles.modalConfirmText}>
+                                    {paymentOrder?.is_disputed
+                                        ? (TRANSLATIONS.resolveDispute || 'Resolve Dispute')
+                                        : (TRANSLATIONS.confirm || 'Confirm')}
+                                </Text>}
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -5349,6 +8051,8 @@ export default function AdminDashboard({ navigation }) {
             <View style={[styles.mainContent, !isDark && styles.mainContentLight]}>
                 {activeTab === 'analytics' && renderAnalytics()}
                 {activeTab === 'orders' && renderOrders()}
+                {activeTab === 'disputes' && renderDisputes()}
+                {activeTab === 'payouts' && renderPayouts()}
                 {activeTab === 'people' && renderPeople()}
                 {activeTab === 'create_order' && renderCreateOrder()}
 
@@ -5366,7 +8070,10 @@ export default function AdminDashboard({ navigation }) {
                 animationType="fade"
                 transparent={true}
                 visible={showAssignModal}
-                onRequestClose={() => setShowAssignModal(false)}
+                onRequestClose={() => {
+                    setShowAssignModal(false);
+                    setAssignOrderId(null);
+                }}
             >
                 <View style={styles.modalOverlay}>
                     <View style={[styles.modalContent, { maxHeight: 500 }]}>
@@ -5374,43 +8081,70 @@ export default function AdminDashboard({ navigation }) {
                         <Text style={{ color: '#94a3b8', marginBottom: 15 }}>
                             {TRANSLATIONS.selectMasterAssign || 'Select a master to assign this order to:'}
                         </Text>
-                        <ScrollView style={{ maxHeight: 300 }}>
-                            {availableMasters.length === 0 ? (
-                                <Text style={{ color: '#64748b', textAlign: 'center', paddingVertical: 20 }}>
-                                    {TRANSLATIONS.noAvailableMasters || 'No available masters found'}
-                                </Text>
-                            ) : (
-                                availableMasters.map(master => {
-                                    const masterId = master.id || master.master_id;
-                                    const activeJobs = master.active_jobs ?? master.active_orders ?? master.active_orders_count ?? master.current_orders ?? 0;
-                                    const maxJobs = master.max_active_jobs ?? master.max_jobs ?? master.jobs_limit ?? null;
-                                    const jobsLabel = maxJobs !== null && maxJobs !== undefined
-                                        ? `${activeJobs}/${maxJobs}`
-                                        : String(activeJobs);
-                                    return (
-                                        <TouchableOpacity
-                                            key={masterId || master.id}
-                                            style={[styles.listItemCard, { marginBottom: 8 }]}
-                                            onPress={() => handleForceAssignMaster(assignOrderId || detailsOrder?.id, masterId, master.full_name || master.name || 'Master')}
-                                        >
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                                                <View style={[styles.avatarCircle, { backgroundColor: master.is_verified ? '#22c55e' : '#64748b' }]}>
-                                                    <Text style={{ color: '#fff' }}>{master.full_name?.charAt(0)}</Text>
-                                                </View>
-                                                <View style={{ flex: 1 }}>
-                                                    <Text style={styles.itemTitle}>{master.full_name}</Text>
-                                                    <Text style={styles.itemSubtitle}>{master.phone || 'N/A'} ? {(TRANSLATIONS.labelJobs || TRANSLATIONS.orders || 'Jobs')}: {jobsLabel}</Text>
-                                                </View>
-                                                <Ionicons name="chevron-forward" size={16} color="#64748b" />
+                        <View style={styles.pickerSearchInputWrapper}>
+                            <Ionicons name="search" size={16} color="#64748b" style={styles.searchIconText} />
+                            <TextInput
+                                style={styles.pickerSearchInput}
+                                value={assignMasterSearchQuery}
+                                onChangeText={setAssignMasterSearchQuery}
+                                placeholder={TRANSLATIONS.placeholderSearch || 'Search by name or phone'}
+                                placeholderTextColor="#64748b"
+                                autoCorrect={false}
+                                autoCapitalize="none"
+                            />
+                            {assignMasterSearchLoading ? (
+                                <ActivityIndicator size="small" color="#64748b" />
+                            ) : assignMasterSearchQuery ? (
+                                <TouchableOpacity onPress={() => setAssignMasterSearchQuery('')} style={styles.searchClear}>
+                                    <Ionicons name="close-circle" size={16} color="#64748b" />
+                                </TouchableOpacity>
+                            ) : null}
+                        </View>
+                        <FlatList
+                            style={{ maxHeight: 300 }}
+                            data={availableMasters}
+                            keyExtractor={(master, index) => String(master?.id || master?.master_id || index)}
+                            keyboardShouldPersistTaps="handled"
+                            renderItem={({ item: master }) => {
+                                const masterId = master.id || master.master_id;
+                                const activeJobs = master.active_jobs ?? master.active_orders ?? master.active_orders_count ?? master.current_orders ?? 0;
+                                const maxJobs = master.max_active_jobs ?? master.max_jobs ?? master.jobs_limit ?? null;
+                                const jobsLabel = maxJobs !== null && maxJobs !== undefined
+                                    ? `${activeJobs}/${maxJobs}`
+                                    : String(activeJobs);
+                                return (
+                                    <TouchableOpacity
+                                        key={masterId || master.id}
+                                        style={[styles.listItemCard, { marginBottom: 8 }]}
+                                        onPress={() => handleForceAssignMaster(assignOrderId || detailsOrder?.id, masterId, master.full_name || master.name || 'Master')}
+                                    >
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                            <View style={[styles.avatarCircle, { backgroundColor: master.is_verified ? '#22c55e' : '#64748b' }]}>
+                                                <Text style={{ color: '#fff' }}>{master.full_name?.charAt(0)}</Text>
                                             </View>
-                                        </TouchableOpacity>
-                                    );
-                                })
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={styles.itemTitle}>{master.full_name}</Text>
+                                                <Text style={styles.itemSubtitle}>{master.phone || 'N/A'} | {(TRANSLATIONS.labelJobs || TRANSLATIONS.orders || 'Jobs')}: {jobsLabel}</Text>
+                                            </View>
+                                            <Ionicons name="chevron-forward" size={16} color="#64748b" />
+                                        </View>
+                                    </TouchableOpacity>
+                                );
+                            }}
+                            ListEmptyComponent={(
+                                <Text style={{ color: '#64748b', textAlign: 'center', paddingVertical: 20 }}>
+                                    {assignMasterSearchLoading
+                                        ? (TRANSLATIONS.loading || 'Loading...')
+                                        : (TRANSLATIONS.noAvailableMasters || 'No available masters found')}
+                                </Text>
                             )}
-                        </ScrollView>
+                        />
                         <TouchableOpacity
                             style={[styles.actionButton, { backgroundColor: '#334155', marginTop: 16 }]}
-                            onPress={() => setShowAssignModal(false)}
+                            onPress={() => {
+                                setShowAssignModal(false);
+                                setAssignOrderId(null);
+                            }}
                         >
                             <Text style={styles.actionButtonText}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                         </TouchableOpacity>
@@ -5423,11 +8157,15 @@ export default function AdminDashboard({ navigation }) {
                 animationType="fade"
                 transparent={true}
                 visible={showBalanceModal}
-                onRequestClose={() => setShowBalanceModal(false)}
+                onRequestClose={closeBalanceModal}
             >
                 <View style={styles.modalOverlay}>
                     <View style={[styles.modalContent, !isDark && styles.modalContentLight]}>
-                        <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>{TRANSLATIONS.addMasterBalance || 'Add Master Balance'}</Text>
+                        <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>
+                            {balanceData.type === 'adjustment'
+                                ? (TRANSLATIONS.deductBalance || 'Deduct Master Balance')
+                                : (TRANSLATIONS.addMasterBalance || 'Add Master Balance')}
+                        </Text>
                         <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 15 }}>
                             {TRANSLATIONS.master || 'Master'}: {selectedMaster?.full_name}
                         </Text>
@@ -5453,16 +8191,22 @@ export default function AdminDashboard({ navigation }) {
                         <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: '#334155' }]}
-                                onPress={() => setShowBalanceModal(false)}
+                                onPress={closeBalanceModal}
                             >
                                 <Text style={styles.actionButtonText}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                                style={styles.actionButton}
+                                style={[styles.actionButton, balanceData.type === 'adjustment' && { backgroundColor: '#dc2626' }]}
                                 onPress={() => handleAddMasterBalance(selectedMaster?.id, balanceData.amount, balanceData.type, balanceData.notes)}
                                 disabled={actionLoading || !balanceData.amount}
                             >
-                                <Text style={styles.actionButtonText}>{actionLoading ? (TRANSLATIONS.saving || 'Saving...') : (TRANSLATIONS.addBalance || 'Add Balance')}</Text>
+                                <Text style={styles.actionButtonText}>
+                                    {actionLoading
+                                        ? (TRANSLATIONS.saving || 'Saving...')
+                                        : (balanceData.type === 'adjustment'
+                                            ? (TRANSLATIONS.deduct || 'Deduct')
+                                            : (TRANSLATIONS.addBalance || 'Add Balance'))}
+                                </Text>
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -5472,25 +8216,28 @@ export default function AdminDashboard({ navigation }) {
             {/* Person Details Drawer (Master/Dispatcher) */}
             <Modal visible={!!detailsPerson} transparent animationType="fade">
                 <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', flexDirection: 'row', justifyContent: 'flex-end' }}>
-                    <TouchableOpacity style={{ flex: 1 }} onPress={() => setDetailsPerson(null)} />
+                    <TouchableOpacity
+                        style={{ flex: 1 }}
+                        onPress={isPersonSubSidebarOpen ? undefined : handleCloseDetailsDrawer}
+                        disabled={isPersonSubSidebarOpen}
+                        activeOpacity={1}
+                    />
                     <View style={{ width: Math.min(500, SCREEN_WIDTH), backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                                <View style={[styles.avatarCircle, { width: 48, height: 48, borderRadius: 24, backgroundColor: detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? '#22c55e' : '#64748b') : (detailsPerson?.is_verified ? '#22c55e' : '#f59e0b') }]}>
+                                <View style={[styles.avatarCircle, { width: 48, height: 48, borderRadius: 24, backgroundColor: detailsPerson?.is_verified ? '#22c55e' : '#64748b' }]}>
                                     <Text style={{ color: '#fff', fontSize: 18 }}>{detailsPerson?.full_name?.charAt(0)}</Text>
                                 </View>
                                 <View>
                                     <Text style={[styles.pageTitle, !isDark && styles.textDark]}>{detailsPerson?.full_name}</Text>
-                                    <View style={[styles.statusBadge, { backgroundColor: detailsPerson?.type === 'master' ? (detailsPerson?.is_verified ? '#22c55e' : '#64748b') : (detailsPerson?.is_verified ? '#22c55e' : '#f59e0b'), alignSelf: 'flex-start', marginTop: 4 }]}>
-                                        <Text style={styles.statusText}>
-                                            {detailsPerson?.type === 'master'
-                                                ? (detailsPerson?.is_verified ? (TRANSLATIONS.verified || 'VERIFIED') : (TRANSLATIONS.unverified || 'UNVERIFIED'))
-                                                : (detailsPerson?.is_verified ? (TRANSLATIONS.verified || 'VERIFIED') : (TRANSLATIONS.unverified || 'UNVERIFIED'))}
+                                    <View style={[styles.statusBadge, { backgroundColor: detailsPerson?.is_verified ? '#22c55e' : '#ef4444', alignSelf: 'flex-start', marginTop: 4, paddingVertical: 3, paddingHorizontal: 7 }]}>
+                                        <Text style={[styles.statusText, { fontSize: 9 }]}>
+                                            {detailsPerson?.is_verified ? (TRANSLATIONS.verified || 'VERIFIED') : (TRANSLATIONS.unverified || 'UNVERIFIED')}
                                         </Text>
                                     </View>
                                 </View>
                             </View>
-                            <TouchableOpacity onPress={() => setDetailsPerson(null)}>
+                            <TouchableOpacity onPress={handleCloseDetailsDrawer}>
                                 <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>X</Text>
                             </TouchableOpacity>
                         </View>
@@ -5499,14 +8246,51 @@ export default function AdminDashboard({ navigation }) {
                             {/* Contact Info - Editable when isEditingPerson */}
                             <View style={[styles.card, !isDark && styles.cardLight]}>
                                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                                    <Ionicons name="chevron-down" size={14} color="#94a3b8" />
+                                    <TouchableOpacity
+                                        style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                                        onPress={() => {
+                                            if (isEditingPerson) return;
+                                            setIsPersonalInfoExpanded((prev) => !prev);
+                                        }}
+                                        activeOpacity={0.8}
+                                    >
+                                        <Ionicons
+                                            name={(isPersonalInfoExpanded || isEditingPerson) ? 'chevron-up' : 'chevron-down'}
+                                            size={14}
+                                            color="#94a3b8"
+                                        />
+                                        <Text style={{ color: '#94a3b8', fontSize: 12 }}>
+                                            {TRANSLATIONS.personalInfo || TRANSLATIONS.contactInfo || 'PERSONAL INFO'}
+                                        </Text>
+                                    </TouchableOpacity>
                                     {!isEditingPerson && (
-                                        <TouchableOpacity onPress={() => { setIsEditingPerson(true); setEditPersonData({ ...detailsPerson }); }}>
-                                            <Text style={{ color: '#3b82f6', fontSize: 12 }}>{TRANSLATIONS.edit || 'Edit'}</Text>
-                                        </TouchableOpacity>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                            <TouchableOpacity
+                                                onPress={() => {
+                                                    setIsPersonalInfoExpanded(true);
+                                                    setIsEditingPerson(true);
+                                                    setEditPersonData({ ...detailsPerson });
+                                                    setEditPersonPhoneError('');
+                                                }}
+                                                style={[styles.miniActionBtn, {
+                                                    minWidth: 86,
+                                                    backgroundColor: 'rgba(59,130,246,0.18)',
+                                                    borderWidth: 1,
+                                                    borderColor: 'rgba(59,130,246,0.35)',
+                                                }]}
+                                            >
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                                                    <Ionicons name="create-outline" size={12} color="#60a5fa" />
+                                                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#60a5fa' }}>
+                                                        {TRANSLATIONS.edit || TRANSLATIONS.btnEdit || 'Edit'}
+                                                    </Text>
+                                                </View>
+                                            </TouchableOpacity>
+                                        </View>
                                     )}
                                 </View>
-                                {isEditingPerson ? (
+                                {(isEditingPerson || isPersonalInfoExpanded) ? (
+                                    isEditingPerson ? (
                                     <View style={{ gap: 12 }}>
                                         <View>
                                             <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.fullName || 'Full Name'}</Text>
@@ -5520,18 +8304,23 @@ export default function AdminDashboard({ navigation }) {
                                         <View>
                                             <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.phone || 'Phone'}</Text>
                                             <TextInput
-                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                style={[styles.input, editPersonPhoneError && styles.inputError, !isDark && styles.inputLight]}
                                                 value={editPersonData.phone || ''}
-                                                onChangeText={(text) => setEditPersonData({ ...editPersonData, phone: text })}
+                                                onChangeText={handleEditPersonPhoneChange}
+                                                onBlur={handleEditPersonPhoneBlur}
+                                                keyboardType="phone-pad"
                                                 placeholderTextColor="#64748b"
                                             />
+                                            {editPersonPhoneError ? <Text style={styles.errorText}>{editPersonPhoneError}</Text> : null}
                                         </View>
                                         <View>
                                             <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.email || 'Email'}</Text>
                                             <TextInput
                                                 style={[styles.input, !isDark && styles.inputLight]}
                                                 value={editPersonData.email || ''}
-                                                onChangeText={(text) => setEditPersonData({ ...editPersonData, email: text })}
+                                                onChangeText={(text) => setEditPersonData((prev) => ({ ...prev, email: text }))}
+                                                keyboardType="email-address"
+                                                autoCapitalize="none"
                                                 placeholderTextColor="#64748b"
                                             />
                                         </View>
@@ -5542,17 +8331,40 @@ export default function AdminDashboard({ navigation }) {
                                                     <TextInput
                                                         style={[styles.input, !isDark && styles.inputLight]}
                                                         value={editPersonData.service_area || ''}
-                                                        onChangeText={(text) => setEditPersonData({ ...editPersonData, service_area: text })}
+                                                        onChangeText={(text) => setEditPersonData((prev) => ({ ...prev, service_area: text }))}
                                                         placeholderTextColor="#64748b"
                                                     />
                                                 </View>
                                                 <View>
-                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.experienceYears || 'Experience (years)'}</Text>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.maxActiveJobs || 'Max Active Jobs'}</Text>
                                                     <TextInput
                                                         style={[styles.input, !isDark && styles.inputLight]}
-                                                        value={String(editPersonData.experience_years || '')}
-                                                        onChangeText={(text) => setEditPersonData({ ...editPersonData, experience_years: text })}
+                                                        value={String(editPersonData.max_active_jobs ?? '')}
+                                                        onChangeText={(text) => setEditPersonData((prev) => ({ ...prev, max_active_jobs: text.replace(/\D/g, '') }))}
                                                         keyboardType="numeric"
+                                                        placeholder={getPlatformDefaultPlaceholder(platformDefaultLimits.maxActiveJobs)}
+                                                        placeholderTextColor="#64748b"
+                                                    />
+                                                </View>
+                                                <View>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.maxImmediateOrders || 'Max Immediate Orders'}</Text>
+                                                    <TextInput
+                                                        style={[styles.input, !isDark && styles.inputLight]}
+                                                        value={String(editPersonData.max_immediate_orders ?? '')}
+                                                        onChangeText={(text) => setEditPersonData((prev) => ({ ...prev, max_immediate_orders: text.replace(/\D/g, '') }))}
+                                                        keyboardType="numeric"
+                                                        placeholder={getPlatformDefaultPlaceholder(platformDefaultLimits.maxImmediateOrders)}
+                                                        placeholderTextColor="#64748b"
+                                                    />
+                                                </View>
+                                                <View>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.maxPendingConfirmation || 'Max Pending Confirmation'}</Text>
+                                                    <TextInput
+                                                        style={[styles.input, !isDark && styles.inputLight]}
+                                                        value={String(editPersonData.max_pending_confirmation ?? '')}
+                                                        onChangeText={(text) => setEditPersonData((prev) => ({ ...prev, max_pending_confirmation: text.replace(/\D/g, '') }))}
+                                                        keyboardType="numeric"
+                                                        placeholder={getPlatformDefaultPlaceholder(platformDefaultLimits.maxPendingConfirmation)}
                                                         placeholderTextColor="#64748b"
                                                     />
                                                 </View>
@@ -5568,23 +8380,49 @@ export default function AdminDashboard({ navigation }) {
                                             </TouchableOpacity>
                                             <TouchableOpacity
                                                 style={[styles.actionButton, { backgroundColor: isDark ? '#334155' : '#e2e8f0', flex: 1 }]}
-                                                onPress={() => setIsEditingPerson(false)}
+                                                onPress={() => { setIsEditingPerson(false); setEditPersonPhoneError(''); }}
                                             >
                                                 <Text style={[styles.actionButtonText, !isDark && { color: '#475569' }]}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                                             </TouchableOpacity>
                                         </View>
                                     </View>
+                                    ) : (
+                                        <View style={{ gap: 8 }}>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.fullName || 'Full Name'}:</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a', flexShrink: 1, textAlign: 'right' }}>{detailsPerson?.full_name || 'N/A'}</Text>
+                                            </View>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.phone || 'Phone'}:</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.phone || 'N/A'}</Text>
+                                            </View>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.email || 'Email'}:</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a', flexShrink: 1, textAlign: 'right' }}>{detailsPerson?.email || 'N/A'}</Text>
+                                            </View>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.created || 'Created'}:</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>
+                                                    {detailsPerson?.created_at ? new Date(detailsPerson.created_at).toLocaleDateString() : 'N/A'}
+                                                </Text>
+                                            </View>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.lastLogin || 'Last Login'}:</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a', flexShrink: 1, textAlign: 'right' }}>
+                                                    {detailsPerson?.last_login_at ? formatDateTimeLabel(detailsPerson.last_login_at) : (TRANSLATIONS.never || TRANSLATIONS.noData || 'No login data')}
+                                                </Text>
+                                            </View>
+                                        </View>
+                                    )
                                 ) : (
-                                    <View style={{ gap: 8 }}>
-                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                            <Ionicons name="call" size={16} color="#3b82f6" />
-                                            <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.phone || 'N/A'}</Text>
-                                        </View>
-                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                            <Ionicons name="mail" size={16} color="#3b82f6" />
-                                            <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.email || 'N/A'}</Text>
-                                        </View>
-                                    </View>
+                                    <TouchableOpacity
+                                        style={{ paddingVertical: 4 }}
+                                        onPress={() => setIsPersonalInfoExpanded(true)}
+                                    >
+                                        <Text style={{ color: '#64748b', fontSize: 11 }}>
+                                            {TRANSLATIONS.tapViewDetails || 'Tap to view details'}
+                                        </Text>
+                                    </TouchableOpacity>
                                 )}
                             </View>
 
@@ -5592,54 +8430,213 @@ export default function AdminDashboard({ navigation }) {
                             {detailsPerson?.type === 'master' && (
                                 <>
                                     <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
-                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>{TRANSLATIONS.financials || 'FINANCIALS'}</Text>
+                                        <TouchableOpacity
+                                            activeOpacity={0.85}
+                                            onPress={() => {
+                                                void openTopUpHistory(detailsPerson);
+                                            }}
+                                            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}
+                                        >
+                                            <Text style={{ color: '#94a3b8', fontSize: 12 }}>{TRANSLATIONS.financials || 'FINANCIALS'}</Text>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                                <Text style={{ color: '#64748b', fontSize: 11 }}>{TRANSLATIONS.tapViewDetails || 'Tap to view details'}</Text>
+                                                <Ionicons name="chevron-forward" size={14} color="#64748b" />
+                                            </View>
+                                        </TouchableOpacity>
+
                                         <View style={{ gap: 8 }}>
-                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                                 <Text style={{ color: '#64748b' }}>{TRANSLATIONS.balance || 'Balance:'}</Text>
-                                                <Text style={{ color: (detailsPerson?.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '700' }}>{detailsPerson?.prepaid_balance || 0} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}</Text>
+                                                <View style={{ alignItems: 'flex-end', gap: 8 }}>
+                                                    <Text style={{ color: (detailsPerson?.prepaid_balance || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '700' }}>
+                                                        {detailsPerson?.prepaid_balance || 0} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                    </Text>
+                                                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                                                        <TouchableOpacity
+                                                            style={[styles.miniActionBtn, { minWidth: 74, backgroundColor: 'rgba(59,130,246,0.18)', borderWidth: 1, borderColor: 'rgba(59,130,246,0.35)' }]}
+                                                            onPress={() => openMasterBalanceModal(detailsPerson, 'top_up')}
+                                                            disabled={actionLoading}
+                                                        >
+                                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#60a5fa' }}>
+                                                                {TRANSLATIONS.topUp || 'TOP UP'}
+                                                            </Text>
+                                                        </TouchableOpacity>
+                                                        <TouchableOpacity
+                                                            style={[styles.miniActionBtn, { minWidth: 74, backgroundColor: 'rgba(239,68,68,0.18)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.35)' }]}
+                                                            onPress={() => openMasterBalanceModal(detailsPerson, 'adjustment')}
+                                                            disabled={actionLoading}
+                                                        >
+                                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#ef4444' }}>
+                                                                {TRANSLATIONS.deduct || 'DEDUCT'}
+                                                            </Text>
+                                                        </TouchableOpacity>
+                                                    </View>
+                                                </View>
                                             </View>
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                                                 <Text style={{ color: '#64748b' }}>{TRANSLATIONS.initialDeposit || 'Initial Deposit:'}</Text>
-                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.initial_deposit || 0} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>
+                                                    {detailsPerson?.initial_deposit || 0} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                </Text>
                                             </View>
                                         </View>
                                     </View>
 
                                     <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
-                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>{TRANSLATIONS.performance || 'PERFORMANCE'}</Text>
-                                        <View style={{ gap: 8 }}>
-                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.completedJobs || 'Completed Jobs:'}</Text>
-                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.completed_jobs || 0}</Text>
-                                            </View>
+                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                            <TouchableOpacity
+                                                activeOpacity={0.85}
+                                                onPress={() => {
+                                                    void openOrderHistory(detailsPerson);
+                                                }}
+                                                style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+                                            >
+                                                <Text style={{ color: '#94a3b8', fontSize: 12 }}>{TRANSLATIONS.performance || 'PERFORMANCE'}</Text>
+                                                <Ionicons name="chevron-forward" size={14} color="#64748b" />
+                                            </TouchableOpacity>
+                                            {!isEditingMasterPerformance && (
+                                                <TouchableOpacity
+                                                    onPress={() => openMasterPerformanceEditor(detailsPerson)}
+                                                    style={[styles.miniActionBtn, { minWidth: 86, backgroundColor: 'rgba(59,130,246,0.18)', borderWidth: 1, borderColor: 'rgba(59,130,246,0.35)' }]}
+                                                    disabled={actionLoading}
+                                                >
+                                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                                                        <Ionicons name="create-outline" size={12} color="#60a5fa" />
+                                                        <Text style={{ fontSize: 10, fontWeight: '700', color: '#60a5fa' }}>
+                                                            {TRANSLATIONS.edit || TRANSLATIONS.btnEdit || 'Edit'}
+                                                        </Text>
+                                                    </View>
+                                                </TouchableOpacity>
+                                            )}
                                         </View>
+
+                                        {isEditingMasterPerformance ? (
+                                            <View style={{ gap: 12 }}>
+                                                <View>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.maxActiveJobs || 'Max Active Jobs'}</Text>
+                                                    <TextInput
+                                                        style={[styles.input, !isDark && styles.inputLight]}
+                                                        keyboardType="numeric"
+                                                        value={masterPerformanceData.max_active_jobs}
+                                                        onChangeText={(text) => setMasterPerformanceData((prev) => ({ ...prev, max_active_jobs: text.replace(/\D/g, '') }))}
+                                                        placeholder={getPlatformDefaultPlaceholder(platformDefaultLimits.maxActiveJobs)}
+                                                        placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+                                                    />
+                                                </View>
+                                                <View>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.maxImmediateOrders || 'Max Immediate Orders'}</Text>
+                                                    <TextInput
+                                                        style={[styles.input, !isDark && styles.inputLight]}
+                                                        keyboardType="numeric"
+                                                        value={masterPerformanceData.max_immediate_orders}
+                                                        onChangeText={(text) => setMasterPerformanceData((prev) => ({ ...prev, max_immediate_orders: text.replace(/\D/g, '') }))}
+                                                        placeholder={getPlatformDefaultPlaceholder(platformDefaultLimits.maxImmediateOrders)}
+                                                        placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+                                                    />
+                                                </View>
+                                                <View>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.maxPendingConfirmation || 'Max Pending Confirmation'}</Text>
+                                                    <TextInput
+                                                        style={[styles.input, !isDark && styles.inputLight]}
+                                                        keyboardType="numeric"
+                                                        value={masterPerformanceData.max_pending_confirmation}
+                                                        onChangeText={(text) => setMasterPerformanceData((prev) => ({ ...prev, max_pending_confirmation: text.replace(/\D/g, '') }))}
+                                                        placeholder={getPlatformDefaultPlaceholder(platformDefaultLimits.maxPendingConfirmation)}
+                                                        placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+                                                    />
+                                                </View>
+                                                <Text style={{ color: '#64748b', fontSize: 11 }}>
+                                                    {TRANSLATIONS.calculatedAuto || 'Current state values are calculated automatically.'}
+                                                </Text>
+                                                <View style={{ flexDirection: 'row', gap: 10 }}>
+                                                    <TouchableOpacity
+                                                        style={[styles.actionButton, { backgroundColor: '#22c55e', flex: 1 }]}
+                                                        onPress={handleSaveMasterPerformance}
+                                                        disabled={actionLoading}
+                                                    >
+                                                        <Text style={styles.actionButtonText}>
+                                                            {actionLoading ? (TRANSLATIONS.saving || 'Saving...') : (TRANSLATIONS.saveChanges || 'Save Changes')}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                    <TouchableOpacity
+                                                        style={[styles.actionButton, { backgroundColor: isDark ? '#334155' : '#e2e8f0', flex: 1 }]}
+                                                        onPress={closeMasterPerformanceEditor}
+                                                    >
+                                                        <Text style={[styles.actionButtonText, !isDark && { color: '#475569' }]}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
+                                                    </TouchableOpacity>
+                                                </View>
+                                            </View>
+                                        ) : (
+                                            <TouchableOpacity
+                                                activeOpacity={0.85}
+                                                onPress={() => {
+                                                    void openOrderHistory(detailsPerson);
+                                                }}
+                                            >
+                                                <View style={{ gap: 8 }}>
+                                                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                        <Text style={{ color: '#64748b' }}>{TRANSLATIONS.currentState || 'Current state:'}</Text>
+                                                        <Text style={{ color: masterCurrentActivity?.activeCount > 0 ? '#22c55e' : (isDark ? '#fff' : '#0f172a'), fontWeight: '600' }}>
+                                                            {masterCurrentActivity?.stateLabel || (TRANSLATIONS.noData || 'N/A')}
+                                                        </Text>
+                                                    </View>
+                                                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                        <Text style={{ color: '#64748b' }}>{TRANSLATIONS.activeJobs || 'Active jobs now:'}</Text>
+                                                        <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{masterCurrentActivity?.activeCount ?? 0}</Text>
+                                                    </View>
+                                                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                        <Text style={{ color: '#64748b' }}>{TRANSLATIONS.awaitingPayment || 'Awaiting payment:'}</Text>
+                                                        <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{masterCurrentActivity?.awaitingPaymentCount ?? 0}</Text>
+                                                    </View>
+                                                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                        <Text style={{ color: '#64748b' }}>{TRANSLATIONS.reopened || 'Reopened:'}</Text>
+                                                        <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{masterCurrentActivity?.reopenedCount ?? 0}</Text>
+                                                    </View>
+                                                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                        <Text style={{ color: '#64748b' }}>{TRANSLATIONS.latestStatus || 'Latest status:'}</Text>
+                                                        <Text style={{ color: isDark ? '#fff' : '#0f172a', flexShrink: 1, textAlign: 'right' }}>
+                                                            {masterCurrentActivity?.latestStatusLabel || (TRANSLATIONS.noData || 'N/A')}
+                                                        </Text>
+                                                    </View>
+                                                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                        <Text style={{ color: '#64748b' }}>{TRANSLATIONS.lastActivity || 'Last activity:'}</Text>
+                                                        <Text style={{ color: isDark ? '#fff' : '#0f172a', flexShrink: 1, textAlign: 'right' }}>
+                                                            {masterCurrentActivity?.latestAtLabel || (TRANSLATIONS.noData || 'N/A')}
+                                                        </Text>
+                                                    </View>
+                                                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                        <Text style={{ color: '#64748b' }}>{TRANSLATIONS.maxActiveJobs || 'Max active jobs:'}</Text>
+                                                        <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.max_active_jobs ?? platformDefaultLimits.maxActiveJobs}</Text>
+                                                    </View>
+                                                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                        <Text style={{ color: '#64748b' }}>{TRANSLATIONS.maxImmediateOrders || 'Max immediate orders:'}</Text>
+                                                        <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.max_immediate_orders ?? platformDefaultLimits.maxImmediateOrders}</Text>
+                                                    </View>
+                                                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                        <Text style={{ color: '#64748b' }}>{TRANSLATIONS.maxPendingConfirmation || 'Max pending confirmation:'}</Text>
+                                                        <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.max_pending_confirmation ?? platformDefaultLimits.maxPendingConfirmation}</Text>
+                                                    </View>
+                                                </View>
+                                            </TouchableOpacity>
+                                        )}
                                     </View>
 
-                                    {/* Master Actions */}
+                                    {/* Master Actions (bottom only) */}
                                     <View style={{ marginTop: 20, gap: 10 }}>
                                         <TouchableOpacity
-                                            style={[styles.actionButton, { backgroundColor: '#334155' }]}
-                                            onPress={() => openOrderHistory(detailsPerson)}
-                                        >
-                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.viewOrderHistory || 'View Order History'}</Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            style={[styles.actionButton, { backgroundColor: '#334155' }]}
-                                            onPress={() => openTopUpHistory(detailsPerson)}
-                                        >
-                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.topUpHistory || 'View Top Up History'}</Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            style={[styles.actionButton, { backgroundColor: '#3b82f6' }]}
-                                            onPress={() => { setSelectedMaster(detailsPerson); setShowBalanceModal(true); setDetailsPerson(null); }}
-                                        >
-                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.topUpBalance || 'Top Up Balance'}</Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            style={[styles.actionButton, { backgroundColor: detailsPerson?.is_verified ? '#ef4444' : '#22c55e' }]}
+                                            style={[styles.actionButton, { backgroundColor: detailsPerson?.is_verified ? '#d97706' : '#16a34a' }]}
                                             onPress={() => { handleVerifyMaster(detailsPerson?.id, detailsPerson?.is_verified); setDetailsPerson(null); }}
                                         >
-                                            <Text style={styles.actionButtonText}>{detailsPerson?.is_verified ? (TRANSLATIONS.unverifyMaster || 'Unverify Master') : (TRANSLATIONS.verifyMaster || 'Verify Master')}</Text>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Ionicons
+                                                    name={detailsPerson?.is_verified ? 'shield-outline' : 'shield-checkmark-outline'}
+                                                    size={16}
+                                                    color="#fff"
+                                                />
+                                                <Text style={styles.actionButtonText}>
+                                                    {detailsPerson?.is_verified ? (TRANSLATIONS.unverifyMaster || 'Unverify Master') : (TRANSLATIONS.verifyMaster || 'Verify Master')}
+                                                </Text>
+                                            </View>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={[styles.actionButton, { backgroundColor: '#475569' }]}
@@ -5648,6 +8645,16 @@ export default function AdminDashboard({ navigation }) {
                                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                                 <Ionicons name="key" size={16} color="#fff" />
                                                 <Text style={styles.actionButtonText}>{TRANSLATIONS.resetPassword || 'Reset Password'}</Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: '#be123c', borderWidth: 1, borderColor: '#e11d48' }]}
+                                            onPress={() => handleDeleteUser(detailsPerson, 'master')}
+                                            disabled={actionLoading}
+                                        >
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Ionicons name="trash-outline" size={16} color="#fff" />
+                                                <Text style={styles.actionButtonText}>{TRANSLATIONS.deleteUser || TRANSLATIONS.delete || 'Delete User'}</Text>
                                             </View>
                                         </TouchableOpacity>
                                     </View>
@@ -5658,40 +8665,78 @@ export default function AdminDashboard({ navigation }) {
                             {detailsPerson?.type === 'dispatcher' && (
                                 <>
                                     <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
-                                        <Text style={{ color: '#94a3b8', marginBottom: 10, fontSize: 12 }}>{TRANSLATIONS.stats || 'STATS'}</Text>
-                                        <View style={{ gap: 8 }}>
-                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.status || 'Status:'}</Text>
-                                                <Text style={{ color: detailsPerson?.is_verified ? '#22c55e' : '#ef4444', fontWeight: '600' }}>
-                                                    {detailsPerson?.is_verified
-                                                        ? (TRANSLATIONS.verified || 'Verified')
-                                                        : (TRANSLATIONS.unverified || 'Unverified')}
-                                                </Text>
+                                        <TouchableOpacity
+                                            activeOpacity={0.85}
+                                            onPress={() => {
+                                                void openOrderHistory(detailsPerson);
+                                            }}
+                                            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}
+                                        >
+                                            <Text style={{ color: '#94a3b8', fontSize: 12 }}>{TRANSLATIONS.activity || TRANSLATIONS.performance || 'ACTIVITY'}</Text>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                                <Text style={{ color: '#64748b', fontSize: 11 }}>{TRANSLATIONS.tapViewDetails || 'Tap to view details'}</Text>
+                                                <Ionicons name="chevron-forward" size={14} color="#64748b" />
                                             </View>
-                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.created || 'Created:'}</Text>
-                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{detailsPerson?.created_at ? new Date(detailsPerson.created_at).toLocaleDateString() : 'N/A'}</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            activeOpacity={0.85}
+                                            onPress={() => {
+                                                void openOrderHistory(detailsPerson);
+                                            }}
+                                        >
+                                            <View style={{ gap: 8 }}>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.currentState || 'Current state:'}</Text>
+                                                    <Text style={{ color: dispatcherCurrentActivity?.activeCount > 0 ? '#22c55e' : (isDark ? '#fff' : '#0f172a'), fontWeight: '600' }}>
+                                                        {dispatcherCurrentActivity?.stateLabel || (TRANSLATIONS.noData || 'N/A')}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.activeOrders || 'Active orders now:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{dispatcherCurrentActivity?.activeCount ?? 0}</Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.awaitingPayment || 'Awaiting payment:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{dispatcherCurrentActivity?.awaitingPaymentCount ?? 0}</Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.reopened || 'Reopened:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{dispatcherCurrentActivity?.reopenedCount ?? 0}</Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.latestStatus || 'Latest status:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a', flexShrink: 1, textAlign: 'right' }}>
+                                                        {dispatcherCurrentActivity?.latestStatusLabel || (TRANSLATIONS.noData || 'N/A')}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.lastActivity || 'Last activity:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a', flexShrink: 1, textAlign: 'right' }}>
+                                                        {dispatcherCurrentActivity?.latestAtLabel || (TRANSLATIONS.noData || 'N/A')}
+                                                    </Text>
+                                                </View>
                                             </View>
-                                        </View>
+                                        </TouchableOpacity>
                                     </View>
 
                                     {/* Dispatcher Actions */}
                                     <View style={{ marginTop: 20, gap: 10 }}>
                                         <TouchableOpacity
-                                            style={[styles.actionButton, { backgroundColor: '#334155' }]}
-                                            onPress={() => openOrderHistory(detailsPerson)}
-                                        >
-                                            <Text style={styles.actionButtonText}>{TRANSLATIONS.viewOrderHistory || 'View Order History'}</Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            style={[styles.actionButton, { backgroundColor: detailsPerson?.is_verified ? '#ef4444' : '#22c55e' }]}
+                                            style={[styles.actionButton, { backgroundColor: detailsPerson?.is_verified ? '#d97706' : '#16a34a' }]}
                                             onPress={() => { handleVerifyDispatcher(detailsPerson?.id, detailsPerson?.is_verified); setDetailsPerson(null); }}
                                         >
-                                            <Text style={styles.actionButtonText}>
-                                                {detailsPerson?.is_verified
-                                                    ? (TRANSLATIONS.unverify || 'Unverify')
-                                                    : (TRANSLATIONS.verify || 'Verify')}
-                                            </Text>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Ionicons
+                                                    name={detailsPerson?.is_verified ? 'shield-outline' : 'shield-checkmark-outline'}
+                                                    size={16}
+                                                    color="#fff"
+                                                />
+                                                <Text style={styles.actionButtonText}>
+                                                    {detailsPerson?.is_verified
+                                                        ? (TRANSLATIONS.unverify || 'Unverify')
+                                                        : (TRANSLATIONS.verify || 'Verify')}
+                                                </Text>
+                                            </View>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={[styles.actionButton, { backgroundColor: '#475569' }]}
@@ -5700,6 +8745,414 @@ export default function AdminDashboard({ navigation }) {
                                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                                 <Ionicons name="key" size={16} color="#fff" />
                                                 <Text style={styles.actionButtonText}>{TRANSLATIONS.resetPassword || 'Reset Password'}</Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: '#be123c', borderWidth: 1, borderColor: '#e11d48' }]}
+                                            onPress={() => handleDeleteUser(detailsPerson, 'dispatcher')}
+                                            disabled={actionLoading}
+                                        >
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Ionicons name="trash-outline" size={16} color="#fff" />
+                                                <Text style={styles.actionButtonText}>{TRANSLATIONS.deleteUser || TRANSLATIONS.delete || 'Delete User'}</Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                    </View>
+                                </>
+                            )}
+
+                            {/* Partner-specific info */}
+                            {detailsPerson?.type === 'partner' && (
+                                <>
+                                    <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
+                                            <TouchableOpacity
+                                                activeOpacity={0.85}
+                                                onPress={() => {
+                                                    if (isEditingPartnerTerms || isEditingPartnerBalance) return;
+                                                    setIsPartnerFinanceExpanded((prev) => !prev);
+                                                }}
+                                                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}
+                                            >
+                                                <Ionicons
+                                                    name={isPartnerFinanceExpanded ? 'chevron-up' : 'chevron-down'}
+                                                    size={14}
+                                                    color="#64748b"
+                                                />
+                                                <Text style={{ color: '#94a3b8', fontSize: 12 }}>{TRANSLATIONS.financials || 'FINANCIALS'}</Text>
+                                            </TouchableOpacity>
+                                            {!isEditingPartnerTerms && !isEditingPartnerBalance && (
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                    <TouchableOpacity
+                                                        onPress={handleOpenPartnerTermsEditor}
+                                                        style={[styles.miniActionBtn, { minWidth: 92, backgroundColor: 'rgba(59,130,246,0.18)', borderWidth: 1, borderColor: 'rgba(59,130,246,0.35)' }]}
+                                                        disabled={actionLoading}
+                                                    >
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                                                            <Ionicons name="create-outline" size={12} color="#60a5fa" />
+                                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#60a5fa' }}>
+                                                                {TRANSLATIONS.edit || TRANSLATIONS.btnEdit || 'Edit'}
+                                                            </Text>
+                                                        </View>
+                                                    </TouchableOpacity>
+                                                    <TouchableOpacity
+                                                        onPress={() => handleOpenPartnerBalanceEditor('top_up')}
+                                                        style={[styles.miniActionBtn, { minWidth: 92, backgroundColor: 'rgba(34,197,94,0.16)', borderWidth: 1, borderColor: 'rgba(34,197,94,0.35)' }]}
+                                                        disabled={actionLoading}
+                                                    >
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                                                            <Ionicons name="wallet-outline" size={12} color="#22c55e" />
+                                                            <Text style={{ fontSize: 10, fontWeight: '700', color: '#22c55e' }}>
+                                                                {TRANSLATIONS.balance || 'Balance'}
+                                                            </Text>
+                                                        </View>
+                                                    </TouchableOpacity>
+                                                </View>
+                                            )}
+                                        </View>
+                                        {isPartnerFinanceExpanded ? (
+                                            partnerFinanceLoading ? (
+                                                <View style={{ gap: 8 }}>
+                                                    {Array.from({ length: 4 }).map((_, idx) => (
+                                                        <View
+                                                            key={`partner-finance-inline-skeleton-${idx}`}
+                                                            style={{ height: 14, borderRadius: 6, backgroundColor: isDark ? '#334155' : '#e2e8f0' }}
+                                                        />
+                                                    ))}
+                                                </View>
+                                            ) : (
+                                                <View style={{ gap: 8 }}>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.balance || 'Balance:'}</Text>
+                                                    <Text style={{ color: Number(partnerFinanceSummary?.balance ?? detailsPerson?.partner_balance ?? 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '700' }}>
+                                                        {Number(partnerFinanceSummary?.balance ?? detailsPerson?.partner_balance ?? 0).toFixed(2)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.commissionRate || 'Commission:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>
+                                                        {(Number(detailsPerson?.partner_commission_rate || 0) * 100).toFixed(2)}%
+                                                    </Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.partnerMinPayout || 'Min payout:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>
+                                                        {Number(detailsPerson?.partner_min_payout ?? 50).toFixed(2)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.pendingRequests || 'Pending requests:'}</Text>
+                                                    <Text style={{ color: partnerPendingRequestsCount > 0 ? '#f59e0b' : (isDark ? '#fff' : '#0f172a') }}>
+                                                        {partnerPendingRequestsCount}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.currentRequest || 'Current request:'}</Text>
+                                                    <Text style={{ color: partnerFinanceCurrentRequest ? '#f59e0b' : (isDark ? '#fff' : '#0f172a') }}>
+                                                        {partnerFinanceCurrentRequest
+                                                            ? `${Number(partnerFinanceCurrentRequest.requested_amount || 0).toFixed(2)} ${TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}`
+                                                            : (TRANSLATIONS.noData || 'N/A')}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.partnerPayoutTotal || 'Total paid:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>
+                                                        {Number(partnerFinanceSummary?.paidTotal || 0).toFixed(2)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.partnerPayoutRequested || 'Total requested:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>
+                                                        {Number(partnerFinanceSummary?.requestedTotal || 0).toFixed(2)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                    </Text>
+                                                </View>
+                                                </View>
+                                            )
+                                        ) : (
+                                            <TouchableOpacity style={{ paddingVertical: 4 }} onPress={() => setIsPartnerFinanceExpanded(true)}>
+                                                <Text style={{ color: '#64748b', fontSize: 11 }}>
+                                                    {TRANSLATIONS.tapViewDetails || 'Tap to view details'}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        )}
+                                        {isPartnerFinanceExpanded && isEditingPartnerTerms && (
+                                            <View
+                                                style={{
+                                                    marginTop: 14,
+                                                    paddingTop: 12,
+                                                    borderTopWidth: 1,
+                                                    borderTopColor: isDark ? '#334155' : '#e2e8f0',
+                                                    gap: 10,
+                                                }}
+                                            >
+                                                <Text style={{ color: '#94a3b8', fontSize: 11 }}>
+                                                    {TRANSLATIONS.settings || 'SETTINGS'} - {(TRANSLATIONS.edit || 'Edit').toUpperCase()}
+                                                </Text>
+                                                <View>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.commissionRate || 'Commission (%)'}</Text>
+                                                    <TextInput
+                                                        style={[styles.input, !isDark && styles.inputLight]}
+                                                        keyboardType="numeric"
+                                                        value={partnerCommissionInput}
+                                                        onChangeText={setPartnerCommissionInput}
+                                                        placeholderTextColor="#64748b"
+                                                    />
+                                                </View>
+                                                <View>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.partnerMinPayout || 'Min payout (som)'}</Text>
+                                                    <TextInput
+                                                        style={[styles.input, !isDark && styles.inputLight]}
+                                                        keyboardType="numeric"
+                                                        value={partnerMinPayoutInput}
+                                                        onChangeText={setPartnerMinPayoutInput}
+                                                        placeholderTextColor="#64748b"
+                                                    />
+                                                </View>
+                                                <View style={{ flexDirection: 'row', gap: 10 }}>
+                                                    <TouchableOpacity
+                                                        style={[styles.actionButton, { backgroundColor: '#22c55e', flex: 1 }]}
+                                                        onPress={handleSavePartnerTerms}
+                                                        disabled={actionLoading}
+                                                    >
+                                                        <Text style={styles.actionButtonText}>
+                                                            {actionLoading ? (TRANSLATIONS.saving || 'Saving...') : (TRANSLATIONS.saveChanges || 'Save Changes')}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                    <TouchableOpacity
+                                                        style={[styles.actionButton, { backgroundColor: isDark ? '#334155' : '#e2e8f0', flex: 1 }]}
+                                                        onPress={handleCancelPartnerTermsEditor}
+                                                    >
+                                                        <Text style={[styles.actionButtonText, !isDark && { color: '#475569' }]}>
+                                                            {TRANSLATIONS.cancel || 'Cancel'}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                </View>
+                                            </View>
+                                        )}
+                                        {isPartnerFinanceExpanded && isEditingPartnerBalance && (
+                                            <View
+                                                style={{
+                                                    marginTop: 14,
+                                                    paddingTop: 12,
+                                                    borderTopWidth: 1,
+                                                    borderTopColor: isDark ? '#334155' : '#e2e8f0',
+                                                    gap: 10,
+                                                }}
+                                            >
+                                                <Text style={{ color: '#94a3b8', fontSize: 11 }}>
+                                                    {TRANSLATIONS.balance || 'BALANCE'} - {(TRANSLATIONS.edit || 'Edit').toUpperCase()}
+                                                </Text>
+                                                <View style={{ flexDirection: 'row', gap: 8 }}>
+                                                    <TouchableOpacity
+                                                        style={[
+                                                            styles.miniActionBtn,
+                                                            {
+                                                                flex: 1,
+                                                                minWidth: 0,
+                                                                backgroundColor: partnerBalanceActionType === 'top_up' ? 'rgba(34,197,94,0.2)' : (isDark ? '#334155' : '#e2e8f0'),
+                                                                borderWidth: 1,
+                                                                borderColor: partnerBalanceActionType === 'top_up' ? 'rgba(34,197,94,0.45)' : (isDark ? '#475569' : '#cbd5e1'),
+                                                            },
+                                                        ]}
+                                                        onPress={() => setPartnerBalanceActionType('top_up')}
+                                                        disabled={actionLoading}
+                                                    >
+                                                        <Text style={{ fontSize: 10, fontWeight: '700', color: partnerBalanceActionType === 'top_up' ? '#22c55e' : '#94a3b8' }}>
+                                                            {TRANSLATIONS.topUp || 'TOP UP'}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                    <TouchableOpacity
+                                                        style={[
+                                                            styles.miniActionBtn,
+                                                            {
+                                                                flex: 1,
+                                                                minWidth: 0,
+                                                                backgroundColor: partnerBalanceActionType === 'deduct' ? 'rgba(239,68,68,0.2)' : (isDark ? '#334155' : '#e2e8f0'),
+                                                                borderWidth: 1,
+                                                                borderColor: partnerBalanceActionType === 'deduct' ? 'rgba(239,68,68,0.45)' : (isDark ? '#475569' : '#cbd5e1'),
+                                                            },
+                                                        ]}
+                                                        onPress={() => setPartnerBalanceActionType('deduct')}
+                                                        disabled={actionLoading}
+                                                    >
+                                                        <Text style={{ fontSize: 10, fontWeight: '700', color: partnerBalanceActionType === 'deduct' ? '#ef4444' : '#94a3b8' }}>
+                                                            {TRANSLATIONS.deduct || 'DEDUCT'}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                </View>
+                                                <View>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.amountSom || 'Amount (som)'}</Text>
+                                                    <TextInput
+                                                        style={[styles.input, !isDark && styles.inputLight]}
+                                                        keyboardType="numeric"
+                                                        value={partnerDeductAmount}
+                                                        onChangeText={setPartnerDeductAmount}
+                                                        placeholderTextColor="#64748b"
+                                                    />
+                                                </View>
+                                                <View>
+                                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.notesOptional || 'Reason (optional)'}</Text>
+                                                    <TextInput
+                                                        style={[styles.input, styles.textArea, !isDark && styles.inputLight]}
+                                                        multiline
+                                                        numberOfLines={3}
+                                                        value={partnerDeductReason}
+                                                        onChangeText={setPartnerDeductReason}
+                                                        placeholderTextColor="#64748b"
+                                                    />
+                                                </View>
+                                                <View style={{ flexDirection: 'row', gap: 10 }}>
+                                                    <TouchableOpacity
+                                                        style={[
+                                                            styles.actionButton,
+                                                            {
+                                                                backgroundColor: partnerBalanceActionType === 'deduct' ? '#dc2626' : '#16a34a',
+                                                                flex: 1,
+                                                            },
+                                                        ]}
+                                                        onPress={partnerBalanceActionType === 'deduct' ? handleDeductPartnerBalance : handleTopUpPartnerBalance}
+                                                        disabled={actionLoading}
+                                                    >
+                                                        <Text style={styles.actionButtonText}>
+                                                            {actionLoading
+                                                                ? (TRANSLATIONS.processing || 'Processing...')
+                                                                : (partnerBalanceActionType === 'deduct'
+                                                                    ? (TRANSLATIONS.deduct || 'Deduct')
+                                                                    : (TRANSLATIONS.topUp || 'Top Up'))}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                    <TouchableOpacity
+                                                        style={[styles.actionButton, { backgroundColor: isDark ? '#334155' : '#e2e8f0', flex: 1 }]}
+                                                        onPress={handleCancelPartnerBalanceEditor}
+                                                    >
+                                                        <Text style={[styles.actionButtonText, !isDark && { color: '#475569' }]}>
+                                                            {TRANSLATIONS.cancel || 'Cancel'}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                </View>
+                                            </View>
+                                        )}
+                                    </View>
+
+                                    {isPartnerFinanceExpanded && (
+                                        <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
+                                            <TouchableOpacity
+                                                activeOpacity={0.85}
+                                                onPress={openPartnerHistoryModal}
+                                                style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+                                            >
+                                                <Text style={{ color: '#94a3b8', fontSize: 12 }}>
+                                                    {TRANSLATIONS.partnerRequestsHistory || TRANSLATIONS.payouts || 'Payout history'}
+                                                </Text>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                                    <Text style={{ color: '#64748b', fontSize: 11 }}>
+                                                        {TRANSLATIONS.tapToEdit || TRANSLATIONS.tapViewDetails || 'Tap to view details'}
+                                                    </Text>
+                                                    <Ionicons name="chevron-forward" size={14} color="#64748b" />
+                                                </View>
+                                            </TouchableOpacity>
+                                            <View style={{ marginTop: 10, flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.requests || 'Requests'}:</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{partnerHistoryRequests.length}</Text>
+                                            </View>
+                                            <View style={{ marginTop: 6, flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.transactions || 'Transactions'}:</Text>
+                                                <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{partnerHistoryTransactions.length}</Text>
+                                            </View>
+                                        </View>
+                                    )}
+
+                                    <View style={[styles.card, !isDark && styles.cardLight, { marginTop: 12 }]}>
+                                        <TouchableOpacity
+                                            activeOpacity={0.85}
+                                            onPress={() => {
+                                                void openOrderHistory(detailsPerson);
+                                            }}
+                                            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}
+                                        >
+                                            <Text style={{ color: '#94a3b8', fontSize: 12 }}>{TRANSLATIONS.activity || TRANSLATIONS.performance || 'ACTIVITY'}</Text>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                                <Text style={{ color: '#64748b', fontSize: 11 }}>{TRANSLATIONS.tapViewDetails || 'Tap to view details'}</Text>
+                                                <Ionicons name="chevron-forward" size={14} color="#64748b" />
+                                            </View>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            activeOpacity={0.85}
+                                            onPress={() => {
+                                                void openOrderHistory(detailsPerson);
+                                            }}
+                                        >
+                                            <View style={{ gap: 8 }}>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.currentState || 'Current state:'}</Text>
+                                                    <Text style={{ color: partnerCurrentActivity?.activeCount > 0 ? '#22c55e' : (isDark ? '#fff' : '#0f172a'), fontWeight: '600' }}>
+                                                        {partnerCurrentActivity?.stateLabel || (TRANSLATIONS.noData || 'N/A')}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.activeOrders || 'Active orders now:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{partnerCurrentActivity?.activeCount ?? 0}</Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.awaitingPayment || 'Awaiting payment:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{partnerCurrentActivity?.awaitingPaymentCount ?? 0}</Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.reopened || 'Reopened:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a' }}>{partnerCurrentActivity?.reopenedCount ?? 0}</Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.latestStatus || 'Latest status:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a', flexShrink: 1, textAlign: 'right' }}>
+                                                        {partnerCurrentActivity?.latestStatusLabel || (TRANSLATIONS.noData || 'N/A')}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#64748b' }}>{TRANSLATIONS.lastActivity || 'Last activity:'}</Text>
+                                                    <Text style={{ color: isDark ? '#fff' : '#0f172a', flexShrink: 1, textAlign: 'right' }}>
+                                                        {partnerCurrentActivity?.latestAtLabel || (TRANSLATIONS.noData || 'N/A')}
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        </TouchableOpacity>
+                                    </View>
+
+                                    <View style={{ marginTop: 20, gap: 10 }}>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: detailsPerson?.is_verified ? '#d97706' : '#16a34a' }]}
+                                            onPress={() => handleVerifyPartner(detailsPerson?.id, detailsPerson?.is_verified)}
+                                            disabled={actionLoading}
+                                        >
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Ionicons
+                                                    name={detailsPerson?.is_verified ? 'shield-outline' : 'shield-checkmark-outline'}
+                                                    size={16}
+                                                    color="#fff"
+                                                />
+                                                <Text style={styles.actionButtonText}>
+                                                    {detailsPerson?.is_verified
+                                                        ? (TRANSLATIONS.unverify || 'Unverify')
+                                                        : (TRANSLATIONS.verify || 'Verify')}
+                                                </Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: '#475569' }]}
+                                            onPress={() => { setPasswordResetTarget(detailsPerson); setShowPasswordResetModal(true); setDetailsPerson(null); }}
+                                        >
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Ionicons name="key" size={16} color="#fff" />
+                                                <Text style={styles.actionButtonText}>{TRANSLATIONS.resetPassword || 'Reset Password'}</Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, { backgroundColor: '#be123c', borderWidth: 1, borderColor: '#e11d48' }]}
+                                            onPress={() => handleDeleteUser(detailsPerson, 'partner')}
+                                            disabled={actionLoading}
+                                        >
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Ionicons name="trash-outline" size={16} color="#fff" />
+                                                <Text style={styles.actionButtonText}>{TRANSLATIONS.deleteUser || TRANSLATIONS.delete || 'Delete User'}</Text>
                                             </View>
                                         </TouchableOpacity>
                                     </View>
@@ -5715,17 +9168,17 @@ export default function AdminDashboard({ navigation }) {
                 animationType="fade"
                 transparent={true}
                 visible={showOrderHistoryModal}
-                onRequestClose={() => setShowOrderHistoryModal(false)}
+                onRequestClose={closeOrderHistoryModal}
             >
                 <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', flexDirection: 'row', justifyContent: 'flex-end' }}>
-                    <TouchableOpacity style={{ flex: 1 }} onPress={() => setShowOrderHistoryModal(false)} />
+                    <TouchableOpacity style={{ flex: 1 }} onPress={closeOrderHistoryModal} />
                     <View style={{ width: Math.min(500, SCREEN_WIDTH), backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
                             <View>
                                 <Text style={[styles.pageTitle, !isDark && styles.textDark]}>{TRANSLATIONS.sectionHistory || 'Order History'}</Text>
                                 <Text style={{ color: '#64748b', marginTop: 4 }}>{selectedMaster?.full_name}</Text>
                             </View>
-                            <TouchableOpacity onPress={() => setShowOrderHistoryModal(false)}>
+                            <TouchableOpacity onPress={closeOrderHistoryModal}>
                                 <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>X</Text>
                             </TouchableOpacity>
                         </View>
@@ -5770,7 +9223,7 @@ export default function AdminDashboard({ navigation }) {
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                                                 <View style={{ flex: 1 }}>
                                                     <Text style={[styles.itemTitle, !isDark && styles.textDark]}>{getServiceLabel(order.service_type, t)}</Text>
-                                                    <Text style={styles.itemSubtitle}>{order.area || 'N/A'}</Text>
+                                                    <Text style={styles.itemSubtitle}>{getAreaLabel(order.area) || 'N/A'}</Text>
                                                     <Text style={{ color: '#64748b', fontSize: 11, marginTop: 4 }}>
                                                         {order.created_at ? new Date(order.created_at).toLocaleDateString() : 'N/A'}
                                                     </Text>
@@ -5802,10 +9255,10 @@ export default function AdminDashboard({ navigation }) {
                 animationType="fade"
                 transparent={true}
                 visible={showTopUpHistoryModal}
-                onRequestClose={() => setShowTopUpHistoryModal(false)}
+                onRequestClose={closeTopUpHistoryModal}
             >
                 <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', flexDirection: 'row', justifyContent: 'flex-end' }}>
-                    <TouchableOpacity style={{ flex: 1 }} onPress={() => setShowTopUpHistoryModal(false)} />
+                    <TouchableOpacity style={{ flex: 1 }} onPress={closeTopUpHistoryModal} />
                     <View style={{ width: Math.min(500, SCREEN_WIDTH), backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
                             <View>
@@ -5814,7 +9267,7 @@ export default function AdminDashboard({ navigation }) {
                                 </Text>
                                 <Text style={{ color: '#64748b', marginTop: 4 }}>{selectedMaster?.full_name}</Text>
                             </View>
-                            <TouchableOpacity onPress={() => setShowTopUpHistoryModal(false)}>
+                            <TouchableOpacity onPress={closeTopUpHistoryModal}>
                                 <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>X</Text>
                             </TouchableOpacity>
                         </View>
@@ -5841,14 +9294,18 @@ export default function AdminDashboard({ navigation }) {
                                 <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 60 }}>
                                     <Ionicons name="cash-outline" size={48} color="#64748b" />
                                     <Text style={{ color: '#64748b', marginTop: 12 }}>
-                                        {TRANSLATIONS.emptyList || 'No top-ups yet'}
+                                        {TRANSLATIONS.emptyList || 'No balance updates yet'}
                                     </Text>
                                 </View>
                             ) : (
                                 topUpHistory.map((tx, idx) => {
                                     const label = tx.transaction_type === 'initial_deposit'
                                         ? (TRANSLATIONS.initialDeposit || 'Initial deposit')
-                                        : (TRANSLATIONS.transactionTopUp || 'Top Up');
+                                        : tx.transaction_type === 'adjustment'
+                                            ? (TRANSLATIONS.deduct || 'Deduct')
+                                            : (TRANSLATIONS.transactionTopUp || 'Top Up');
+                                    const txAmount = Number(tx.amount || 0);
+                                    const isPositive = txAmount >= 0;
                                     return (
                                         <View
                                             key={tx.id || idx}
@@ -5863,8 +9320,8 @@ export default function AdminDashboard({ navigation }) {
                                                     </Text>
                                                 </View>
                                                 <View style={{ alignItems: 'flex-end' }}>
-                                                    <Text style={{ color: '#22c55e', fontWeight: '700', fontSize: 14 }}>
-                                                        +{Number(tx.amount || 0).toFixed(0)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                    <Text style={{ color: isPositive ? '#22c55e' : '#ef4444', fontWeight: '700', fontSize: 14 }}>
+                                                        {isPositive ? '+' : ''}{txAmount.toFixed(0)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
                                                     </Text>
                                                     <Text style={{ color: '#64748b', fontSize: 11 }}>
                                                         {TRANSLATIONS.balance || 'Balance'}: {Number(tx.balance_after || 0).toFixed(0)}
@@ -5880,27 +9337,271 @@ export default function AdminDashboard({ navigation }) {
                 </View>
             </Modal>
 
-            {/* Add User Modal (Master/Dispatcher) */}
+            {/* Partner Payout History Sidebar */}
+            <Modal
+                animationType="fade"
+                transparent={true}
+                visible={showPartnerHistoryModal}
+                onRequestClose={closePartnerHistoryModal}
+            >
+                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', flexDirection: 'row', justifyContent: 'flex-end' }}>
+                    <TouchableOpacity style={{ flex: 1 }} onPress={closePartnerHistoryModal} />
+                    <View style={{ width: Math.min(540, SCREEN_WIDTH), backgroundColor: isDark ? '#1e293b' : '#fff', padding: 20 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 }}>
+                            <View style={{ flex: 1, marginRight: 12 }}>
+                                <Text style={[styles.pageTitle, !isDark && styles.textDark]}>
+                                    {TRANSLATIONS.partnerRequestsHistory || TRANSLATIONS.payouts || 'Payout history'}
+                                </Text>
+                                <Text style={{ color: '#64748b', marginTop: 4 }}>
+                                    {detailsPerson?.full_name || '-'}
+                                </Text>
+                            </View>
+                            <TouchableOpacity onPress={closePartnerHistoryModal}>
+                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontSize: 24 }}>X</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={{ marginBottom: 10 }}>
+                            <TextInput
+                                style={[styles.input, !isDark && styles.inputLight]}
+                                placeholder={TRANSLATIONS.placeholderSearch || 'Search'}
+                                placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+                                value={partnerHistorySearchQuery}
+                                onChangeText={setPartnerHistorySearchQuery}
+                                autoCapitalize="none"
+                            />
+                        </View>
+
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                            {[
+                                { key: 'all', label: TRANSLATIONS.all || 'All' },
+                                { key: 'requests', label: TRANSLATIONS.requests || 'Requests' },
+                                { key: 'transactions', label: TRANSLATIONS.transactions || 'Transactions' },
+                            ].map((filterOption) => {
+                                const isActive = partnerHistoryFilter === filterOption.key;
+                                return (
+                                    <TouchableOpacity
+                                        key={filterOption.key}
+                                        onPress={() => setPartnerHistoryFilter(filterOption.key)}
+                                        style={[
+                                            styles.miniActionBtn,
+                                            {
+                                                minWidth: 0,
+                                                paddingHorizontal: 10,
+                                                backgroundColor: isActive
+                                                    ? (isDark ? 'rgba(59,130,246,0.28)' : '#dbeafe')
+                                                    : (isDark ? '#334155' : '#f1f5f9'),
+                                                borderWidth: 1,
+                                                borderColor: isActive
+                                                    ? (isDark ? 'rgba(96,165,250,0.6)' : '#93c5fd')
+                                                    : (isDark ? '#475569' : '#cbd5e1'),
+                                            },
+                                        ]}
+                                    >
+                                        <Text style={{ fontSize: 10, fontWeight: '700', color: isActive ? '#60a5fa' : '#94a3b8' }}>
+                                            {String(filterOption.label).toUpperCase()}
+                                        </Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+
+                        <ScrollView showsVerticalScrollIndicator={false}>
+                            {partnerFinanceLoading ? (
+                                <View style={{ gap: 8 }}>
+                                    {Array.from({ length: 5 }).map((_, idx) => (
+                                        <View
+                                            key={`partner-history-modal-skeleton-${idx}`}
+                                            style={{ height: 14, borderRadius: 6, backgroundColor: isDark ? '#334155' : '#e2e8f0' }}
+                                        />
+                                    ))}
+                                </View>
+                            ) : (
+                                <View style={{ gap: 10, paddingBottom: 12 }}>
+                                    {shouldShowPartnerRequests && (
+                                        <>
+                                            <Text style={{ color: '#64748b', fontSize: 11 }}>{TRANSLATIONS.requests || 'REQUESTS'}</Text>
+                                            {filteredPartnerHistoryRequests.length === 0 ? (
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.noPayoutRequestsYet || TRANSLATIONS.noData || 'No payout requests yet'}</Text>
+                                            ) : (
+                                                filteredPartnerHistoryRequests.slice(0, partnerHistoryRequestsLimit).map((requestItem) => {
+                                                    const status = String(requestItem?.status || 'requested').toLowerCase();
+                                                    const statusColor = status === 'paid'
+                                                        ? '#22c55e'
+                                                        : status === 'rejected'
+                                                            ? '#ef4444'
+                                                            : '#f59e0b';
+                                                    return (
+                                                        <View
+                                                            key={requestItem.id}
+                                                            style={{
+                                                                borderWidth: 1,
+                                                                borderColor: isDark ? '#334155' : '#e2e8f0',
+                                                                borderRadius: 12,
+                                                                padding: 12,
+                                                                gap: 8,
+                                                            }}
+                                                        >
+                                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontWeight: '600' }}>
+                                                                    {Number(requestItem?.requested_amount || 0).toFixed(2)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                                </Text>
+                                                                <View style={[styles.statusBadge, { backgroundColor: `${statusColor}22` }]}>
+                                                                    <Text style={[styles.statusText, { color: statusColor }]}>{getPayoutStatusLabel(status)}</Text>
+                                                                </View>
+                                                            </View>
+                                                            <Text style={{ color: '#64748b', fontSize: 12 }}>
+                                                                {requestItem?.created_at ? new Date(requestItem.created_at).toLocaleString() : 'N/A'}
+                                                            </Text>
+                                                            {!!requestItem?.admin_note && (
+                                                                <Text style={{ color: '#64748b', fontSize: 12 }}>
+                                                                    {TRANSLATIONS.note || 'Note'}: {requestItem.admin_note}
+                                                                </Text>
+                                                            )}
+                                                            {status === 'requested' && (
+                                                                <View style={{ flexDirection: 'row', gap: 10 }}>
+                                                                    <TouchableOpacity
+                                                                        style={[styles.actionButton, { flex: 1, backgroundColor: '#16a34a' }]}
+                                                                        onPress={() => handleProcessPartnerPayout(requestItem, 'paid')}
+                                                                        disabled={actionLoading}
+                                                                    >
+                                                                        <Text style={styles.actionButtonText}>{TRANSLATIONS.markPaid || 'Mark paid'}</Text>
+                                                                    </TouchableOpacity>
+                                                                    <TouchableOpacity
+                                                                        style={[styles.actionButton, { flex: 1, backgroundColor: '#dc2626' }]}
+                                                                        onPress={() => handleProcessPartnerPayout(requestItem, 'rejected')}
+                                                                        disabled={actionLoading}
+                                                                    >
+                                                                        <Text style={styles.actionButtonText}>{TRANSLATIONS.reject || 'Reject'}</Text>
+                                                                    </TouchableOpacity>
+                                                                </View>
+                                                            )}
+                                                        </View>
+                                                    );
+                                                })
+                                            )}
+                                            {filteredPartnerHistoryRequests.length > partnerHistoryRequestsLimit && (
+                                                <TouchableOpacity
+                                                    style={[styles.miniActionBtn, { alignSelf: 'flex-start', marginTop: 4, backgroundColor: isDark ? '#334155' : '#e2e8f0' }]}
+                                                    onPress={() => setPartnerHistoryRequestsLimit((prev) => prev + PARTNER_HISTORY_PAGE_SIZE)}
+                                                >
+                                                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#60a5fa' }}>
+                                                        {TRANSLATIONS.loadMore || 'Load more'}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            )}
+                                        </>
+                                    )}
+
+                                    {shouldShowPartnerTransactions && (
+                                        <>
+                                            <Text style={{ color: '#64748b', fontSize: 11 }}>{TRANSLATIONS.transactions || 'TRANSACTIONS'}</Text>
+                                            {filteredPartnerHistoryTransactions.length === 0 ? (
+                                                <Text style={{ color: '#64748b' }}>{TRANSLATIONS.noHistoryYet || TRANSLATIONS.noData || 'No history yet'}</Text>
+                                            ) : (
+                                                filteredPartnerHistoryTransactions.slice(0, partnerHistoryTransactionsLimit).map((txItem) => {
+                                                    const txType = String(txItem?.transaction_type || '');
+                                                    const txLabel = txType === 'commission_earned'
+                                                        ? (TRANSLATIONS.partnerCommissionEarned || 'Commission earned')
+                                                        : txType === 'manual_deduction'
+                                                            ? (TRANSLATIONS.partnerManualDeduction || 'Manual deduction')
+                                                            : txType === 'payout_paid'
+                                                                ? (TRANSLATIONS.partnerPayoutPaid || 'Payout paid')
+                                                                : txType === 'admin_adjustment'
+                                                                    ? (TRANSLATIONS.adjustment || 'Adjustment')
+                                                                    : txType;
+                                                    const txAmount = Number(txItem?.amount || 0);
+                                                    const isPositive = txAmount >= 0;
+                                                    return (
+                                                        <View
+                                                            key={txItem.id}
+                                                            style={{
+                                                                borderWidth: 1,
+                                                                borderColor: isDark ? '#334155' : '#e2e8f0',
+                                                                borderRadius: 12,
+                                                                padding: 12,
+                                                                gap: 6,
+                                                            }}
+                                                        >
+                                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                                <Text style={{ color: isDark ? '#fff' : '#0f172a', fontWeight: '600', flex: 1, marginRight: 12 }}>
+                                                                    {txLabel}
+                                                                </Text>
+                                                                <Text style={{ color: isPositive ? '#22c55e' : '#ef4444', fontWeight: '700' }}>
+                                                                    {isPositive ? '+' : ''}{txAmount.toFixed(2)} {TRANSLATIONS.currencySom || TRANSLATIONS.currency || 'som'}
+                                                                </Text>
+                                                            </View>
+                                                            <Text style={{ color: '#64748b', fontSize: 12 }}>
+                                                                {txItem?.created_at ? new Date(txItem.created_at).toLocaleString() : 'N/A'}
+                                                            </Text>
+                                                            {!!txItem?.notes && (
+                                                                <Text style={{ color: '#64748b', fontSize: 12 }}>
+                                                                    {txItem.notes}
+                                                                </Text>
+                                                            )}
+                                                        </View>
+                                                    );
+                                                })
+                                            )}
+                                            {filteredPartnerHistoryTransactions.length > partnerHistoryTransactionsLimit && (
+                                                <TouchableOpacity
+                                                    style={[styles.miniActionBtn, { alignSelf: 'flex-start', marginTop: 4, backgroundColor: isDark ? '#334155' : '#e2e8f0' }]}
+                                                    onPress={() => setPartnerHistoryTransactionsLimit((prev) => prev + PARTNER_HISTORY_PAGE_SIZE)}
+                                                >
+                                                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#60a5fa' }}>
+                                                        {TRANSLATIONS.loadMore || 'Load more'}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            )}
+                                        </>
+                                    )}
+
+                                    <TouchableOpacity
+                                        style={[styles.actionButton, { backgroundColor: isDark ? '#334155' : '#e2e8f0', marginTop: 4 }]}
+                                        onPress={closePartnerHistoryModal}
+                                    >
+                                        <Text style={[styles.actionButtonText, !isDark && { color: '#475569' }]}>
+                                            {TRANSLATIONS.cancel || 'Cancel'}
+                                        </Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Add User Modal (Master/Dispatcher/Partner) */}
             <Modal
                 animationType="fade"
                 transparent={true}
                 visible={showAddUserModal}
-                onRequestClose={() => setShowAddUserModal(false)}
+                onRequestClose={closeAddUserModal}
             >
                 <View style={styles.modalOverlay}>
                     <View style={[styles.modalContent, { width: 450 }, !isDark && styles.modalContentLight]}>
                         <Text style={[styles.modalTitle, !isDark && styles.modalTitleLight]}>
-                            {addUserRole === 'master' ? (TRANSLATIONS.addMaster || 'Add New Master') : (TRANSLATIONS.addDispatcher || 'Add New Dispatcher')}
+                            {addUserRole === 'master'
+                                ? (TRANSLATIONS.addMaster || 'Add New Master')
+                                : addUserRole === 'partner'
+                                    ? (TRANSLATIONS.addPartner || 'Add New Partner')
+                                    : (TRANSLATIONS.addDispatcher || 'Add New Dispatcher')}
                         </Text>
                         <Text style={{ color: isDark ? '#94a3b8' : '#64748b', marginBottom: 15 }}>
-                            {addUserRole === 'master' ? (TRANSLATIONS.createNewMasterAccount || 'Create a new master account') : (TRANSLATIONS.createNewDispatcherAccount || 'Create a new dispatcher account')}
+                            {addUserRole === 'master'
+                                ? (TRANSLATIONS.createNewMasterAccount || 'Create a new master account')
+                                : addUserRole === 'partner'
+                                    ? (TRANSLATIONS.createNewPartnerAccount || 'Create a new partner account')
+                                    : (TRANSLATIONS.createNewDispatcherAccount || 'Create a new dispatcher account')}
                         </Text>
 
                         <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
                             <View style={{ gap: 12 }}>
                                 {/* Email */}
                                 <View>
-                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Email *</Text>
+                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>
+                                        {TRANSLATIONS.emailRequired || 'Email *'}
+                                    </Text>
                                     <TextInput
                                         style={[styles.input, !isDark && styles.inputLight]}
                                         placeholder="email@example.com"
@@ -5908,70 +9609,128 @@ export default function AdminDashboard({ navigation }) {
                                         keyboardType="email-address"
                                         autoCapitalize="none"
                                         value={newUserData.email}
-                                        onChangeText={(text) => setNewUserData({ ...newUserData, email: text })}
+                                        onChangeText={(text) => setNewUserData((prev) => ({ ...prev, email: text }))}
                                     />
                                 </View>
 
                                 {/* Password */}
                                 <View>
-                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Password *</Text>
+                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>
+                                        {TRANSLATIONS.passwordRequired || 'Password *'}
+                                    </Text>
                                     <TextInput
                                         style={[styles.input, !isDark && styles.inputLight]}
-                                        placeholder="Minimum 6 characters"
+                                        placeholder={TRANSLATIONS.minCharacters || 'Minimum 6 characters'}
                                         placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                         secureTextEntry
                                         value={newUserData.password}
-                                        onChangeText={(text) => setNewUserData({ ...newUserData, password: text })}
+                                        onChangeText={(text) => setNewUserData((prev) => ({ ...prev, password: text }))}
                                     />
                                 </View>
 
                                 {/* Full Name */}
                                 <View>
-                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Full Name *</Text>
+                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>
+                                        {TRANSLATIONS.fullNameRequired || 'Full Name *'}
+                                    </Text>
                                     <TextInput
                                         style={[styles.input, !isDark && styles.inputLight]}
-                                        placeholder="John Doe"
+                                        placeholder={TRANSLATIONS.placeholderFullName || 'John Doe'}
                                         placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                         value={newUserData.full_name}
-                                        onChangeText={(text) => setNewUserData({ ...newUserData, full_name: text })}
+                                        onChangeText={(text) => setNewUserData((prev) => ({ ...prev, full_name: text }))}
                                     />
                                 </View>
 
                                 {/* Phone */}
                                 <View>
-                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Phone</Text>
+                                    <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>
+                                        {TRANSLATIONS.phoneOptional || TRANSLATIONS.phone || 'Phone'}
+                                    </Text>
                                     <TextInput
-                                        style={[styles.input, !isDark && styles.inputLight]}
+                                        style={[styles.input, newUserPhoneError && styles.inputError, !isDark && styles.inputLight]}
                                         placeholder="+996..."
                                         placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                         keyboardType="phone-pad"
                                         value={newUserData.phone}
-                                        onChangeText={(text) => setNewUserData({ ...newUserData, phone: text })}
+                                        onChangeText={handleNewUserPhoneChange}
+                                        onBlur={handleNewUserPhoneBlur}
                                     />
+                                    {newUserPhoneError ? <Text style={styles.errorText}>{newUserPhoneError}</Text> : null}
                                 </View>
 
                                 {/* Master-specific fields */}
                                 {addUserRole === 'master' && (
                                     <>
                                         <View>
-                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Service Area</Text>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>
+                                                {TRANSLATIONS.serviceAreaOptional || TRANSLATIONS.serviceArea || 'Service Area'}
+                                            </Text>
                                             <TextInput
                                                 style={[styles.input, !isDark && styles.inputLight]}
-                                                placeholder="e.g. Bishkek, Leninsky district"
+                                                placeholder={TRANSLATIONS.placeholderServiceArea || TRANSLATIONS.placeholderArea || 'e.g. Bishkek, Leninsky district'}
                                                 placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                                 value={newUserData.service_area}
-                                                onChangeText={(text) => setNewUserData({ ...newUserData, service_area: text })}
+                                                onChangeText={(text) => setNewUserData((prev) => ({ ...prev, service_area: text }))}
                                             />
                                         </View>
                                         <View>
-                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>Experience (years)</Text>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.maxActiveJobs || 'Max Active Jobs'}</Text>
                                             <TextInput
                                                 style={[styles.input, !isDark && styles.inputLight]}
-                                                placeholder="0"
+                                                placeholder={getPlatformDefaultPlaceholder(platformDefaultLimits.maxActiveJobs)}
                                                 placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                                 keyboardType="numeric"
-                                                value={newUserData.experience_years}
-                                                onChangeText={(text) => setNewUserData({ ...newUserData, experience_years: text })}
+                                                value={newUserData.max_active_jobs}
+                                                onChangeText={(text) => setNewUserData((prev) => ({ ...prev, max_active_jobs: text.replace(/\D/g, '') }))}
+                                            />
+                                        </View>
+                                        <View>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.maxImmediateOrders || 'Max Immediate Orders'}</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                placeholder={getPlatformDefaultPlaceholder(platformDefaultLimits.maxImmediateOrders)}
+                                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                                keyboardType="numeric"
+                                                value={newUserData.max_immediate_orders}
+                                                onChangeText={(text) => setNewUserData((prev) => ({ ...prev, max_immediate_orders: text.replace(/\D/g, '') }))}
+                                            />
+                                        </View>
+                                        <View>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.maxPendingConfirmation || 'Max Pending Confirmation'}</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                placeholder={getPlatformDefaultPlaceholder(platformDefaultLimits.maxPendingConfirmation)}
+                                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                                keyboardType="numeric"
+                                                value={newUserData.max_pending_confirmation}
+                                                onChangeText={(text) => setNewUserData((prev) => ({ ...prev, max_pending_confirmation: text.replace(/\D/g, '') }))}
+                                            />
+                                        </View>
+                                    </>
+                                )}
+                                {addUserRole === 'partner' && (
+                                    <>
+                                        <View>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.commissionRate || 'Commission (%)'}</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                placeholder="10"
+                                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                                keyboardType="numeric"
+                                                value={newUserData.partner_commission_rate}
+                                                onChangeText={(text) => setNewUserData((prev) => ({ ...prev, partner_commission_rate: sanitizeNumberInput(text) }))}
+                                            />
+                                        </View>
+                                        <View>
+                                            <Text style={{ color: '#64748b', fontSize: 11, marginBottom: 4 }}>{TRANSLATIONS.partnerMinPayout || 'Min payout (som)'}</Text>
+                                            <TextInput
+                                                style={[styles.input, !isDark && styles.inputLight]}
+                                                placeholder="50"
+                                                placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
+                                                keyboardType="numeric"
+                                                value={newUserData.partner_min_payout}
+                                                onChangeText={(text) => setNewUserData((prev) => ({ ...prev, partner_min_payout: sanitizeNumberInput(text) }))}
                                             />
                                         </View>
                                     </>
@@ -5982,20 +9741,30 @@ export default function AdminDashboard({ navigation }) {
                         <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: '#334155' }]}
-                                onPress={() => {
-                                    setShowAddUserModal(false);
-                                    setNewUserData({ email: '', password: '', full_name: '', phone: '', service_area: '', experience_years: '' });
-                                }}
+                                onPress={closeAddUserModal}
                             >
                                 <Text style={styles.actionButtonText}>{TRANSLATIONS.cancel || 'Cancel'}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: addUserRole === 'master' ? '#22c55e' : '#3b82f6' }]}
+                                style={[styles.actionButton, {
+                                    backgroundColor:
+                                        addUserRole === 'master'
+                                            ? '#22c55e'
+                                            : addUserRole === 'partner'
+                                                ? '#0ea5e9'
+                                                : '#3b82f6'
+                                }]}
                                 onPress={handleCreateUser}
-                                disabled={actionLoading || !newUserData.email || !newUserData.password || !newUserData.full_name}
+                                disabled={actionLoading || !newUserData.email || !newUserData.password || !newUserData.full_name || Boolean(newUserPhoneError)}
                             >
                                 <Text style={styles.actionButtonText}>
-                                    {actionLoading ? (TRANSLATIONS.creating || 'Creating...') : (addUserRole === 'master' ? (TRANSLATIONS.createMaster || 'Create Master') : (TRANSLATIONS.createDispatcher || 'Create Dispatcher'))}
+                                    {actionLoading ? (TRANSLATIONS.creating || 'Creating...') : (
+                                        addUserRole === 'master'
+                                            ? (TRANSLATIONS.createMaster || 'Create Master')
+                                            : addUserRole === 'partner'
+                                                ? (TRANSLATIONS.createPartner || 'Create Partner')
+                                                : (TRANSLATIONS.createDispatcher || 'Create Dispatcher')
+                                    )}
                                 </Text>
                             </TouchableOpacity>
                         </View>
